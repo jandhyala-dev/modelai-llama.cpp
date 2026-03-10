@@ -2014,6 +2014,7 @@ static std::unique_ptr<llm_graph_input_attn_kv> build_attn_inp_kv_impl(
         if (mctx_cur->compacted_prefix_active()) {
             const auto n_stream = cparams.kv_unified ? 1 : ubatch.n_seqs_unq;
             GGML_ASSERT(n_stream == 1 && "P3 compacted-prefix execution currently supports a single attention stream");
+            GGML_ASSERT(!cparams.flash_attn && "P3 compacted-prefix execution requires the non-flash attention path");
 
             inp->compacted_prefix_active = true;
             inp->compacted_prefix_n_tokens = mctx_cur->compacted_prefix_n_tokens();
@@ -2081,6 +2082,8 @@ ggml_tensor * llm_graph_context::build_attn(
     ggml_tensor * kq_mask_combined = kq_mask;
 
     if (inp->has_compacted_prefix()) {
+        GGML_ASSERT(!cparams.flash_attn && "P3 compacted-prefix execution requires the non-flash attention path");
+
         const auto * compacted = inp->ensure_compacted_prefix_layer(
                 ctx0,
                 il,
@@ -2103,7 +2106,14 @@ ggml_tensor * llm_graph_context::build_attn(
 
         v = ggml_concat(ctx0, compacted->v, v, 2);
         kq_mask_combined = ggml_concat(ctx0, inp->get_compacted_kq_mask(), kq_mask, 0);
-        kq_b_combined = kq_b ? ggml_concat(ctx0, compacted->kq_b, kq_b, 0) : compacted->kq_b;
+        if (kq_b) {
+            GGML_ASSERT(kq_b->ne[1] == compacted->kq_b->ne[1] && "P3 compacted-prefix kq_b concat does not support broadcast token dimensions");
+            GGML_ASSERT(kq_b->ne[2] == compacted->kq_b->ne[2] && "P3 compacted-prefix kq_b concat requires matching head dimensions");
+            GGML_ASSERT(kq_b->ne[3] == compacted->kq_b->ne[3] && "P3 compacted-prefix kq_b concat requires matching stream dimensions");
+            kq_b_combined = ggml_concat(ctx0, compacted->kq_b, kq_b, 0);
+        } else {
+            kq_b_combined = compacted->kq_b;
+        }
 
         cb(k, "k_compacted_plus_live", il);
         cb(v, "v_compacted_plus_live", il);

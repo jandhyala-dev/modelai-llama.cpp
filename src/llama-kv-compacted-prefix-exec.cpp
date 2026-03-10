@@ -47,7 +47,7 @@ bool llama_compacted_prefix_can_execute(
         return false;
     }
 
-    if (!state->enabled || !state->execution_enabled || state->logical_positions.empty()) {
+    if (!state->enabled || !state->is_execution_enabled() || state->logical_positions.empty()) {
         return false;
     }
 
@@ -94,13 +94,12 @@ void llama_compacted_prefix_set_input_mask(
 
     require_dims(dst, n_prefix, n_tps, 1, n_stream, "mask");
 
-    auto * data = reinterpret_cast<float *>(dst->data);
+    auto * base = reinterpret_cast<uint8_t *>(dst->data);
 
     for (int64_t s = 0; s < n_stream; ++s) {
         for (int64_t ii = 0; ii < n_tps; ++ii) {
             const int64_t i = s*n_tps + ii;
             const llama_pos p1 = ubatch.pos[i];
-            const size_t row = size_t(i) * n_prefix;
 
             for (int64_t j = 0; j < n_prefix; ++j) {
                 const llama_pos p0 = state.logical_positions[j];
@@ -112,7 +111,8 @@ void llama_compacted_prefix_set_input_mask(
                     value = -std::abs(float(p0 - p1));
                 }
 
-                data[row + j] = value;
+                auto * dst_ptr = reinterpret_cast<float *>(base + size_t(s) * dst->nb[3] + size_t(ii) * dst->nb[1] + size_t(j) * dst->nb[0]);
+                *dst_ptr = value;
             }
         }
     }
@@ -182,19 +182,16 @@ void llama_compacted_prefix_set_input_beta(
     }
 
     const uint32_t n_rep = n_head / layer.layout.n_head_kv;
-    auto * data = reinterpret_cast<float *>(dst->data);
+    auto * base = reinterpret_cast<uint8_t *>(dst->data);
 
     for (int64_t s = 0; s < n_stream; ++s) {
         for (uint32_t head = 0; head < n_head; ++head) {
             const uint32_t kv_head = head / n_rep;
             for (int64_t t = 0; t < n_tps; ++t) {
-                const size_t dst_row = size_t(s) * dst->ne[2] * dst->ne[1] * dst->ne[0]
-                                     + size_t(head) * dst->ne[1] * dst->ne[0]
-                                     + size_t(t) * dst->ne[0];
-
                 const size_t src_row = size_t(kv_head) * layer.n_compacted_tokens;
                 for (uint32_t j = 0; j < layer.n_compacted_tokens; ++j) {
-                    data[dst_row + j] = layer.beta_data[src_row + j];
+                    auto * dst_ptr = reinterpret_cast<float *>(base + size_t(s) * dst->nb[3] + size_t(head) * dst->nb[2] + size_t(t) * dst->nb[1] + size_t(j) * dst->nb[0]);
+                    *dst_ptr = layer.beta_data[src_row + j];
                 }
             }
         }

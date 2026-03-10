@@ -26,6 +26,11 @@ bool check(bool cond, const std::string & message, int & rc) {
     return true;
 }
 
+float tensor_f32_at(const ggml_tensor * t, int64_t i0, int64_t i1 = 0, int64_t i2 = 0, int64_t i3 = 0) {
+    const auto * base = reinterpret_cast<const uint8_t *>(t->data);
+    return *reinterpret_cast<const float *>(base + i0 * t->nb[0] + i1 * t->nb[1] + i2 * t->nb[2] + i3 * t->nb[3]);
+}
+
 template<typename Fn>
 bool expect_throw(Fn && fn) {
     try {
@@ -122,7 +127,7 @@ int test_execution_gate() {
                "execution should stay disabled until explicitly enabled",
                rc)) return rc;
 
-    seq->execution_enabled = true;
+    if (!check(store.set_execution(4, true), "execution should enable through the store API", rc)) return rc;
     if (!check(llama_compacted_prefix_can_execute(4, seq, ubatch, &exec),
                "execution should activate for a matching single-sequence ubatch",
                rc)) return rc;
@@ -162,7 +167,7 @@ int test_materialization_and_mask() {
     if (seq == nullptr) {
         return fail("sequence 7 should exist");
     }
-    seq->execution_enabled = true;
+    if (!check(store.set_execution(7, true), "execution should enable through the store API", rc)) return rc;
 
     auto & layer = seq->layers[0];
     const size_t k_token_bytes = ggml_row_size(layer.layout.type_k, layer.layout.n_embd_head_k);
@@ -186,8 +191,10 @@ int test_materialization_and_mask() {
 
     auto * k = ggml_new_tensor_4d(tctx.ctx, GGML_TYPE_F16, 4, 2, 2, 1);
     auto * v = ggml_new_tensor_4d(tctx.ctx, GGML_TYPE_F16, 8, 2, 2, 1);
-    auto * b = ggml_new_tensor_4d(tctx.ctx, GGML_TYPE_F32, 2, 1, 4, 1);
-    auto * m = ggml_new_tensor_4d(tctx.ctx, GGML_TYPE_F32, 2, 1, 1, 1);
+    auto * b_base = ggml_new_tensor_4d(tctx.ctx, GGML_TYPE_F32, 4, 1, 4, 1);
+    auto * m_base = ggml_new_tensor_4d(tctx.ctx, GGML_TYPE_F32, 4, 1, 1, 1);
+    auto * b = ggml_view_4d(tctx.ctx, b_base, 2, 1, 4, 1, b_base->nb[1], b_base->nb[2], b_base->nb[3], 0);
+    auto * m = ggml_view_4d(tctx.ctx, m_base, 2, 1, 1, 1, m_base->nb[1], m_base->nb[2], m_base->nb[3], 0);
 
     llama_compacted_prefix_set_input_k(k, layer);
     llama_compacted_prefix_set_input_v(v, layer);
@@ -196,8 +203,6 @@ int test_materialization_and_mask() {
 
     const auto * k_bytes = reinterpret_cast<const uint8_t *>(k->data);
     const auto * v_bytes = reinterpret_cast<const uint8_t *>(v->data);
-    const auto * b_data = reinterpret_cast<const float *>(b->data);
-    const auto * m_data = reinterpret_cast<const float *>(m->data);
 
     if (!check(k_bytes[0] == 0, "K token 0 / head 0 should copy first token bytes", rc)) return rc;
     if (!check(*(k_bytes + k->nb[2]) == 1, "K token 1 / head 0 should copy second token bytes", rc)) return rc;
@@ -207,18 +212,36 @@ int test_materialization_and_mask() {
     if (!check(*(v_bytes + v->nb[2]) == 1, "V token 1 / head 0 should copy second token bytes", rc)) return rc;
     if (!check(*(v_bytes + v->nb[1]) == 32, "V head 1 / token 0 should preserve head-major payload", rc)) return rc;
 
-    if (!check(b_data[0] == 0.0f && b_data[1] == 1.0f, "query head 0 should use KV-head 0 beta values", rc)) return rc;
-    if (!check(b_data[2] == 0.0f && b_data[3] == 1.0f, "query head 1 should repeat KV-head 0 beta values", rc)) return rc;
-    if (!check(b_data[b->ne[0] * b->ne[1] * 2 + 0] == 100.0f, "query head 2 should use KV-head 1 beta values", rc)) return rc;
-    if (!check(b_data[b->ne[0] * b->ne[1] * 3 + 1] == 101.0f, "query head 3 should repeat KV-head 1 beta values", rc)) return rc;
+    if (!check(tensor_f32_at(b, 0, 0, 0, 0) == 0.0f && tensor_f32_at(b, 1, 0, 0, 0) == 1.0f,
+               "query head 0 should use KV-head 0 beta values",
+               rc)) return rc;
+    if (!check(tensor_f32_at(b, 0, 0, 1, 0) == 0.0f && tensor_f32_at(b, 1, 0, 1, 0) == 1.0f,
+               "query head 1 should repeat KV-head 0 beta values",
+               rc)) return rc;
+    if (!check(tensor_f32_at(b, 0, 0, 2, 0) == 100.0f,
+               "query head 2 should use KV-head 1 beta values",
+               rc)) return rc;
+    if (!check(tensor_f32_at(b, 1, 0, 3, 0) == 101.0f,
+               "query head 3 should repeat KV-head 1 beta values",
+               rc)) return rc;
 
-    if (!check(m_data[0] == 0.0f && m_data[1] == 0.0f, "causal mask should allow prefix positions at or before query pos", rc)) return rc;
+    if (!check(tensor_f32_at(m, 0, 0, 0, 0) == 0.0f && tensor_f32_at(m, 1, 0, 0, 0) == 0.0f,
+               "causal mask should allow prefix positions at or before query pos",
+               rc)) return rc;
 
     pos = { 3 };
     ubatch = make_ubatch_single(pos, seq_id_unq, 7);
     llama_compacted_prefix_set_input_mask(m, *seq, ubatch, hparams, /* causal_attn = */ true);
-    if (!check(m_data[0] == 0.0f && std::isinf(m_data[1]) && m_data[1] < 0.0f,
+    if (!check(tensor_f32_at(m, 0, 0, 0, 0) == 0.0f && std::isinf(tensor_f32_at(m, 1, 0, 0, 0)) && tensor_f32_at(m, 1, 0, 0, 0) < 0.0f,
                "causal mask should block prefix positions after the current query pos",
+               rc)) return rc;
+
+    hparams.use_alibi = true;
+    pos = { 6 };
+    ubatch = make_ubatch_single(pos, seq_id_unq, 7);
+    llama_compacted_prefix_set_input_mask(m, *seq, ubatch, hparams, /* causal_attn = */ false);
+    if (!check(tensor_f32_at(m, 0, 0, 0, 0) == -4.0f && tensor_f32_at(m, 1, 0, 0, 0) == -2.0f,
+               "alibi mask should use absolute position deltas on the compacted prefix columns",
                rc)) return rc;
 
     return rc;
@@ -244,7 +267,7 @@ int test_type_and_shape_guards() {
     if (seq == nullptr) {
         return fail("sequence 9 should exist");
     }
-    seq->execution_enabled = true;
+    if (!check(store.set_execution(9, true), "execution should enable through the store API", rc)) return rc;
 
     ggml_test_ctx tctx(1u << 15);
     auto * wrong_type = ggml_new_tensor_4d(tctx.ctx, GGML_TYPE_F32, 4, 1, 2, 1);
@@ -280,7 +303,7 @@ int test_non_flash_attention_sanity() {
     if (seq == nullptr) {
         return fail("sequence 2 should exist");
     }
-    seq->execution_enabled = true;
+    if (!check(store.set_execution(2, true), "execution should enable through the store API", rc)) return rc;
 
     auto & layer = seq->layers[0];
     const float prefix_k[2] = { 1.0f, 0.0f };
@@ -338,6 +361,52 @@ int test_non_flash_attention_sanity() {
     return rc;
 }
 
+int test_execution_state_lifecycle() {
+    int rc = 0;
+
+    llama_compacted_prefix_store store({
+        {
+            /* layer_id      = */ 0,
+            /* n_head_kv     = */ 1,
+            /* n_embd_head_k = */ 4,
+            /* n_embd_head_v = */ 4,
+            /* type_k        = */ GGML_TYPE_F16,
+            /* type_v        = */ GGML_TYPE_F16,
+        },
+        {
+            /* layer_id      = */ 1,
+            /* n_head_kv     = */ 1,
+            /* n_embd_head_k = */ 4,
+            /* n_embd_head_v = */ 0,
+            /* type_k        = */ GGML_TYPE_F16,
+            /* type_v        = */ GGML_TYPE_F16,
+        },
+    });
+
+    if (!check(!store.set_execution(5, true), "execution should not enable before configure_seq", rc)) return rc;
+    if (!check(store.configure_seq(5, 8, { 1, 3 }, 4), "configure_seq should succeed", rc)) return rc;
+    if (!check(store.set_execution(5, true), "execution should enable after configure_seq", rc)) return rc;
+    if (!check(store.execution_enabled(5), "execution_enabled should report the enabled state", rc)) return rc;
+
+    auto * seq = store.get_seq(5);
+    if (seq == nullptr) {
+        return fail("sequence 5 should exist");
+    }
+    if (!check(seq->layers.size() == 2 && seq->layers[1].v_data.empty(),
+               "layers with n_embd_head_v == 0 should keep an empty V payload",
+               rc)) return rc;
+
+    if (!check(store.seq_rm(5, 0, 10), "removing all compacted positions should succeed", rc)) return rc;
+    if (!check(!store.is_enabled(5) && !store.execution_enabled(5),
+               "removing all compacted positions should clear both enabled and execution state",
+               rc)) return rc;
+
+    if (!check(store.configure_seq(5, 8, { 2 }, 3), "reconfigure after clear should succeed", rc)) return rc;
+    if (!check(!store.execution_enabled(5), "reconfigure should leave execution disabled until explicitly re-enabled", rc)) return rc;
+
+    return rc;
+}
+
 } // namespace
 
 int main() {
@@ -351,6 +420,9 @@ int main() {
         return rc;
     }
     if (const int rc = test_non_flash_attention_sanity()) {
+        return rc;
+    }
+    if (const int rc = test_execution_state_lifecycle()) {
         return rc;
     }
 

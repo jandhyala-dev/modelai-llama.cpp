@@ -122,11 +122,13 @@ Near-term observability requirements:
 - PR-3 lands the first internal non-flash execution slice:
   - explicit per-sequence compacted-prefix execution gating,
   - compacted-prefix execution eligibility limited to single-sequence, 1D-position, standard `llama_kv_cache` batches,
+  - explicit runtime rejection for flash-attention, SWA / split-memory, and hybrid-memory execution,
   - host-side materialization helpers for compacted `K`, canonical non-transposed `V`, per-query-head expanded `beta`, and prefix mask columns,
   - non-flash attention graph wiring that prepends compacted prefix `K/V/B/mask` to the live KV path,
   - graph reuse disabled while the compacted-prefix execution path is active,
-  - deterministic P3 tests for execution gating, payload materialization, causal masking, and non-flash attention sanity,
+  - deterministic P3 tests for execution gating, payload materialization, causal/alibi masking, execution-state lifecycle, and non-flash attention sanity,
 - PR-3 deliberately does not yet include query extraction, NNLS/OLS fitting, save/restore serialization, or public runtime enablement,
+- model-provided `kq_b` tensors that rely on broadcast token dimensions remain outside the P3 supported matrix and fail explicitly,
 - narrow v0 compaction path on the supported matrix,
 - measured long-session improvements on ModelAI workloads,
 - measured repeated-turn follow-up improvements on at least one supported workload.

@@ -233,6 +233,8 @@ public:
     void set_input_compacted_prefix_kq_b(ggml_tensor * dst, int32_t il, llama_seq_id seq_id) const;
 
 private:
+    bool compacted_prefix_runtime_supported() const;
+
     const llama_model & model;
     const llama_hparams & hparams;
 

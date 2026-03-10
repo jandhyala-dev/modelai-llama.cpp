@@ -210,6 +210,10 @@ Make compacted-prefix state participate in real non-flash attention execution on
 
 - explicit internal execution activation per sequence
 - compacted-prefix execution eligibility resolution per ubatch
+- explicit runtime rejection for:
+  - flash-attention execution
+  - SWA / split-memory execution
+  - hybrid-memory execution
 - host-side materialization helpers for:
   - compacted `K`
   - canonical non-transposed compacted `V`
@@ -234,8 +238,10 @@ The full fitting pipeline is intentionally deferred. When NNLS / least-squares f
 
 - execution-gating tests
 - materialization tests for compacted `K/V/B/mask`
+- alibi-mask tests
 - non-flash attention sanity tests
 - unsupported-config fallback tests
+- execution-state lifecycle tests
 - no-NaN / no-crash tests
 - state-restore regression tests
 
@@ -244,6 +250,7 @@ The full fitting pipeline is intentionally deferred. When NNLS / least-squares f
 - compacted-prefix state can participate in non-flash attention execution on the supported matrix
 - unsupported matrix falls back explicitly
 - graph-path wiring is real, but public runtime enablement remains deferred
+- flash-attention use while compacted-prefix execution is active fails explicitly instead of relying on implicit `kq_b` behavior
 
 **Explicit PR-3 deferrals**
 
@@ -258,6 +265,7 @@ The following items are intentionally not part of this branch and must be addres
 - chat-template / BOS preservation policy
 - public runtime/server enablement
 - save/restore serialization of compacted-prefix execution state
+- model-provided `kq_b` tensors that rely on broadcast token dimensions; P3 requires exact non-concat dimensions for `kq_b` concatenation
 
 ## PR-4: Session And State Integration
 

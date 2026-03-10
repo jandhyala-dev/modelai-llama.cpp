@@ -565,18 +565,15 @@ bool llama_kv_cache::compacted_prefix_enabled(llama_seq_id seq_id) const {
 }
 
 bool llama_kv_cache::compacted_prefix_set_execution(llama_seq_id seq_id, bool enabled) {
-    auto * state = compacted_prefix.get_seq(seq_id);
-    if (state == nullptr || !state->enabled) {
+    if (!compacted_prefix_runtime_supported()) {
         return false;
     }
 
-    state->execution_enabled = enabled;
-    return true;
+    return compacted_prefix.set_execution(seq_id, enabled);
 }
 
 bool llama_kv_cache::compacted_prefix_execution_enabled(llama_seq_id seq_id) const {
-    const auto * state = compacted_prefix.get_seq(seq_id);
-    return state != nullptr && state->enabled && state->execution_enabled;
+    return compacted_prefix_runtime_supported() && compacted_prefix.execution_enabled(seq_id);
 }
 
 size_t llama_kv_cache::compacted_prefix_bytes(llama_seq_id seq_id) const {
@@ -595,10 +592,26 @@ llama_compacted_prefix_store * llama_kv_cache::get_compacted_prefix() {
     return &compacted_prefix;
 }
 
+bool llama_kv_cache::compacted_prefix_runtime_supported() const {
+    if (hparams.swa_type != LLAMA_SWA_TYPE_NONE || n_swa > 0 || swa_type != LLAMA_SWA_TYPE_NONE) {
+        return false;
+    }
+
+    if (llm_arch_is_hybrid(model.arch)) {
+        return false;
+    }
+
+    return true;
+}
+
 bool llama_kv_cache::resolve_compacted_prefix_exec(
         const llama_ubatch & ubatch,
         llama_compacted_prefix_exec_candidate & out) const {
     out = {};
+
+    if (!compacted_prefix_runtime_supported()) {
+        return false;
+    }
 
     if (ubatch.n_seqs_unq != 1 || ubatch.seq_id_unq == nullptr) {
         return false;
@@ -1588,7 +1601,7 @@ void llama_kv_cache::set_input_compacted_prefix_mask(
         bool causal_attn,
         llama_seq_id seq_id) const {
     const auto * state = compacted_prefix.get_seq(seq_id);
-    if (state == nullptr || !state->enabled || !state->execution_enabled) {
+    if (state == nullptr || !state->enabled || !state->is_execution_enabled()) {
         throw std::runtime_error("compacted-prefix mask requested without an active execution state");
     }
 
@@ -1597,7 +1610,7 @@ void llama_kv_cache::set_input_compacted_prefix_mask(
 
 void llama_kv_cache::set_input_compacted_prefix_k(ggml_tensor * dst, int32_t il, llama_seq_id seq_id) const {
     const auto * state = compacted_prefix.get_seq(seq_id);
-    if (state == nullptr || !state->enabled || !state->execution_enabled) {
+    if (state == nullptr || !state->enabled || !state->is_execution_enabled()) {
         throw std::runtime_error("compacted-prefix K requested without an active execution state");
     }
 
@@ -1609,7 +1622,7 @@ void llama_kv_cache::set_input_compacted_prefix_k(ggml_tensor * dst, int32_t il,
 
 void llama_kv_cache::set_input_compacted_prefix_v(ggml_tensor * dst, int32_t il, llama_seq_id seq_id) const {
     const auto * state = compacted_prefix.get_seq(seq_id);
-    if (state == nullptr || !state->enabled || !state->execution_enabled) {
+    if (state == nullptr || !state->enabled || !state->is_execution_enabled()) {
         throw std::runtime_error("compacted-prefix V requested without an active execution state");
     }
 
@@ -1621,7 +1634,7 @@ void llama_kv_cache::set_input_compacted_prefix_v(ggml_tensor * dst, int32_t il,
 
 void llama_kv_cache::set_input_compacted_prefix_kq_b(ggml_tensor * dst, int32_t il, llama_seq_id seq_id) const {
     const auto * state = compacted_prefix.get_seq(seq_id);
-    if (state == nullptr || !state->enabled || !state->execution_enabled) {
+    if (state == nullptr || !state->enabled || !state->is_execution_enabled()) {
         throw std::runtime_error("compacted-prefix bias requested without an active execution state");
     }
 
