@@ -129,6 +129,14 @@ Near-term observability requirements:
   - deterministic P3 tests for execution gating, payload materialization, causal/alibi masking, execution-state lifecycle, and non-flash attention sanity,
 - PR-3 deliberately does not yet include query extraction, NNLS/OLS fitting, save/restore serialization, or public runtime enablement,
 - model-provided `kq_b` tensors that rely on broadcast token dimensions remain outside the P3 supported matrix and fail explicitly,
+- PR-4 adds versioned compacted-prefix save/restore integration for both full-context and per-sequence state paths:
+  - compacted-prefix payloads are serialized inside the KV state stream,
+  - restore clears stale compacted-prefix state before loading,
+  - restore validates layer layout and payload sizes before accepting data,
+  - restore rollback now clears partially loaded live/compacted state if compacted-prefix deserialization fails,
+  - state file versions are bumped so old files fail cleanly instead of being mis-parsed,
+  - public save/restore regression tests now cover compacted-prefix roundtrip, failed-restore rollback, and continuation behavior,
+- PR-4 still keeps public runtime enablement and post-restore execution/performance claims out of scope,
 - narrow v0 compaction path on the supported matrix,
 - measured long-session improvements on ModelAI workloads,
 - measured repeated-turn follow-up improvements on at least one supported workload.

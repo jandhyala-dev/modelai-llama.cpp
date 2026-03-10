@@ -7,6 +7,9 @@
 #include <map>
 #include <vector>
 
+class llama_io_write_i;
+class llama_io_read_i;
+
 struct llama_compacted_prefix_layer_layout {
     uint32_t layer_id = 0;
     uint32_t n_head_kv = 0;
@@ -84,6 +87,9 @@ public:
     bool is_enabled(llama_seq_id seq_id) const;
     bool set_execution(llama_seq_id seq_id, bool enabled);
     bool execution_enabled(llama_seq_id seq_id) const;
+
+    void state_write(llama_io_write_i & io, llama_seq_id seq_id = -1) const;
+    bool state_read (llama_io_read_i  & io, llama_seq_id seq_id = -1);
 
     size_t seq_allocated_bytes(llama_seq_id seq_id) const;
     size_t total_allocated_bytes() const;
