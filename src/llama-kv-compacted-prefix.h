@@ -37,6 +37,7 @@ public:
 
     struct sequence_state {
         bool enabled = false;
+        bool execution_enabled = false;
 
         // Snapshot of the logical prefix length represented at configure time.
         // Sequence operations mutate compacted token positions but do not infer a

@@ -119,6 +119,14 @@ Near-term observability requirements:
   - compacted `V` sidecar storage remains logical `[head][token][embd]`; any transpose-sensitive execution compatibility is deferred to PR-3,
 - no execution path, serialization lifecycle, or public runtime enablement is part of PR-2,
 - compacted-prefix logical positions are not yet merged into the live KV cache `seq_pos_min/seq_pos_max` view before PR-3,
+- PR-3 lands the first internal non-flash execution slice:
+  - explicit per-sequence compacted-prefix execution gating,
+  - compacted-prefix execution eligibility limited to single-sequence, 1D-position, standard `llama_kv_cache` batches,
+  - host-side materialization helpers for compacted `K`, canonical non-transposed `V`, per-query-head expanded `beta`, and prefix mask columns,
+  - non-flash attention graph wiring that prepends compacted prefix `K/V/B/mask` to the live KV path,
+  - graph reuse disabled while the compacted-prefix execution path is active,
+  - deterministic P3 tests for execution gating, payload materialization, causal masking, and non-flash attention sanity,
+- PR-3 deliberately does not yet include query extraction, NNLS/OLS fitting, save/restore serialization, or public runtime enablement,
 - narrow v0 compaction path on the supported matrix,
 - measured long-session improvements on ModelAI workloads,
 - measured repeated-turn follow-up improvements on at least one supported workload.
@@ -138,6 +146,7 @@ The matrix below describes the intended v0 execution-path scope for the fork as 
 |---|---|
 | Standard causal models with `llama_kv_cache` | Supported |
 | Non-flash attention path | Supported |
+| Internal compacted-prefix execution path for single-sequence, 1D-position batches | Supported |
 | Scalar K/V cache element types for compacted-prefix sidecar (`F16`, `BF16`, `F32`) | Supported |
 | Non-quantized V cache | Supported |
 | Uncompacted chat-template / BOS prefix | Supported |
@@ -149,6 +158,7 @@ The matrix below describes the intended v0 execution-path scope for the fork as 
 | SWA / split-memory compaction | Unsupported |
 | Hybrid recurrent + attention compaction | Unsupported |
 | M-RoPE edge cases | Unsupported |
+| Public/server compacted-prefix enablement | Unsupported |
 | Public API guarantees | Unsupported |
 
 ## Runtime Strategy

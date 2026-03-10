@@ -160,6 +160,7 @@ size_t llama_compacted_prefix_store::layer_storage::allocated_bytes() const {
 
 void llama_compacted_prefix_store::sequence_state::clear(bool data) {
     enabled = false;
+    execution_enabled = false;
     logical_token_count = 0;
     live_suffix_pos0 = -1;
     logical_positions.clear();

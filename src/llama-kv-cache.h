@@ -1,6 +1,7 @@
 #pragma once
 
 #include "llama-batch.h"
+#include "llama-kv-compacted-prefix-exec.h"
 #include "llama-kv-compacted-prefix.h"
 #include "llama-graph.h"
 #include "llama-kv-cells.h"
@@ -167,10 +168,13 @@ public:
     void compacted_prefix_clear(llama_seq_id seq_id = -1, bool data = true);
 
     bool compacted_prefix_enabled(llama_seq_id seq_id) const;
+    bool compacted_prefix_set_execution(llama_seq_id seq_id, bool enabled);
+    bool compacted_prefix_execution_enabled(llama_seq_id seq_id) const;
 
     size_t compacted_prefix_bytes(llama_seq_id seq_id = -1) const;
 
     const llama_compacted_prefix_store * get_compacted_prefix() const;
+          llama_compacted_prefix_store * get_compacted_prefix();
 
     //
     // graph_build API
@@ -218,6 +222,15 @@ public:
 
     void set_input_kq_mask   (ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const;
     void set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const;
+
+    bool resolve_compacted_prefix_exec(
+            const llama_ubatch & ubatch,
+            llama_compacted_prefix_exec_candidate & out) const;
+
+    void set_input_compacted_prefix_mask(ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn, llama_seq_id seq_id) const;
+    void set_input_compacted_prefix_k   (ggml_tensor * dst, int32_t il, llama_seq_id seq_id) const;
+    void set_input_compacted_prefix_v   (ggml_tensor * dst, int32_t il, llama_seq_id seq_id) const;
+    void set_input_compacted_prefix_kq_b(ggml_tensor * dst, int32_t il, llama_seq_id seq_id) const;
 
 private:
     const llama_model & model;
@@ -376,6 +389,15 @@ public:
     void set_input_kq_mask   (ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const;
     void set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const;
 
+    bool compacted_prefix_active() const;
+    llama_seq_id compacted_prefix_seq_id() const;
+    uint32_t compacted_prefix_n_tokens() const;
+
+    void set_input_compacted_prefix_mask(ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const;
+    void set_input_compacted_prefix_k   (ggml_tensor * dst, int32_t il) const;
+    void set_input_compacted_prefix_v   (ggml_tensor * dst, int32_t il) const;
+    void set_input_compacted_prefix_kq_b(ggml_tensor * dst, int32_t il) const;
+
 private:
     llama_memory_status status;
 
@@ -408,4 +430,6 @@ private:
     // a heuristic, to avoid attending the full cache if it is not yet utilized
     // as the cache gets filled, the benefit from this heuristic disappears
     int32_t n_kv;
+
+    llama_compacted_prefix_exec_candidate compacted_exec;
 };
