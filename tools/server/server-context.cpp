@@ -11,6 +11,7 @@
 #include "speculative.h"
 #include "mtmd.h"
 #include "mtmd-helper.h"
+#include "src/llama-context.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -30,6 +31,124 @@
 using json = nlohmann::ordered_json;
 
 constexpr int HTTP_POLLING_SECONDS = 1;
+constexpr const char * MODELAI_CONTRACT_NAME = "modelai-llama.cpp";
+constexpr const char * MODELAI_CONTRACT_VERSION = "0.1.0";
+
+static bool chat_template_cap(const std::map<std::string, bool> & caps, const char * key) {
+    const auto it = caps.find(key);
+    return it != caps.end() && it->second;
+}
+
+static json build_modelai_contract(bool is_router_server) {
+    return json {
+        { "name",                 MODELAI_CONTRACT_NAME },
+        { "contract_version",     MODELAI_CONTRACT_VERSION },
+        { "engine_version",       build_info },
+        { "engine_commit",        LLAMA_COMMIT },
+        { "upstream_base_commit", MODELAI_UPSTREAM_BASE_COMMIT },
+        { "server_mode",          is_router_server ? "router" : "model" },
+    };
+}
+
+static json build_modelai_server_capabilities(const common_params & params, const server_context_meta & meta, bool is_router_server) {
+    const bool supports_embeddings = meta.pooling_type != LLAMA_POOLING_TYPE_NONE;
+    const bool supports_reranking  = meta.pooling_type == LLAMA_POOLING_TYPE_RANK;
+    const bool supports_tools = params.use_jinja && chat_template_cap(meta.chat_template_caps, "supports_tools");
+    const bool supports_parallel_tool_calls = supports_tools && chat_template_cap(meta.chat_template_caps, "supports_parallel_tool_calls");
+    const bool supports_reasoning_history = chat_template_cap(meta.chat_template_caps, "supports_preserve_reasoning");
+
+    return json {
+        { "effective_context_window", meta.slot_n_ctx },
+        { "flash_attention", {
+            { "mode",                  llama_flash_attn_type_name(params.flash_attn_type) },
+            { "supports_additive_kq_b", false },
+        } },
+        { "kv_cache", {
+            { "type_k",        ggml_type_name(params.cache_type_k) },
+            { "type_v",        ggml_type_name(params.cache_type_v) },
+            { "unified",       params.kv_unified },
+            { "can_shift",     params.ctx_shift },
+            { "cache_reuse_n", params.n_cache_reuse },
+        } },
+        { "prompt_cache", {
+            { "enabled",         params.cache_prompt },
+            { "reuse_threshold", params.n_cache_reuse },
+        } },
+        { "save_restore", {
+            { "available",                    params.endpoint_slots },
+            { "validated_for_compacted_path", false },
+        } },
+        { "structured_output", {
+            { "json_schema", true },
+            { "grammar",     true },
+        } },
+        { "chat_templates", {
+            { "enabled",                  params.enable_chat_template },
+            { "jinja",                    params.use_jinja },
+            { "override_allowed",         true },
+            { "supports_tools",           supports_tools },
+            { "supports_parallel_tools",  supports_parallel_tool_calls },
+            { "supports_system_role",     chat_template_cap(meta.chat_template_caps, "supports_system_role") },
+            { "supports_reasoning_input", supports_reasoning_history },
+        } },
+        { "features", {
+            { "embeddings",        supports_embeddings },
+            { "reranking",         supports_reranking },
+            { "multimodal",        meta.has_mtmd },
+            { "router_model_mgmt", is_router_server },
+            { "slot_save_restore", params.endpoint_slots },
+            { "metrics_endpoint",  params.endpoint_metrics },
+            { "slots_endpoint",    params.endpoint_slots },
+        } },
+        { "compacted_prefix", {
+            { "available",            false },
+            { "enabled",              false },
+            { "requires_non_flash",   true },
+            { "last_fallback_reason", "feature_unavailable" },
+        } },
+    };
+}
+
+static json build_modelai_runtime_summary_from_metrics(const server_task_result_metrics & metrics, bool is_sleeping) {
+    const double prompt_tokens_per_second = metrics.n_prompt_tokens_processed
+        ? 1.e3 / metrics.t_prompt_processing * metrics.n_prompt_tokens_processed
+        : 0.0;
+    const double predicted_tokens_per_second = metrics.n_tokens_predicted
+        ? 1.e3 / metrics.t_tokens_generation * metrics.n_tokens_predicted
+        : 0.0;
+
+    return json {
+        { "state", is_sleeping ? "sleeping" : "ready" },
+        { "queue", {
+            { "idle_slots",       metrics.n_idle_slots },
+            { "processing_slots", metrics.n_processing_slots },
+            { "deferred_tasks",   metrics.n_tasks_deferred },
+        } },
+        { "timings", {
+            { "prompt_tokens_per_second",    prompt_tokens_per_second },
+            { "predicted_tokens_per_second", predicted_tokens_per_second },
+            { "n_decode_total",              metrics.n_decode_total },
+            { "n_busy_slots_total",          metrics.n_busy_slots_total },
+        } },
+        { "memory", {
+            { "allocated_model_bytes",   metrics.allocated_model_bytes },
+            { "allocated_context_bytes", metrics.allocated_context_bytes },
+            { "allocated_compute_bytes", metrics.allocated_compute_bytes },
+        } },
+        { "kv", {
+            { "active_n_kv_total",        metrics.active_n_kv_total },
+            { "active_n_kv_max",          metrics.active_n_kv_max },
+            { "sequence_state_bytes_total", metrics.sequence_state_bytes_total },
+        } },
+        { "compaction", {
+            { "available",             false },
+            { "enabled",               false },
+            { "query_generation_time_ms", nullptr },
+            { "solver_time_ms",          nullptr },
+            { "last_fallback_reason",    "feature_unavailable" },
+        } },
+    };
+}
 
 // state diagram: https://github.com/ggml-org/llama.cpp/pull/9283
 enum slot_state {
@@ -430,6 +549,20 @@ struct server_slot {
                 res["generated"] = generated_text.empty() ? debug_generated_text : generated_text;
             }
         }
+
+        auto * mem = llama_get_memory(ctx);
+        const llama_pos pos_min = mem ? llama_memory_seq_pos_min(mem, id) : -1;
+        const llama_pos pos_max = mem ? llama_memory_seq_pos_max(mem, id) : -1;
+        const uint32_t n_kv_active = (pos_min >= 0 && pos_max >= pos_min)
+            ? (uint32_t) (pos_max - pos_min + 1)
+            : 0;
+
+        res["kv"] = {
+            { "seq_pos_min",          pos_min },
+            { "seq_pos_max",          pos_max },
+            { "active_n_kv",          n_kv_active },
+            { "sequence_state_bytes", llama_state_seq_get_size_ext(ctx, id, 0) },
+        };
 
         return res;
     }
@@ -1778,6 +1911,21 @@ private:
 
                     res->n_decode_total          = metrics.n_decode_total;
                     res->n_busy_slots_total      = metrics.n_busy_slots_total;
+
+                    for (const auto & [_, mb] : ctx->memory_breakdown()) {
+                        res->allocated_model_bytes   += mb.model;
+                        res->allocated_context_bytes += mb.context;
+                        res->allocated_compute_bytes += mb.compute;
+                    }
+
+                    for (const auto & slot_data : res->slots_data) {
+                        const auto & slot_kv = slot_data.contains("kv") ? slot_data.at("kv") : json();
+                        const auto n_kv_active = json_value(slot_kv, "active_n_kv", 0u);
+                        const auto seq_state_bytes = json_value(slot_kv, "sequence_state_bytes", (size_t) 0);
+                        res->active_n_kv_total += n_kv_active;
+                        res->active_n_kv_max = std::max(res->active_n_kv_max, (uint64_t) n_kv_active);
+                        res->sequence_state_bytes_total += seq_state_bytes;
+                    }
 
                     if (task.metrics_reset_bucket) {
                         metrics.reset_bucket();
@@ -3327,6 +3475,46 @@ void server_routes::init_routes() {
                     {"name",  "requests_deferred"},
                     {"help",  "Number of requests deferred."},
                     {"value",  (uint64_t) res_task->n_tasks_deferred}
+            },{
+                    {"name",  "modelai_allocated_model_bytes"},
+                    {"help",  "Total bytes allocated for model buffers."},
+                    {"value",  res_task->allocated_model_bytes}
+            },{
+                    {"name",  "modelai_allocated_context_bytes"},
+                    {"help",  "Total bytes allocated for context buffers."},
+                    {"value",  res_task->allocated_context_bytes}
+            },{
+                    {"name",  "modelai_allocated_compute_bytes"},
+                    {"help",  "Total bytes allocated for compute buffers."},
+                    {"value",  res_task->allocated_compute_bytes}
+            },{
+                    {"name",  "modelai_active_n_kv_total"},
+                    {"help",  "Summed active KV length across slots."},
+                    {"value",  res_task->active_n_kv_total}
+            },{
+                    {"name",  "modelai_active_n_kv_max"},
+                    {"help",  "Max active KV length across slots."},
+                    {"value",  res_task->active_n_kv_max}
+            },{
+                    {"name",  "modelai_sequence_state_bytes_total"},
+                    {"help",  "Summed sequence-state bytes across slots."},
+                    {"value",  res_task->sequence_state_bytes_total}
+            },{
+                    {"name",  "modelai_prompt_tokens_per_second"},
+                    {"help",  "Prompt throughput snapshot in tokens/s."},
+                    {"value",  res_task->n_prompt_tokens_processed ? 1.e3 / res_task->t_prompt_processing * res_task->n_prompt_tokens_processed : 0.}
+            },{
+                    {"name",  "modelai_predicted_tokens_per_second"},
+                    {"help",  "Decode throughput snapshot in tokens/s."},
+                    {"value",  res_task->n_tokens_predicted ? 1.e3 / res_task->t_tokens_generation * res_task->n_tokens_predicted : 0.}
+            },{
+                    {"name",  "modelai_compacted_prefix_available"},
+                    {"help",  "Whether the compacted-prefix path is available."},
+                    {"value",  0}
+            },{
+                    {"name",  "modelai_compacted_prefix_enabled"},
+                    {"help",  "Whether the compacted-prefix path is enabled."},
+                    {"value",  0}
             }}}
         };
 
@@ -3430,7 +3618,7 @@ void server_routes::init_routes() {
         return res;
     };
 
-    this->get_props = [this](const server_http_req &) {
+    this->get_props = [this](const server_http_req & req) {
         auto res = create_response(true);
 
         // this endpoint can be accessed during sleeping
@@ -3447,6 +3635,30 @@ void server_routes::init_routes() {
 
         std::string tmpl_default = common_chat_templates_source(meta->chat_params.tmpls.get(), "");
         std::string tmpl_tools   = common_chat_templates_source(meta->chat_params.tmpls.get(), "tool_use");
+        const bool is_sleeping = queue_tasks.is_sleeping();
+        const bool is_router_server = params.model.path.empty();
+        json modelai_runtime = build_modelai_runtime_summary_from_metrics(server_task_result_metrics{}, is_sleeping);
+
+        if (!is_sleeping) {
+            server_task task(SERVER_TASK_TYPE_METRICS);
+            task.id = res->rd.get_new_id();
+            res->rd.post_task(std::move(task), true);
+
+            auto result = res->rd.next(req.should_stop);
+            if (!result) {
+                GGML_ASSERT(req.should_stop());
+                return res;
+            }
+
+            if (result->is_error()) {
+                res->error(result->to_json());
+                return res;
+            }
+
+            auto * res_task = dynamic_cast<server_task_result_metrics *>(result.get());
+            GGML_ASSERT(res_task != nullptr);
+            modelai_runtime = build_modelai_runtime_summary_from_metrics(*res_task, is_sleeping);
+        }
 
         json props = {
             { "default_generation_settings", default_generation_settings_for_props },
@@ -3467,7 +3679,12 @@ void server_routes::init_routes() {
             { "bos_token",                   meta->bos_token_str },
             { "eos_token",                   meta->eos_token_str },
             { "build_info",                  meta->build_info },
-            { "is_sleeping",                 queue_tasks.is_sleeping() },
+            { "is_sleeping",                 is_sleeping },
+            { "modelai", {
+                { "contract",     build_modelai_contract(is_router_server) },
+                { "capabilities", build_modelai_server_capabilities(params, *meta, is_router_server) },
+                { "runtime",      std::move(modelai_runtime) },
+            } },
         };
         if (params.use_jinja) {
             if (!tmpl_tools.empty()) {
@@ -3710,6 +3927,23 @@ void server_routes::init_routes() {
         bool ctx_server; // do NOT delete this line
         GGML_UNUSED(ctx_server);
 
+        json model_capabilities = json::array({"completion", "structured_output"});
+        if (meta->has_mtmd) {
+            model_capabilities.push_back("multimodal");
+        }
+        if (meta->pooling_type != LLAMA_POOLING_TYPE_NONE) {
+            model_capabilities.push_back("embeddings");
+        }
+        if (meta->pooling_type == LLAMA_POOLING_TYPE_RANK) {
+            model_capabilities.push_back("reranking");
+        }
+        if (params.cache_prompt) {
+            model_capabilities.push_back("prompt_cache");
+        }
+        if (params.use_jinja && chat_template_cap(meta->chat_template_caps, "supports_tools")) {
+            model_capabilities.push_back("tool_use");
+        }
+
         json models = {
             {"models", {
                 {
@@ -3721,7 +3955,7 @@ void server_routes::init_routes() {
                     {"type", "model"},
                     {"description", ""},
                     {"tags", {""}},
-                    {"capabilities", meta->has_mtmd ? json({"completion","multimodal"}) : json({"completion"})},
+                    {"capabilities", model_capabilities},
                     {"parameters", ""},
                     {"details", {
                         {"parent_model", ""},
@@ -3749,6 +3983,17 @@ void server_routes::init_routes() {
                         {"n_embd",      meta->model_n_embd_inp},
                         {"n_params",    meta->model_n_params},
                         {"size",        meta->model_size},
+                        {"modelai",     {
+                            {"effective_context_window", meta->slot_n_ctx},
+                            {"supports_tools", params.use_jinja && chat_template_cap(meta->chat_template_caps, "supports_tools")},
+                            {"supports_parallel_tools", params.use_jinja && chat_template_cap(meta->chat_template_caps, "supports_parallel_tool_calls")},
+                            {"supports_reranking", meta->pooling_type == LLAMA_POOLING_TYPE_RANK},
+                            {"supports_embeddings", meta->pooling_type != LLAMA_POOLING_TYPE_NONE},
+                            {"supports_json_schema", true},
+                            {"supports_prompt_cache", params.cache_prompt},
+                            {"supports_save_restore", params.endpoint_slots},
+                            {"supports_chat_templates", params.enable_chat_template},
+                        }},
                     }},
                 },
             }}

@@ -72,8 +72,10 @@ Required once ModelAI begins depending on the engine.
 Must cover:
 1. HTTP request/response via `llama-server`
 2. streaming response path
-3. long-session sanity path
-4. save/restore sanity path when that feature exists
+3. `GET /props`, `GET /models`, and `GET /metrics` capability/telemetry sanity path
+4. long-session sanity path
+5. save/restore sanity path when that feature exists
+6. contract-version and provenance fields (`modelai.contract`) are present and non-empty
 
 ## Milestone Gates
 

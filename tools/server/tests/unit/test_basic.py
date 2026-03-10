@@ -20,6 +20,9 @@ def test_server_start_simple():
 
 def test_server_props():
     global server
+    server.offline = False
+    server.server_metrics = True
+    server.server_slots = True
     server.start()
     res = server.make_request("GET", "/props")
     assert res.status_code == 200
@@ -30,20 +33,81 @@ def test_server_props():
     assert default_val["n_ctx"] == server.n_ctx / server.n_slots
     assert default_val["params"]["seed"] == server.seed
 
+    modelai = res.body["modelai"]
+    contract = modelai["contract"]
+    caps = modelai["capabilities"]
+    runtime = modelai["runtime"]
+
+    assert contract["name"] == "modelai-llama.cpp"
+    assert contract["contract_version"] == "0.1.0"
+    assert contract["engine_version"]
+    assert contract["engine_commit"] != "unknown"
+    assert contract["upstream_base_commit"] != "unknown"
+    assert contract["server_mode"] == "model"
+
+    assert caps["effective_context_window"] == server.n_ctx / server.n_slots
+    assert caps["flash_attention"]["supports_additive_kq_b"] is False
+    assert caps["structured_output"]["json_schema"] is True
+    assert caps["prompt_cache"]["enabled"] is True
+    assert caps["save_restore"]["available"] is True
+    assert caps["save_restore"]["validated_for_compacted_path"] is False
+    assert caps["compacted_prefix"]["available"] is False
+    assert caps["features"]["metrics_endpoint"] is True
+    assert caps["features"]["slots_endpoint"] is True
+
+    assert runtime["state"] in {"ready", "sleeping"}
+    assert runtime["memory"]["allocated_context_bytes"] >= 0
+    assert runtime["kv"]["active_n_kv_total"] >= 0
+    assert runtime["compaction"]["query_generation_time_ms"] is None
+    assert runtime["compaction"]["solver_time_ms"] is None
+
 
 def test_server_models():
     global server
+    server.offline = False
+    server.server_slots = True
     server.start()
     res = server.make_request("GET", "/models")
     assert res.status_code == 200
     assert len(res.body["data"]) == 1
     assert res.body["data"][0]["id"] == server.model_alias
+    assert "completion" in res.body["models"][0]["capabilities"]
+    assert "structured_output" in res.body["models"][0]["capabilities"]
+    assert "prompt_cache" in res.body["models"][0]["capabilities"]
+
+    modelai = res.body["data"][0]["meta"]["modelai"]
+    assert modelai["effective_context_window"] == server.n_ctx / server.n_slots
+    assert modelai["supports_embeddings"] is False
+    assert modelai["supports_json_schema"] is True
+    assert modelai["supports_prompt_cache"] is True
+    assert modelai["supports_save_restore"] is True
+    assert modelai["supports_chat_templates"] is True
+
+
+def test_server_metrics_contract():
+    global server
+    server.offline = False
+    server.server_metrics = True
+    server.server_slots = True
+    server.start()
+    res = server.make_request("GET", "/metrics")
+    assert res.status_code == 200
+    assert "llamacpp:modelai_allocated_model_bytes" in res.body
+    assert "llamacpp:modelai_allocated_context_bytes" in res.body
+    assert "llamacpp:modelai_active_n_kv_total" in res.body
+    assert "llamacpp:modelai_active_n_kv_max" in res.body
+    assert "llamacpp:modelai_sequence_state_bytes_total" in res.body
+    assert "llamacpp:modelai_prompt_tokens_per_second" in res.body
+    assert "llamacpp:modelai_predicted_tokens_per_second" in res.body
+    assert "llamacpp:modelai_compacted_prefix_available" in res.body
+    assert "llamacpp:modelai_compacted_prefix_enabled" in res.body
 
 
 def test_server_slots():
     global server
 
     # without slots endpoint enabled, this should return error
+    server.offline = False
     server.server_slots = False
     server.start()
     res = server.make_request("GET", "/slots")

@@ -108,6 +108,12 @@ Add the infrastructure ModelAI needs before compaction exists.
   - embeddings / rerank availability
   - save / restore safety
   - compacted-prefix availability
+- endpoint contract:
+  - `/props` returns `modelai.capabilities` and `modelai.runtime`
+  - `/props` also returns `modelai.contract` for version negotiation and provenance
+  - `/models` returns model-level ModelAI metadata for routing and compatibility checks
+  - `/metrics` carries the same baseline memory / KV totals needed for dashboards and benchmark capture
+  - the concrete consumer-facing schema is defined in ModelAI's `MODELAI_LLAMA_CPP_INTEGRATION_CONTRACT.md`
 - telemetry hooks for:
   - allocated KV bytes
   - active `n_kv`
@@ -116,12 +122,15 @@ Add the infrastructure ModelAI needs before compaction exists.
   - fallback-state reporting
   - `query_generation_time_ms`
   - `solver_time_ms`
+  - `llamacpp:modelai_*` Prometheus gauges for ModelAI-specific runtime telemetry
 
 **Non-goals**
 
 - no compacted-prefix representation yet
 - no flash support
 - no new public API guarantees outside documented server surfaces
+- no non-null compaction timing claims before PR-3
+- no assumption that slot/task presence is required for zero-safe KV telemetry
 
 **Tests**
 
@@ -129,6 +138,8 @@ Add the infrastructure ModelAI needs before compaction exists.
 - capability-query tests
 - telemetry presence tests
 - control-path no-regression tests
+- sleeping-server `/props` tests
+- idle-slot metrics tests
 
 **Merge gate**
 
@@ -136,6 +147,7 @@ Add the infrastructure ModelAI needs before compaction exists.
 - existing behavior unchanged when disabled
 - ModelAI can query capabilities and telemetry without needing compaction enabled
 - unsupported configs are reported explicitly rather than inferred indirectly
+- runtime telemetry is safe for sleeping servers and zero-safe for idle slots
 
 ## PR-2: Compacted-Prefix Memory Architecture
 

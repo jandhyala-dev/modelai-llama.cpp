@@ -95,7 +95,15 @@ The current runtime constraints that shape this fork are:
 
 - private product-fork docs and governance are in place,
 - CI and release discipline exist before engine dependency promotion,
-- capability and telemetry surfaces exist before compaction itself lands.
+- capability and telemetry surfaces exist before compaction itself lands,
+- `llama-server` exposes a stable ModelAI-facing contract on `/props`, `/models`, and `/metrics` before any compacted-prefix implementation is enabled.
+
+Near-term observability requirements:
+- allocated context/model/compute bytes are reported separately,
+- active KV metrics are reported even for idle slots as zero-safe telemetry,
+- compaction timings remain `null` until the compacted-prefix path exists,
+- `/props` must remain safe to query while the server is sleeping and must not wake the runtime just to answer capability questions,
+- `modelai.contract` metadata and `llamacpp:modelai_*` metrics must be present so ModelAI can negotiate engine version and scrape runtime telemetry deterministically.
 
 ### Mid-Term
 

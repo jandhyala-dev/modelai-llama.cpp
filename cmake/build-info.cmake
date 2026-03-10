@@ -2,6 +2,7 @@ set(BUILD_NUMBER 0)
 set(BUILD_COMMIT "unknown")
 set(BUILD_COMPILER "unknown")
 set(BUILD_TARGET "unknown")
+set(MODELAI_UPSTREAM_BASE_COMMIT "unknown")
 
 # Look for git
 find_package(Git)
@@ -27,6 +28,18 @@ if(Git_FOUND)
     if (RES EQUAL 0)
         set(BUILD_COMMIT ${HEAD})
     endif()
+
+    execute_process(
+        COMMAND ${GIT_EXECUTABLE} rev-parse --short origin/upstream-master
+        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+        OUTPUT_VARIABLE UPSTREAM_HEAD
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        RESULT_VARIABLE RES
+    )
+    if (RES EQUAL 0)
+        set(MODELAI_UPSTREAM_BASE_COMMIT ${UPSTREAM_HEAD})
+    endif()
+
     execute_process(
         COMMAND ${GIT_EXECUTABLE} rev-list --count HEAD
         WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}

@@ -516,6 +516,13 @@ struct server_task_result_metrics : server_task_result {
     uint64_t n_decode_total     = 0;
     uint64_t n_busy_slots_total = 0;
 
+    uint64_t allocated_model_bytes      = 0;
+    uint64_t allocated_context_bytes    = 0;
+    uint64_t allocated_compute_bytes    = 0;
+    uint64_t active_n_kv_total          = 0;
+    uint64_t active_n_kv_max            = 0;
+    uint64_t sequence_state_bytes_total = 0;
+
     // while we can also use std::vector<server_slot> this requires copying the slot object which can be quite messy
     // therefore, we use json to temporarily store the slot.to_json() result
     json slots_data = json::array();
