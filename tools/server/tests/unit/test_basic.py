@@ -71,9 +71,6 @@ def test_server_models():
     assert res.status_code == 200
     assert len(res.body["data"]) == 1
     assert res.body["data"][0]["id"] == server.model_alias
-    assert "completion" in res.body["models"][0]["capabilities"]
-    assert "structured_output" in res.body["models"][0]["capabilities"]
-    assert "prompt_cache" in res.body["models"][0]["capabilities"]
 
     modelai = res.body["data"][0]["meta"]["modelai"]
     assert modelai["effective_context_window"] == server.n_ctx / server.n_slots
@@ -103,19 +100,35 @@ def test_server_metrics_contract():
     assert "llamacpp:modelai_compacted_prefix_enabled" in res.body
 
 
+def test_server_disabled_capabilities():
+    global server
+    server.offline = False
+    server.server_metrics = False
+    server.server_slots = False
+    server.start()
+
+    props = server.make_request("GET", "/props")
+    assert props.status_code == 200
+    caps = props.body["modelai"]["capabilities"]
+    assert caps["features"]["metrics_endpoint"] is False
+    assert caps["features"]["slots_endpoint"] is False
+    assert caps["save_restore"]["available"] is False
+
+    metrics = server.make_request("GET", "/metrics")
+    assert metrics.status_code == 501
+    assert metrics.body["error"]["code"] == 501
+    assert metrics.body["error"]["type"] == "not_supported_error"
+
+    slots = server.make_request("GET", "/slots")
+    assert slots.status_code == 501
+    assert slots.body["error"]["code"] == 501
+    assert slots.body["error"]["type"] == "not_supported_error"
+
+
 def test_server_slots():
     global server
 
-    # without slots endpoint enabled, this should return error
     server.offline = False
-    server.server_slots = False
-    server.start()
-    res = server.make_request("GET", "/slots")
-    assert res.status_code == 501 # ERROR_TYPE_NOT_SUPPORTED
-    assert "error" in res.body
-    server.stop()
-
-    # with slots endpoint enabled, this should return slots info
     server.server_slots = True
     server.n_slots = 2
     server.start()

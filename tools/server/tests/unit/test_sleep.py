@@ -13,6 +13,9 @@ def create_server():
 
 def test_server_sleep():
     global server
+    server.offline = False
+    server.server_metrics = True
+    server.server_slots = True
     server.sleep_idle_seconds = 1
     server.start()
 
@@ -25,6 +28,7 @@ def test_server_sleep():
     res = server.make_request("GET", "/props")
     assert res.status_code == 200
     assert res.body["is_sleeping"] == True
+    assert res.body["modelai"]["runtime"]["state"] == "sleeping"
 
     # make a generation request to wake up the server
     res = server.make_request("POST", "/completion", data={
@@ -37,3 +41,4 @@ def test_server_sleep():
     res = server.make_request("GET", "/props")
     assert res.status_code == 200
     assert res.body["is_sleeping"] == False
+    assert res.body["modelai"]["runtime"]["state"] == "ready"

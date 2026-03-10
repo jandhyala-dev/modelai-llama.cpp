@@ -45,6 +45,12 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Fetch upstream provenance branch
+        run: |
+          git fetch --no-tags origin refs/heads/upstream-master:refs/remotes/origin/upstream-master
 
       - name: Configure
         run: |

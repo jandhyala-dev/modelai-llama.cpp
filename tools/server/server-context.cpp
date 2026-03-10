@@ -50,6 +50,12 @@ static json build_modelai_contract(bool is_router_server) {
     };
 }
 
+static double tokens_per_second(uint64_t n_tokens, uint64_t t_ms) {
+    return (n_tokens > 0 && t_ms > 0)
+        ? 1.e3 / t_ms * n_tokens
+        : 0.0;
+}
+
 static json build_modelai_server_capabilities(const common_params & params, const server_context_meta & meta, bool is_router_server) {
     const bool supports_embeddings = meta.pooling_type != LLAMA_POOLING_TYPE_NONE;
     const bool supports_reranking  = meta.pooling_type == LLAMA_POOLING_TYPE_RANK;
@@ -110,12 +116,8 @@ static json build_modelai_server_capabilities(const common_params & params, cons
 }
 
 static json build_modelai_runtime_summary_from_metrics(const server_task_result_metrics & metrics, bool is_sleeping) {
-    const double prompt_tokens_per_second = metrics.n_prompt_tokens_processed
-        ? 1.e3 / metrics.t_prompt_processing * metrics.n_prompt_tokens_processed
-        : 0.0;
-    const double predicted_tokens_per_second = metrics.n_tokens_predicted
-        ? 1.e3 / metrics.t_tokens_generation * metrics.n_tokens_predicted
-        : 0.0;
+    const double prompt_tokens_per_second = tokens_per_second(metrics.n_prompt_tokens_processed, metrics.t_prompt_processing);
+    const double predicted_tokens_per_second = tokens_per_second(metrics.n_tokens_predicted, metrics.t_tokens_generation);
 
     return json {
         { "state", is_sleeping ? "sleeping" : "ready" },
@@ -3462,11 +3464,11 @@ void server_routes::init_routes() {
             {"gauge", {{
                     {"name",  "prompt_tokens_seconds"},
                     {"help",  "Average prompt throughput in tokens/s."},
-                    {"value",  res_task->n_prompt_tokens_processed ? 1.e3 / res_task->t_prompt_processing * res_task->n_prompt_tokens_processed : 0.}
+                    {"value",  tokens_per_second(res_task->n_prompt_tokens_processed, res_task->t_prompt_processing)}
             },{
                     {"name",  "predicted_tokens_seconds"},
                     {"help",  "Average generation throughput in tokens/s."},
-                    {"value",  res_task->n_tokens_predicted ? 1.e3 / res_task->t_tokens_generation * res_task->n_tokens_predicted : 0.}
+                    {"value",  tokens_per_second(res_task->n_tokens_predicted, res_task->t_tokens_generation)}
             },{
                     {"name",  "requests_processing"},
                     {"help",  "Number of requests processing."},
@@ -3502,11 +3504,11 @@ void server_routes::init_routes() {
             },{
                     {"name",  "modelai_prompt_tokens_per_second"},
                     {"help",  "Prompt throughput snapshot in tokens/s."},
-                    {"value",  res_task->n_prompt_tokens_processed ? 1.e3 / res_task->t_prompt_processing * res_task->n_prompt_tokens_processed : 0.}
+                    {"value",  tokens_per_second(res_task->n_prompt_tokens_processed, res_task->t_prompt_processing)}
             },{
                     {"name",  "modelai_predicted_tokens_per_second"},
                     {"help",  "Decode throughput snapshot in tokens/s."},
-                    {"value",  res_task->n_tokens_predicted ? 1.e3 / res_task->t_tokens_generation * res_task->n_tokens_predicted : 0.}
+                    {"value",  tokens_per_second(res_task->n_tokens_predicted, res_task->t_tokens_generation)}
             },{
                     {"name",  "modelai_compacted_prefix_available"},
                     {"help",  "Whether the compacted-prefix path is available."},

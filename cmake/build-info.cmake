@@ -29,15 +29,26 @@ if(Git_FOUND)
         set(BUILD_COMMIT ${HEAD})
     endif()
 
-    execute_process(
-        COMMAND ${GIT_EXECUTABLE} rev-parse --short origin/upstream-master
-        WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
-        OUTPUT_VARIABLE UPSTREAM_HEAD
-        OUTPUT_STRIP_TRAILING_WHITESPACE
-        RESULT_VARIABLE RES
-    )
-    if (RES EQUAL 0)
-        set(MODELAI_UPSTREAM_BASE_COMMIT ${UPSTREAM_HEAD})
+    if(DEFINED ENV{MODELAI_UPSTREAM_BASE_COMMIT} AND NOT "$ENV{MODELAI_UPSTREAM_BASE_COMMIT}" STREQUAL "")
+        set(MODELAI_UPSTREAM_BASE_COMMIT "$ENV{MODELAI_UPSTREAM_BASE_COMMIT}")
+    else()
+        foreach(UPSTREAM_REF
+                origin/upstream-master
+                refs/remotes/origin/upstream-master
+                upstream-master
+                refs/heads/upstream-master)
+            execute_process(
+                COMMAND ${GIT_EXECUTABLE} rev-parse --short ${UPSTREAM_REF}
+                WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
+                OUTPUT_VARIABLE UPSTREAM_HEAD
+                OUTPUT_STRIP_TRAILING_WHITESPACE
+                RESULT_VARIABLE RES
+            )
+            if (RES EQUAL 0)
+                set(MODELAI_UPSTREAM_BASE_COMMIT ${UPSTREAM_HEAD})
+                break()
+            endif()
+        endforeach()
     endif()
 
     execute_process(

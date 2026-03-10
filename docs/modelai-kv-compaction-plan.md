@@ -123,6 +123,7 @@ Add the infrastructure ModelAI needs before compaction exists.
   - `query_generation_time_ms`
   - `solver_time_ms`
   - `llamacpp:modelai_*` Prometheus gauges for ModelAI-specific runtime telemetry
+- build provenance that resolves the upstream base commit deterministically in CI and local managed builds
 
 **Non-goals**
 
@@ -148,6 +149,7 @@ Add the infrastructure ModelAI needs before compaction exists.
 - ModelAI can query capabilities and telemetry without needing compaction enabled
 - unsupported configs are reported explicitly rather than inferred indirectly
 - runtime telemetry is safe for sleeping servers and zero-safe for idle slots
+- product-fork internal-header coupling is documented explicitly where PR-1 reaches non-public runtime internals for telemetry
 
 ## PR-2: Compacted-Prefix Memory Architecture
 

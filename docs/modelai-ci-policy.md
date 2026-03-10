@@ -77,6 +77,8 @@ Must cover:
 5. save/restore sanity path when that feature exists
 6. contract-version and provenance fields (`modelai.contract`) are present and non-empty
 
+CI jobs that configure the engine must fetch `upstream-master` before the configure step so `upstream_base_commit` is populated deterministically in managed builds.
+
 ## Milestone Gates
 
 | Milestone | Required CI |

@@ -88,6 +88,7 @@ The current runtime constraints that shape this fork are:
    - SWA / split-memory cache
    - hybrid recurrent + attention memory
 7. `beta` cannot be represented as a flat slot scalar; its dimensionality is per layer / per KV head / per compacted token.
+8. PR-1 telemetry currently reaches `memory_breakdown()` through `src/llama-context.h`; that is acceptable for this product fork but it is an explicit upstream-sync risk until a public API exists.
 
 ## Expected Results
 

@@ -45,6 +45,12 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Fetch upstream provenance branch
+        run: |
+          git fetch --no-tags origin refs/heads/upstream-master:refs/remotes/origin/upstream-master
       - name: Detect backend-sensitive changes
         id: filter
         uses: dorny/paths-filter@v3
@@ -65,6 +71,12 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Fetch upstream provenance branch
+        run: |
+          git fetch --no-tags origin refs/heads/upstream-master:refs/remotes/origin/upstream-master
 
       - name: Configure
         run: |
@@ -89,6 +101,12 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Fetch upstream provenance branch
+        run: |
+          git fetch --no-tags origin refs/heads/upstream-master:refs/remotes/origin/upstream-master
 
       - name: Install dependencies
         run: |
@@ -123,6 +141,12 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Fetch upstream provenance branch
+        run: |
+          git fetch --no-tags origin refs/heads/upstream-master:refs/remotes/origin/upstream-master
 
       - name: Configure
         run: |
