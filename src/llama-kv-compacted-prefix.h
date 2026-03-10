@@ -53,6 +53,12 @@ public:
         llama_pos pos_max() const;
 
         size_t allocated_bytes() const;
+
+        bool set_execution_enabled(bool enabled);
+        bool is_execution_enabled() const;
+
+    private:
+        bool execution_enabled = false;
     };
 
     explicit llama_compacted_prefix_store(std::vector<llama_compacted_prefix_layer_layout> layouts = {});
@@ -76,6 +82,8 @@ public:
     llama_pos seq_pos_max(llama_seq_id seq_id) const;
 
     bool is_enabled(llama_seq_id seq_id) const;
+    bool set_execution(llama_seq_id seq_id, bool enabled);
+    bool execution_enabled(llama_seq_id seq_id) const;
 
     size_t seq_allocated_bytes(llama_seq_id seq_id) const;
     size_t total_allocated_bytes() const;

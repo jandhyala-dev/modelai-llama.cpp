@@ -86,7 +86,7 @@ CI jobs that configure the engine must fetch `upstream-master` before the config
 | PR-0 docs | docs review only |
 | PR-1 observability | build + `ctest` + server smoke |
 | PR-2 memory architecture | build + `ctest` + state/layout tests |
-| PR-3 correctness | build + `ctest` + solver/correctness fixtures |
+| PR-3 correctness | build + `ctest` + compacted-prefix execution/materialization fixtures + state regression |
 | PR-4 session/state | build + `ctest` + save/restore tests |
 | PR-5 performance | build + `ctest` + benchmark runs |
 | PR-6 coverage | build + `ctest` + backend-specific regression suite |

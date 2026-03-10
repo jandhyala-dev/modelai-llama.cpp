@@ -239,6 +239,8 @@ llama_build_and_test(test-gguf.cpp)
 llama_build_and_test(test-backend-ops.cpp)
 llama_build_and_test(test-kv-compacted-prefix.cpp)
 target_include_directories(test-kv-compacted-prefix PRIVATE ${PROJECT_SOURCE_DIR})
+llama_build_and_test(test-kv-compacted-prefix-exec.cpp)
+target_include_directories(test-kv-compacted-prefix-exec PRIVATE ${PROJECT_SOURCE_DIR})
 
 llama_build_and_test(test-model-load-cancel.cpp LABEL "model")
 llama_build_and_test(test-autorelease.cpp       LABEL "model")
@@ -284,4 +286,3 @@ target_link_libraries(${TEST_TARGET} PRIVATE llama)
 
 llama_build_and_test(test-alloc.cpp)
 target_include_directories(test-alloc PRIVATE ${PROJECT_SOURCE_DIR}/ggml/src)
-

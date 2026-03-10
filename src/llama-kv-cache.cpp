@@ -564,6 +564,18 @@ bool llama_kv_cache::compacted_prefix_enabled(llama_seq_id seq_id) const {
     return compacted_prefix.is_enabled(seq_id);
 }
 
+bool llama_kv_cache::compacted_prefix_set_execution(llama_seq_id seq_id, bool enabled) {
+    if (!compacted_prefix_runtime_supported()) {
+        return false;
+    }
+
+    return compacted_prefix.set_execution(seq_id, enabled);
+}
+
+bool llama_kv_cache::compacted_prefix_execution_enabled(llama_seq_id seq_id) const {
+    return compacted_prefix_runtime_supported() && compacted_prefix.execution_enabled(seq_id);
+}
+
 size_t llama_kv_cache::compacted_prefix_bytes(llama_seq_id seq_id) const {
     if (seq_id < 0) {
         return compacted_prefix.total_allocated_bytes();
@@ -574,6 +586,41 @@ size_t llama_kv_cache::compacted_prefix_bytes(llama_seq_id seq_id) const {
 
 const llama_compacted_prefix_store * llama_kv_cache::get_compacted_prefix() const {
     return &compacted_prefix;
+}
+
+llama_compacted_prefix_store * llama_kv_cache::get_compacted_prefix() {
+    return &compacted_prefix;
+}
+
+bool llama_kv_cache::compacted_prefix_runtime_supported() const {
+    if (hparams.swa_type != LLAMA_SWA_TYPE_NONE || n_swa > 0 || swa_type != LLAMA_SWA_TYPE_NONE) {
+        return false;
+    }
+
+    if (llm_arch_is_hybrid(model.arch)) {
+        return false;
+    }
+
+    return true;
+}
+
+bool llama_kv_cache::resolve_compacted_prefix_exec(
+        const llama_ubatch & ubatch,
+        llama_compacted_prefix_exec_candidate & out) const {
+    out = {};
+
+    if (!compacted_prefix_runtime_supported()) {
+        return false;
+    }
+
+    if (ubatch.n_seqs_unq != 1 || ubatch.seq_id_unq == nullptr) {
+        return false;
+    }
+
+    const llama_seq_id seq_id = ubatch.seq_id_unq[0];
+    const auto * state = compacted_prefix.get_seq(seq_id);
+
+    return llama_compacted_prefix_can_execute(seq_id, state, ubatch, &out);
 }
 
 llama_memory_context_ptr llama_kv_cache::init_batch(
@@ -1548,6 +1595,55 @@ void llama_kv_cache::set_input_kq_mask(ggml_tensor * dst, const llama_ubatch * u
     //LLAMA_LOG_ERROR("%s: kq mask time: %0.3f ms\n", __func__, (t_end - t_start)/1000.0);
 }
 
+void llama_kv_cache::set_input_compacted_prefix_mask(
+        ggml_tensor * dst,
+        const llama_ubatch * ubatch,
+        bool causal_attn,
+        llama_seq_id seq_id) const {
+    const auto * state = compacted_prefix.get_seq(seq_id);
+    if (state == nullptr || !state->enabled || !state->is_execution_enabled()) {
+        throw std::runtime_error("compacted-prefix mask requested without an active execution state");
+    }
+
+    llama_compacted_prefix_set_input_mask(dst, *state, *ubatch, hparams, causal_attn);
+}
+
+void llama_kv_cache::set_input_compacted_prefix_k(ggml_tensor * dst, int32_t il, llama_seq_id seq_id) const {
+    const auto * state = compacted_prefix.get_seq(seq_id);
+    if (state == nullptr || !state->enabled || !state->is_execution_enabled()) {
+        throw std::runtime_error("compacted-prefix K requested without an active execution state");
+    }
+
+    const int32_t ikv = map_layer_ids.at(il);
+    GGML_ASSERT((size_t) ikv < state->layers.size());
+
+    llama_compacted_prefix_set_input_k(dst, state->layers[ikv]);
+}
+
+void llama_kv_cache::set_input_compacted_prefix_v(ggml_tensor * dst, int32_t il, llama_seq_id seq_id) const {
+    const auto * state = compacted_prefix.get_seq(seq_id);
+    if (state == nullptr || !state->enabled || !state->is_execution_enabled()) {
+        throw std::runtime_error("compacted-prefix V requested without an active execution state");
+    }
+
+    const int32_t ikv = map_layer_ids.at(il);
+    GGML_ASSERT((size_t) ikv < state->layers.size());
+
+    llama_compacted_prefix_set_input_v(dst, state->layers[ikv]);
+}
+
+void llama_kv_cache::set_input_compacted_prefix_kq_b(ggml_tensor * dst, int32_t il, llama_seq_id seq_id) const {
+    const auto * state = compacted_prefix.get_seq(seq_id);
+    if (state == nullptr || !state->enabled || !state->is_execution_enabled()) {
+        throw std::runtime_error("compacted-prefix bias requested without an active execution state");
+    }
+
+    const int32_t ikv = map_layer_ids.at(il);
+    GGML_ASSERT((size_t) ikv < state->layers.size());
+
+    llama_compacted_prefix_set_input_beta(dst, state->layers[ikv], hparams.n_head(il));
+}
+
 void llama_kv_cache::set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const {
     const int64_t n_tokens = ubatch->n_tokens;
 
@@ -2288,6 +2384,8 @@ bool llama_kv_cache_context::apply() {
 
     kv->apply_ubatch(sinfos[i_cur], ubatches[i_cur]);
     n_kv = kv->get_n_kv(sinfos[i_cur]);
+    compacted_exec = {};
+    kv->resolve_compacted_prefix_exec(ubatches[i_cur], compacted_exec);
 
     return true;
 }
@@ -2348,4 +2446,32 @@ void llama_kv_cache_context::set_input_kq_mask(ggml_tensor * dst, const llama_ub
 
 void llama_kv_cache_context::set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const {
     kv->set_input_pos_bucket(dst, ubatch);
+}
+
+bool llama_kv_cache_context::compacted_prefix_active() const {
+    return compacted_exec.seq_id >= 0 && compacted_exec.n_tokens > 0;
+}
+
+llama_seq_id llama_kv_cache_context::compacted_prefix_seq_id() const {
+    return compacted_exec.seq_id;
+}
+
+uint32_t llama_kv_cache_context::compacted_prefix_n_tokens() const {
+    return compacted_exec.n_tokens;
+}
+
+void llama_kv_cache_context::set_input_compacted_prefix_mask(ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const {
+    kv->set_input_compacted_prefix_mask(dst, ubatch, causal_attn, compacted_exec.seq_id);
+}
+
+void llama_kv_cache_context::set_input_compacted_prefix_k(ggml_tensor * dst, int32_t il) const {
+    kv->set_input_compacted_prefix_k(dst, il, compacted_exec.seq_id);
+}
+
+void llama_kv_cache_context::set_input_compacted_prefix_v(ggml_tensor * dst, int32_t il) const {
+    kv->set_input_compacted_prefix_v(dst, il, compacted_exec.seq_id);
+}
+
+void llama_kv_cache_context::set_input_compacted_prefix_kq_b(ggml_tensor * dst, int32_t il) const {
+    kv->set_input_compacted_prefix_kq_b(dst, il, compacted_exec.seq_id);
 }

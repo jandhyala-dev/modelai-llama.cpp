@@ -160,6 +160,7 @@ size_t llama_compacted_prefix_store::layer_storage::allocated_bytes() const {
 
 void llama_compacted_prefix_store::sequence_state::clear(bool data) {
     enabled = false;
+    execution_enabled = false;
     logical_token_count = 0;
     live_suffix_pos0 = -1;
     logical_positions.clear();
@@ -200,6 +201,31 @@ size_t llama_compacted_prefix_store::sequence_state::allocated_bytes() const {
         total += layer.allocated_bytes();
     }
     return total;
+}
+
+bool llama_compacted_prefix_store::sequence_state::set_execution_enabled(bool enabled_) {
+    if (!enabled_) {
+        execution_enabled = false;
+        return true;
+    }
+
+    if (!enabled || logical_positions.empty() || layers.empty()) {
+        return false;
+    }
+
+    const uint32_t n_tokens = logical_positions.size();
+    for (const auto & layer : layers) {
+        if (layer.n_compacted_tokens != n_tokens) {
+            return false;
+        }
+    }
+
+    execution_enabled = true;
+    return true;
+}
+
+bool llama_compacted_prefix_store::sequence_state::is_execution_enabled() const {
+    return execution_enabled;
 }
 
 llama_compacted_prefix_store::llama_compacted_prefix_store(std::vector<llama_compacted_prefix_layer_layout> layouts)
@@ -442,6 +468,23 @@ bool llama_compacted_prefix_store::is_enabled(llama_seq_id seq_id) const {
         return false;
     }
     return seq(seq_id).enabled;
+}
+
+bool llama_compacted_prefix_store::set_execution(llama_seq_id seq_id, bool enabled) {
+    if (seq_id < 0 || size_t(seq_id) >= seq_states.size()) {
+        return false;
+    }
+
+    return seq(seq_id).set_execution_enabled(enabled);
+}
+
+bool llama_compacted_prefix_store::execution_enabled(llama_seq_id seq_id) const {
+    if (seq_id < 0 || size_t(seq_id) >= seq_states.size()) {
+        return false;
+    }
+
+    const auto & state = seq(seq_id);
+    return state.enabled && state.is_execution_enabled();
 }
 
 size_t llama_compacted_prefix_store::seq_allocated_bytes(llama_seq_id seq_id) const {

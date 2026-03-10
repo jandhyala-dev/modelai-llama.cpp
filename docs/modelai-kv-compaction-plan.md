@@ -204,38 +204,68 @@ Establish the internal representation for compacted KV state.
 
 **Objective**
 
-Make compaction work end-to-end on the narrow supported matrix.
+Make compacted-prefix state participate in real non-flash attention execution on the narrow supported matrix.
 
 **Scope**
 
-- query extraction from prefill path
-- GQA regrouping into KV-head query space
-- key selection fast path (`topk` by attention score)
-- NNLS beta fitting
-- OLS value fitting:
-  - primary: Householder QR
-  - fallback: regularized Cholesky with `lambda=1e-6`
-- chat-template / BOS preservation
-- optional model-specific nonuniform schedules with uniform fallback
+- explicit internal execution activation per sequence
+- compacted-prefix execution eligibility resolution per ubatch
+- explicit runtime rejection for:
+  - flash-attention execution
+  - SWA / split-memory execution
+  - hybrid-memory execution
+- host-side materialization helpers for:
+  - compacted `K`
+  - canonical non-transposed compacted `V`
+  - per-query-head expanded `beta`
+  - compacted prefix mask columns
 - non-flash execution using additive `kq_b`
-- explicit fallback for unsupported configs
+- concatenation of compacted-prefix `K/V/B/mask` with the live KV path inside `build_attn`
+- graph reuse disabled while compacted-prefix execution is active
+- explicit fallback for unsupported configs or inactive compacted-prefix state
+- deterministic correctness tests for:
+  - execution gating
+  - payload materialization
+  - causal masking
+  - non-flash attention sanity
+- regression coverage to ensure existing state-restore behavior is not broken by the new internal execution path
 
 **Solver policy**
 
-All solver math runs in fp32. Results are cast to the model dtype only for KV storage.
+The full fitting pipeline is intentionally deferred. When NNLS / least-squares fitting lands, all solver math will run in fp32 and results will be cast to model dtype only for KV storage.
 
 **Tests**
 
-- solver unit tests
-- reference parity on fixed fixtures
-- end-to-end sanity tests
+- execution-gating tests
+- materialization tests for compacted `K/V/B/mask`
+- alibi-mask tests
+- non-flash attention sanity tests
 - unsupported-config fallback tests
+- execution-state lifecycle tests
 - no-NaN / no-crash tests
+- state-restore regression tests
 
 **Merge gate**
 
-- supported matrix works end-to-end within defined tolerances
-- unsupported matrix fails or falls back explicitly
+- compacted-prefix state can participate in non-flash attention execution on the supported matrix
+- unsupported matrix falls back explicitly
+- graph-path wiring is real, but public runtime enablement remains deferred
+- flash-attention use while compacted-prefix execution is active fails explicitly instead of relying on implicit `kq_b` behavior
+
+**Explicit PR-3 deferrals**
+
+The following items are intentionally not part of this branch and must be addressed in follow-on work before public rollout:
+- query extraction from the prefill path
+- GQA regrouping from projected query heads into KV-head fitting space
+- key selection policies (`topk`, OMP, or nonuniform schedules)
+- NNLS beta fitting
+- least-squares value fitting:
+  - primary: Householder QR
+  - fallback: regularized Cholesky with `lambda=1e-6`
+- chat-template / BOS preservation policy
+- public runtime/server enablement
+- save/restore serialization of compacted-prefix execution state
+- model-provided `kq_b` tensors that rely on broadcast token dimensions; P3 requires exact non-concat dimensions for `kq_b` concatenation
 
 ## PR-4: Session And State Integration
 
