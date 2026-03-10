@@ -1,0 +1,142 @@
+name: ModelAI CI
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - modelai-main
+      - upstream-master
+      - kv-compact-*
+      - feature/**
+    paths:
+      - '.github/workflows/modelai-ci.yml'
+      - '**/CMakeLists.txt'
+      - '**/*.cmake'
+      - 'ggml/**'
+      - 'include/**'
+      - 'src/**'
+      - 'common/**'
+      - 'tests/**'
+      - 'tools/**'
+      - 'examples/**'
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - '.github/workflows/modelai-ci.yml'
+      - '**/CMakeLists.txt'
+      - '**/*.cmake'
+      - 'ggml/**'
+      - 'include/**'
+      - 'src/**'
+      - 'common/**'
+      - 'tests/**'
+      - 'tools/**'
+      - 'examples/**'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      backend: ${{ steps.filter.outputs.backend }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+      - name: Detect backend-sensitive changes
+        id: filter
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            backend:
+              - 'ggml/**'
+              - 'src/llama-graph.cpp'
+              - 'src/llama-context.cpp'
+              - 'src/llama-kv-cache.cpp'
+              - 'src/llama-kv-cache.h'
+              - 'src/llama-kv-cells.h'
+              - '.github/workflows/modelai-ci.yml'
+
+  build-macos-metal:
+    name: build-macos-metal
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Configure
+        run: |
+          cmake -B build \
+            -DCMAKE_BUILD_RPATH="@loader_path" \
+            -DGGML_METAL=ON \
+            -DLLAMA_BUILD_TESTS=ON \
+            -DLLAMA_BUILD_EXAMPLES=ON \
+            -DLLAMA_FATAL_WARNINGS=ON
+
+      - name: Build
+        run: |
+          cmake --build build --config Release -j $(sysctl -n hw.logicalcpu)
+
+      - name: Test
+        run: |
+          ctest --test-dir build -L main -E "test-llama-archs" --output-on-failure --timeout 900
+
+  build-linux-cpu:
+    name: build-linux-cpu
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            cmake \
+            libssl-dev \
+            python3 \
+            python3-pip
+
+      - name: Configure
+        run: |
+          cmake -B build \
+            -DLLAMA_BUILD_TESTS=ON \
+            -DLLAMA_BUILD_EXAMPLES=ON \
+            -DLLAMA_FATAL_WARNINGS=ON
+
+      - name: Build
+        run: |
+          cmake --build build --config Release -j $(nproc)
+
+      - name: Test
+        run: |
+          ctest --test-dir build -L main --output-on-failure --timeout 900
+
+  backend-ops-macos:
+    name: backend-ops-macos
+    needs: changes
+    if: ${{ github.event_name == 'workflow_dispatch' || needs.changes.outputs.backend == 'true' }}
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Configure
+        run: |
+          cmake -B build \
+            -DCMAKE_BUILD_RPATH="@loader_path" \
+            -DGGML_METAL=ON \
+            -DLLAMA_BUILD_TESTS=ON \
+            -DLLAMA_BUILD_EXAMPLES=ON \
+            -DLLAMA_FATAL_WARNINGS=ON
+
+      - name: Build backend op test target
+        run: |
+          cmake --build build --config Release -j $(sysctl -n hw.logicalcpu) --target test-backend-ops
+
+      - name: Run backend operator consistency tests
+        run: |
+          ./build/bin/test-backend-ops

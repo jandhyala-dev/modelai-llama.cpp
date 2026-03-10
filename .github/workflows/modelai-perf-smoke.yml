@@ -1,0 +1,74 @@
+name: ModelAI Perf Smoke
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - modelai-main
+    paths:
+      - '.github/workflows/modelai-perf-smoke.yml'
+      - 'src/**'
+      - 'ggml/**'
+      - 'common/**'
+      - 'include/**'
+      - 'tools/llama-bench/**'
+      - 'tools/perplexity/**'
+      - '**/CMakeLists.txt'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref_name }}
+  cancel-in-progress: true
+
+env:
+  MODEL_REF: ggml-org/gemma-3-270m-qat-GGUF
+
+jobs:
+  perf-smoke-macos:
+    name: perf-smoke-macos
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Configure
+        run: |
+          cmake -B build \
+            -DCMAKE_BUILD_RPATH="@loader_path" \
+            -DGGML_METAL=ON \
+            -DLLAMA_BUILD_TESTS=ON \
+            -DLLAMA_BUILD_EXAMPLES=ON \
+            -DLLAMA_FATAL_WARNINGS=ON
+
+      - name: Build perf tools
+        run: |
+          cmake --build build --config Release -j $(sysctl -n hw.logicalcpu) \
+            --target llama-bench llama-perplexity
+
+      - name: Create smoke corpus
+        run: |
+          cat > perf-smoke.txt << 'TXT'
+          This is a lightweight smoke corpus for validating the llama.cpp performance tools.
+          It is not a benchmark-quality dataset and must not be used for release claims.
+          The purpose is only to confirm that the benchmarking and perplexity commands execute successfully.
+          Repeated-turn latency, allocated KV bytes, active KV length, and quality deltas belong in the full W1-W6 benchmark harness.
+          TXT
+
+      - name: Run llama-bench smoke
+        run: |
+          ./build/bin/llama-bench -hf "$MODEL_REF" -ngl 0 > llama-bench.txt
+          test -s llama-bench.txt
+
+      - name: Run llama-perplexity smoke
+        run: |
+          ./build/bin/llama-perplexity -hf "$MODEL_REF" -f perf-smoke.txt -ngl 0 -c 512 -b 256 --chunks 1 > llama-perplexity.txt
+          grep -q 'Final estimate' llama-perplexity.txt
+
+      - name: Upload perf smoke artifacts
+        uses: actions/upload-artifact@v6
+        with:
+          name: perf-smoke-${{ github.run_id }}
+          path: |
+            llama-bench.txt
+            llama-perplexity.txt
+            perf-smoke.txt

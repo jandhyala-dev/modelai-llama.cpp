@@ -1,0 +1,133 @@
+name: ModelAI Server Smoke
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - modelai-main
+      - kv-compact-*
+      - feature/**
+    paths:
+      - '.github/workflows/modelai-server-smoke.yml'
+      - 'src/**'
+      - 'common/**'
+      - 'include/**'
+      - 'tools/server/**'
+      - 'tools/mtmd/**'
+      - 'examples/**'
+      - '**/CMakeLists.txt'
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - '.github/workflows/modelai-server-smoke.yml'
+      - 'src/**'
+      - 'common/**'
+      - 'include/**'
+      - 'tools/server/**'
+      - 'tools/mtmd/**'
+      - 'examples/**'
+      - '**/CMakeLists.txt'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+env:
+  MODEL_REF: ggml-org/gemma-3-270m-qat-GGUF
+  MODEL_ALIAS: smoke-model
+  SERVER_PORT: 18080
+
+jobs:
+  server-smoke-macos:
+    name: server-smoke-macos
+    runs-on: macos-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Configure
+        run: |
+          cmake -B build \
+            -DCMAKE_BUILD_RPATH="@loader_path" \
+            -DGGML_METAL=ON \
+            -DLLAMA_BUILD_TESTS=ON \
+            -DLLAMA_BUILD_EXAMPLES=ON \
+            -DLLAMA_FATAL_WARNINGS=ON
+
+      - name: Build llama-server
+        run: |
+          cmake --build build --config Release -j $(sysctl -n hw.logicalcpu) --target llama-server
+
+      - name: Run server compatibility smoke test
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cleanup() {
+            if [ -f server.pid ]; then
+              kill "$(cat server.pid)" || true
+              wait "$(cat server.pid)" || true
+            fi
+            if [ -f server.log ]; then
+              tail -n 200 server.log || true
+            fi
+          }
+          trap cleanup EXIT
+
+          ./build/bin/llama-server \
+            -hf "$MODEL_REF" \
+            --alias "$MODEL_ALIAS" \
+            --host 127.0.0.1 \
+            --port "$SERVER_PORT" \
+            --ctx-size 1024 \
+            --predict 32 \
+            --parallel 1 \
+            --metrics \
+            --slots \
+            --no-webui \
+            -ngl 0 \
+            -fa off \
+            > server.log 2>&1 &
+          echo $! > server.pid
+
+          for i in $(seq 1 120); do
+            if curl -sf "http://127.0.0.1:${SERVER_PORT}/health" > /tmp/health.json; then
+              break
+            fi
+            sleep 2
+          done
+          test -s /tmp/health.json
+
+          curl -sf "http://127.0.0.1:${SERVER_PORT}/slots" > /tmp/slots.json
+          curl -sf "http://127.0.0.1:${SERVER_PORT}/metrics" > /tmp/metrics.txt
+          test -s /tmp/metrics.txt
+
+          curl -sf "http://127.0.0.1:${SERVER_PORT}/v1/chat/completions" \
+            -H 'Content-Type: application/json' \
+            -d '{
+              "model": "smoke-model",
+              "messages": [{"role": "user", "content": "Say hello in five words."}],
+              "max_tokens": 16,
+              "stream": false
+            }' > /tmp/chat.json
+
+          python3 - <<'PY'
+          import json
+          with open('/tmp/chat.json', 'r', encoding='utf-8') as f:
+              data = json.load(f)
+          content = data['choices'][0]['message']['content']
+          assert isinstance(content, str) and content.strip(), data
+          PY
+
+          curl -Nsf "http://127.0.0.1:${SERVER_PORT}/v1/chat/completions" \
+            -H 'Content-Type: application/json' \
+            -d '{
+              "model": "smoke-model",
+              "messages": [{"role": "user", "content": "Count to three."}],
+              "max_tokens": 24,
+              "stream": true
+            }' > /tmp/stream.txt
+
+          grep -q '^data:' /tmp/stream.txt
+          grep -q '\[DONE\]' /tmp/stream.txt
