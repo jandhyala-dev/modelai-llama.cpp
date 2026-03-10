@@ -1,4 +1,5 @@
 #include "src/llama-kv-compacted-prefix.h"
+#include "src/llama-io.h"
 
 #include "ggml.h"
 
@@ -93,6 +94,50 @@ bool expect_throw(Fn && fn) {
     }
     return false;
 }
+
+class test_io_write_buffer : public llama_io_write_i {
+public:
+    void write(const void * src, size_t size) override {
+        const auto * bytes = reinterpret_cast<const uint8_t *>(src);
+        buf.insert(buf.end(), bytes, bytes + size);
+    }
+
+    void write_tensor(const ggml_tensor * /* tensor */, size_t /* offset */, size_t /* size */) override {
+        throw std::runtime_error("tensor writes are not used in compacted-prefix store tests");
+    }
+
+    size_t n_bytes() override {
+        return buf.size();
+    }
+
+    std::vector<uint8_t> buf;
+};
+
+class test_io_read_buffer : public llama_io_read_i {
+public:
+    explicit test_io_read_buffer(const std::vector<uint8_t> & src) : buf(src) {}
+
+    const uint8_t * read(size_t size) override {
+        if (off + size > buf.size()) {
+            throw std::runtime_error("unexpected end of compacted-prefix test buffer");
+        }
+        const uint8_t * ptr = buf.data() + off;
+        off += size;
+        return ptr;
+    }
+
+    void read_to(void * dst, size_t size) override {
+        std::memcpy(dst, read(size), size);
+    }
+
+    size_t n_bytes() override {
+        return off;
+    }
+
+private:
+    const std::vector<uint8_t> & buf;
+    size_t off = 0;
+};
 
 int test_basic_shape_and_ops() {
     int rc = 0;
@@ -303,6 +348,98 @@ int test_sequence_edge_cases() {
     return rc;
 }
 
+int test_state_roundtrip() {
+    int rc = 0;
+
+    llama_compacted_prefix_store store({
+        {
+            /* layer_id      = */ 0,
+            /* n_head_kv     = */ 2,
+            /* n_embd_head_k = */ 4,
+            /* n_embd_head_v = */ 8,
+            /* type_k        = */ GGML_TYPE_F16,
+            /* type_v        = */ GGML_TYPE_F16,
+        },
+        {
+            /* layer_id      = */ 1,
+            /* n_head_kv     = */ 1,
+            /* n_embd_head_k = */ 4,
+            /* n_embd_head_v = */ 0,
+            /* type_k        = */ GGML_TYPE_BF16,
+            /* type_v        = */ GGML_TYPE_F16,
+        },
+    });
+
+    if (!check(store.configure_seq(2, 12, { 1, 4, 7 }, 8), "configure_seq for state roundtrip should succeed", rc)) return rc;
+    if (!check(store.set_execution(2, true), "execution should enable before serialization", rc)) return rc;
+
+    auto * seq2 = store.get_seq(2);
+    if (seq2 == nullptr) {
+        return fail("sequence 2 should exist for state roundtrip");
+    }
+
+    for (auto & layer : seq2->layers) {
+        fill_beta(layer.beta_data, layer.layout.n_head_kv, layer.n_compacted_tokens);
+        if (!layer.k_data.empty()) {
+            fill_token_bytes(layer.k_data, layer.layout.n_head_kv, layer.n_compacted_tokens, token_bytes(layer.layout.type_k, layer.layout.n_embd_head_k));
+        }
+        if (!layer.v_data.empty()) {
+            fill_token_bytes(layer.v_data, layer.layout.n_head_kv, layer.n_compacted_tokens, token_bytes(layer.layout.type_v, layer.layout.n_embd_head_v));
+        }
+    }
+
+    test_io_write_buffer writer;
+    store.state_write(writer, 2);
+
+    llama_compacted_prefix_store restored({
+        {
+            /* layer_id      = */ 0,
+            /* n_head_kv     = */ 2,
+            /* n_embd_head_k = */ 4,
+            /* n_embd_head_v = */ 8,
+            /* type_k        = */ GGML_TYPE_F16,
+            /* type_v        = */ GGML_TYPE_F16,
+        },
+        {
+            /* layer_id      = */ 1,
+            /* n_head_kv     = */ 1,
+            /* n_embd_head_k = */ 4,
+            /* n_embd_head_v = */ 0,
+            /* type_k        = */ GGML_TYPE_BF16,
+            /* type_v        = */ GGML_TYPE_F16,
+        },
+    });
+    test_io_read_buffer reader(writer.buf);
+    if (!check(restored.state_read(reader, 9), "state_read should restore a single saved sequence into the requested seq_id", rc)) return rc;
+
+    const auto * seq9 = restored.get_seq(9);
+    if (seq9 == nullptr) {
+        return fail("restored sequence 9 should exist");
+    }
+
+    if (!check(seq9->logical_token_count == 12, "restored logical_token_count should match", rc)) return rc;
+    if (!check(seq9->live_suffix_pos0 == 8, "restored live_suffix_pos0 should match", rc)) return rc;
+    if (!check(seq9->logical_positions == std::vector<llama_pos>({ 1, 4, 7 }), "restored logical positions should match", rc)) return rc;
+    if (!check(restored.execution_enabled(9), "restored execution flag should match", rc)) return rc;
+    if (!check(seq9->layers.size() == 2, "restored layer count should match", rc)) return rc;
+    if (!check(seq9->layers[0].k_data == seq2->layers[0].k_data, "restored K payload should match", rc)) return rc;
+    if (!check(seq9->layers[0].beta_data == seq2->layers[0].beta_data, "restored beta payload should match", rc)) return rc;
+    if (!check(seq9->layers[0].v_data == seq2->layers[0].v_data, "restored V payload should match", rc)) return rc;
+    if (!check(seq9->layers[1].v_data.empty(), "restored zero-V layer should remain empty", rc)) return rc;
+    if (!check(seq9->layers[1].k_data == seq2->layers[1].k_data, "restored BF16 K payload should match", rc)) return rc;
+
+    restored.clear(true);
+    test_io_read_buffer empty_reader(writer.buf);
+    if (!check(restored.state_read(empty_reader, -1), "state_read should also work for full-store restore", rc)) return rc;
+    const auto * full_seq2 = restored.get_seq(2);
+    if (full_seq2 == nullptr) {
+        return fail("full-store restore should preserve the original seq id");
+    }
+    if (!check(restored.execution_enabled(2), "full-store restore should preserve execution flag", rc)) return rc;
+
+    return rc;
+}
+
 } // namespace
 
 int main() {
@@ -313,6 +450,9 @@ int main() {
         return rc;
     }
     if (const int rc = test_sequence_edge_cases()) {
+        return rc;
+    }
+    if (const int rc = test_state_roundtrip()) {
         return rc;
     }
     return 0;

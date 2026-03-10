@@ -1811,10 +1811,6 @@ ggml_cgraph * llama_kv_cache::build_graph_shift(llm_graph_result * res, llama_co
 void llama_kv_cache::state_write(llama_io_write_i & io, llama_seq_id seq_id, llama_state_seq_flags flags) const {
     GGML_UNUSED(flags);
 
-    if (compacted_prefix.total_allocated_bytes() > 0) {
-        LLAMA_LOG_WARN("%s: compacted-prefix state is not serialized in P2 and will be dropped on restore\n", __func__);
-    }
-
     io.write(&n_stream, sizeof(n_stream));
 
     for (uint32_t s = 0; s < n_stream; ++s) {
@@ -1863,6 +1859,8 @@ void llama_kv_cache::state_write(llama_io_write_i & io, llama_seq_id seq_id, lla
         state_write_meta(io, cr, seq_id);
         state_write_data(io, cr);
     }
+
+    compacted_prefix.state_write(io, seq_id);
 }
 
 void llama_kv_cache::state_read(llama_io_read_i & io, llama_seq_id seq_id, llama_state_seq_flags flags) {
@@ -1902,6 +1900,16 @@ void llama_kv_cache::state_read(llama_io_read_i & io, llama_seq_id seq_id, llama
             }
             throw std::runtime_error("failed to restore kv cache");
         }
+    }
+
+    bool compacted_res = compacted_prefix.state_read(io, seq_id);
+    if (!compacted_res) {
+        if (seq_id == -1) {
+            clear(true);
+        } else {
+            seq_rm(seq_id, -1, -1);
+        }
+        throw std::runtime_error("failed to restore compacted-prefix state");
     }
 }
 

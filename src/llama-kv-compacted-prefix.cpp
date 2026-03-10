@@ -1,13 +1,17 @@
 #include "llama-kv-compacted-prefix.h"
 
 #include "ggml.h"
+#include "llama-io.h"
 
 #include <algorithm>
+#include <cstring>
 #include <limits>
 #include <set>
 #include <stdexcept>
 
 namespace {
+constexpr uint32_t LLAMA_COMPACTED_PREFIX_STATE_VERSION = 1;
+
 bool is_supported_compacted_type(ggml_type type) {
     return type == GGML_TYPE_F16 || type == GGML_TYPE_BF16 || type == GGML_TYPE_F32;
 }
@@ -124,6 +128,56 @@ std::vector<llama_compacted_prefix_store::layer_storage> rebuild_layers(
     }
 
     return rebuilt;
+}
+
+template<typename T>
+void io_write_pod(llama_io_write_i & io, const T & value) {
+    io.write(&value, sizeof(value));
+}
+
+template<typename T>
+void io_read_pod(llama_io_read_i & io, T & value) {
+    io.read_to(&value, sizeof(value));
+}
+
+void io_write_bytes(llama_io_write_i & io, const std::vector<uint8_t> & data) {
+    const uint64_t n_bytes = data.size();
+    io_write_pod(io, n_bytes);
+    if (n_bytes > 0) {
+        io.write(data.data(), n_bytes);
+    }
+}
+
+void io_read_bytes(llama_io_read_i & io, std::vector<uint8_t> & data) {
+    uint64_t n_bytes = 0;
+    io_read_pod(io, n_bytes);
+    if (n_bytes > std::numeric_limits<size_t>::max()) {
+        throw std::runtime_error("compacted-prefix byte payload too large");
+    }
+    data.resize((size_t) n_bytes);
+    if (n_bytes > 0) {
+        io.read_to(data.data(), (size_t) n_bytes);
+    }
+}
+
+void io_write_floats(llama_io_write_i & io, const std::vector<float> & data) {
+    const uint64_t n_elem = data.size();
+    io_write_pod(io, n_elem);
+    if (n_elem > 0) {
+        io.write(data.data(), n_elem * sizeof(float));
+    }
+}
+
+void io_read_floats(llama_io_read_i & io, std::vector<float> & data) {
+    uint64_t n_elem = 0;
+    io_read_pod(io, n_elem);
+    if (n_elem > std::numeric_limits<size_t>::max()) {
+        throw std::runtime_error("compacted-prefix float payload too large");
+    }
+    data.resize((size_t) n_elem);
+    if (n_elem > 0) {
+        io.read_to(data.data(), (size_t) n_elem * sizeof(float));
+    }
 }
 }
 
@@ -485,6 +539,173 @@ bool llama_compacted_prefix_store::execution_enabled(llama_seq_id seq_id) const 
 
     const auto & state = seq(seq_id);
     return state.enabled && state.is_execution_enabled();
+}
+
+void llama_compacted_prefix_store::state_write(llama_io_write_i & io, llama_seq_id seq_id) const {
+    io_write_pod(io, LLAMA_COMPACTED_PREFIX_STATE_VERSION);
+
+    std::vector<llama_seq_id> saved_seq_ids;
+    if (seq_id >= 0) {
+        if (size_t(seq_id) >= seq_states.size()) {
+            throw std::runtime_error("compacted-prefix state_write seq_id out of range");
+        }
+        if (is_enabled(seq_id)) {
+            saved_seq_ids.push_back(seq_id);
+        }
+    } else {
+        for (llama_seq_id cur = 0; cur < (llama_seq_id) seq_states.size(); ++cur) {
+            if (is_enabled(cur)) {
+                saved_seq_ids.push_back(cur);
+            }
+        }
+    }
+
+    const uint32_t n_seq = saved_seq_ids.size();
+    io_write_pod(io, n_seq);
+
+    for (llama_seq_id saved_seq_id : saved_seq_ids) {
+        const auto & state = seq(saved_seq_id);
+
+        io_write_pod(io, saved_seq_id);
+        io_write_pod(io, state.logical_token_count);
+        io_write_pod(io, state.live_suffix_pos0);
+
+        const uint8_t execution = state.is_execution_enabled() ? 1 : 0;
+        io_write_pod(io, execution);
+
+        const uint32_t n_positions = state.logical_positions.size();
+        io_write_pod(io, n_positions);
+        if (n_positions > 0) {
+            io.write(state.logical_positions.data(), size_t(n_positions) * sizeof(llama_pos));
+        }
+
+        const uint32_t n_layers = state.layers.size();
+        io_write_pod(io, n_layers);
+
+        for (const auto & layer : state.layers) {
+            io_write_pod(io, layer.layout.layer_id);
+            io_write_pod(io, layer.layout.n_head_kv);
+            io_write_pod(io, layer.layout.n_embd_head_k);
+            io_write_pod(io, layer.layout.n_embd_head_v);
+
+            const int32_t type_k = (int32_t) layer.layout.type_k;
+            const int32_t type_v = (int32_t) layer.layout.type_v;
+            io_write_pod(io, type_k);
+            io_write_pod(io, type_v);
+
+            io_write_pod(io, layer.n_compacted_tokens);
+            io_write_bytes(io, layer.k_data);
+            io_write_floats(io, layer.beta_data);
+            io_write_bytes(io, layer.v_data);
+        }
+    }
+}
+
+bool llama_compacted_prefix_store::state_read(llama_io_read_i & io, llama_seq_id seq_id) {
+    uint32_t version = 0;
+    io_read_pod(io, version);
+    if (version != LLAMA_COMPACTED_PREFIX_STATE_VERSION) {
+        throw std::runtime_error("compacted-prefix state version mismatch");
+    }
+
+    uint32_t n_seq = 0;
+    io_read_pod(io, n_seq);
+    if (seq_id >= 0 && n_seq > 1) {
+        throw std::runtime_error("per-sequence compacted-prefix state contains multiple sequences");
+    }
+
+    std::set<llama_seq_id> restored_seq_ids;
+
+    for (uint32_t i = 0; i < n_seq; ++i) {
+        llama_seq_id stored_seq_id = -1;
+        uint32_t logical_token_count = 0;
+        llama_pos live_suffix_pos0 = -1;
+        uint8_t execution = 0;
+        uint32_t n_positions = 0;
+        uint32_t n_layers = 0;
+
+        io_read_pod(io, stored_seq_id);
+        io_read_pod(io, logical_token_count);
+        io_read_pod(io, live_suffix_pos0);
+        io_read_pod(io, execution);
+        io_read_pod(io, n_positions);
+
+        std::vector<llama_pos> logical_positions(n_positions);
+        if (n_positions > 0) {
+            io.read_to(logical_positions.data(), size_t(n_positions) * sizeof(llama_pos));
+        }
+
+        io_read_pod(io, n_layers);
+        if (n_layers != layouts.size()) {
+            throw std::runtime_error("compacted-prefix layer count mismatch");
+        }
+
+        const llama_seq_id dst_seq_id = seq_id >= 0 ? seq_id : stored_seq_id;
+        if (dst_seq_id < 0 || size_t(dst_seq_id) >= seq_states.size()) {
+            throw std::runtime_error("compacted-prefix restore seq_id out of range");
+        }
+        if (!restored_seq_ids.insert(dst_seq_id).second) {
+            throw std::runtime_error("duplicate compacted-prefix sequence restore entry");
+        }
+
+        if (!configure_seq(dst_seq_id, logical_token_count, logical_positions, live_suffix_pos0)) {
+            throw std::runtime_error("failed to configure compacted-prefix sequence during restore");
+        }
+
+        auto & state = seq(dst_seq_id);
+        for (uint32_t layer_idx = 0; layer_idx < n_layers; ++layer_idx) {
+            uint32_t layer_id = 0;
+            uint32_t n_head_kv = 0;
+            uint32_t n_embd_head_k = 0;
+            uint32_t n_embd_head_v = 0;
+            int32_t type_k_i = 0;
+            int32_t type_v_i = 0;
+            uint32_t n_compacted_tokens = 0;
+
+            io_read_pod(io, layer_id);
+            io_read_pod(io, n_head_kv);
+            io_read_pod(io, n_embd_head_k);
+            io_read_pod(io, n_embd_head_v);
+            io_read_pod(io, type_k_i);
+            io_read_pod(io, type_v_i);
+            io_read_pod(io, n_compacted_tokens);
+
+            const auto & expected = layouts.at(layer_idx);
+            if (layer_id != expected.layer_id ||
+                n_head_kv != expected.n_head_kv ||
+                n_embd_head_k != expected.n_embd_head_k ||
+                n_embd_head_v != expected.n_embd_head_v ||
+                type_k_i != (int32_t) expected.type_k ||
+                type_v_i != (int32_t) expected.type_v) {
+                throw std::runtime_error("compacted-prefix layer layout mismatch during restore");
+            }
+
+            auto & layer = state.layers.at(layer_idx);
+            if (n_compacted_tokens != layer.n_compacted_tokens) {
+                throw std::runtime_error("compacted-prefix token count mismatch during restore");
+            }
+
+            io_read_bytes(io, layer.k_data);
+            io_read_floats(io, layer.beta_data);
+            io_read_bytes(io, layer.v_data);
+
+            if (layer.k_data.size() != compacted_tensor_bytes(layer.layout.type_k, layer.layout.n_embd_head_k * n_compacted_tokens, layer.layout.n_head_kv) ||
+                layer.beta_data.size() != size_t(layer.layout.n_head_kv) * n_compacted_tokens ||
+                layer.v_data.size() != compacted_tensor_bytes(layer.layout.type_v, layer.layout.n_embd_head_v * n_compacted_tokens, layer.layout.n_head_kv)) {
+                throw std::runtime_error("compacted-prefix payload size mismatch during restore");
+            }
+        }
+
+        if (execution != 0 && !set_execution(dst_seq_id, true)) {
+            throw std::runtime_error("failed to restore compacted-prefix execution state");
+        }
+    }
+
+    if (seq_id >= 0 && restored_seq_ids.empty()) {
+        clear_seq(seq_id, true);
+    }
+
+    return true;
 }
 
 size_t llama_compacted_prefix_store::seq_allocated_bytes(llama_seq_id seq_id) const {

@@ -277,16 +277,39 @@ Make compacted state usable in real session lifecycles.
 
 - compact / decompact lifecycle
 - save / restore handling
+- versioned session / sequence-state format updates for compacted-prefix payloads
+- compacted-prefix payload serialization inside `llama_kv_cache::state_write/state_read`
+- per-sequence and full-store compacted-prefix roundtrip support
+- stale compacted-prefix invalidation before restore
+- restore-time validation of layer layout, payload sizes, and execution-state invariants
 - invalidation rules
 - repeated compaction cycles
 - session continuation behavior
 
+**Non-goals**
+
+- no new public/server enablement yet
+- no performance claims from restored compacted-prefix execution
+- no query extraction or fitting pipeline work
+- no flash / quantized-V execution support
+- no requirement that post-restore continuation decode run with compacted-prefix execution still enabled
+
 **Tests**
 
-- save/load roundtrip
+- compacted-prefix store serialization roundtrip
+- public `llama_state_seq_get_data` / `llama_state_seq_set_data` roundtrip for compacted-prefix state
 - failed-restore fallback
 - repeated cycles
-- session continuation
+- session continuation after restore
+- regression coverage for existing fragmented KV restore behavior
+
+**Merge gate**
+
+- compacted-prefix state survives public save/restore APIs for sequence and full-store paths
+- stale compacted-prefix state cannot survive a restore attempt
+- restore validates layer layout and payload sizes instead of silently accepting mismatches
+- session continuation remains safe after restore
+- file-format changes are versioned so old state files fail cleanly instead of mis-parsing
 
 ## PR-5: Real Performance Path
 

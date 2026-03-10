@@ -2084,6 +2084,8 @@ ggml_tensor * llm_graph_context::build_attn(
     if (inp->has_compacted_prefix()) {
         GGML_ASSERT(!cparams.flash_attn && "P3 compacted-prefix execution requires the non-flash attention path");
 
+        const int64_t live_n_kv = k->ne[2];
+
         const auto * compacted = inp->ensure_compacted_prefix_layer(
                 ctx0,
                 il,
@@ -2112,7 +2114,23 @@ ggml_tensor * llm_graph_context::build_attn(
             GGML_ASSERT(kq_b->ne[3] == compacted->kq_b->ne[3] && "P3 compacted-prefix kq_b concat requires matching stream dimensions");
             kq_b_combined = ggml_concat(ctx0, compacted->kq_b, kq_b, 0);
         } else {
-            kq_b_combined = compacted->kq_b;
+            ggml_tensor * live_kq_b_shape = ggml_new_tensor_4d(
+                    ctx0,
+                    GGML_TYPE_F32,
+                    live_n_kv,
+                    compacted->kq_b->ne[1],
+                    compacted->kq_b->ne[2],
+                    compacted->kq_b->ne[3]);
+            ggml_tensor * zero_scalar = ggml_scale(
+                    ctx0,
+                    ggml_view_4d(ctx0, compacted->kq_b, 1, 1, 1, 1,
+                        compacted->kq_b->nb[1],
+                        compacted->kq_b->nb[2],
+                        compacted->kq_b->nb[3],
+                        0),
+                    0.0f);
+            ggml_tensor * live_kq_b_zero = ggml_repeat(ctx0, zero_scalar, live_kq_b_shape);
+            kq_b_combined = ggml_concat(ctx0, compacted->kq_b, live_kq_b_zero, 0);
         }
 
         cb(k, "k_compacted_plus_live", il);
