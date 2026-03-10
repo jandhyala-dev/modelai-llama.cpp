@@ -108,6 +108,12 @@ Near-term observability requirements:
 
 ### Mid-Term
 
+- PR-2 establishes an internal compacted-prefix store inside `llama_kv_cache` with:
+  - per-sequence logical position bookkeeping,
+  - per-layer / per-KV-head `(C_k, beta, C_v)` storage shape,
+  - forwarding of core sequence ops (`seq_rm`, `seq_cp`, `seq_keep`, `seq_add`, `seq_div`),
+  - compacted-prefix bytes folded into context memory accounting,
+- no execution path, serialization lifecycle, or public runtime enablement is part of PR-2,
 - narrow v0 compaction path on the supported matrix,
 - measured long-session improvements on ModelAI workloads,
 - measured repeated-turn follow-up improvements on at least one supported workload.

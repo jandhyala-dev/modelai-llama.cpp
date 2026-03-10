@@ -1,6 +1,7 @@
 #pragma once
 
 #include "llama-batch.h"
+#include "llama-kv-compacted-prefix.h"
 #include "llama-graph.h"
 #include "llama-kv-cells.h"
 #include "llama-memory.h"
@@ -153,6 +154,24 @@ public:
     bool get_has_shift() const;
 
     //
+    // compacted-prefix internal API
+    //
+
+    bool compacted_prefix_configure(
+            llama_seq_id seq_id,
+            uint32_t logical_token_count,
+            const std::vector<llama_pos> & logical_positions,
+            llama_pos live_suffix_pos0 = -1);
+
+    void compacted_prefix_clear(llama_seq_id seq_id = -1, bool data = true);
+
+    bool compacted_prefix_enabled(llama_seq_id seq_id) const;
+
+    size_t compacted_prefix_bytes(llama_seq_id seq_id = -1) const;
+
+    const llama_compacted_prefix_store * get_compacted_prefix() const;
+
+    //
     // graph_build API
     //
 
@@ -251,6 +270,8 @@ private:
 
     // model layer id -> KV cache layer id
     std::unordered_map<int32_t, int32_t> map_layer_ids;
+
+    llama_compacted_prefix_store compacted_prefix;
 
     size_t total_size() const;
 

@@ -162,11 +162,14 @@ Establish the internal representation for compacted KV state.
 - separate compacted-prefix representation under `llama_memory_t`
 - per-layer / per-KV-head storage of `(C_k, beta, C_v)`
 - logical position bookkeeping
+- forwarding of core sequence operations into the compacted-prefix state
 - memory accounting hooks
 
 **Non-goals**
 
 - no end-to-end compaction execution yet
+- no save / restore serialization yet
+- no server/runtime enablement yet
 - no flash path
 - no quantized V
 
@@ -175,7 +178,7 @@ Establish the internal representation for compacted KV state.
 - layout tests
 - metadata tests
 - position bookkeeping tests
-- serialization-shape tests
+- sequence-op integration tests
 - memory accounting tests
 
 **Merge gate**
