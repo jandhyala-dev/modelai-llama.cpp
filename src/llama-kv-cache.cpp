@@ -1902,14 +1902,15 @@ void llama_kv_cache::state_read(llama_io_read_i & io, llama_seq_id seq_id, llama
         }
     }
 
-    bool compacted_res = compacted_prefix.state_read(io, seq_id);
-    if (!compacted_res) {
+    try {
+        compacted_prefix.state_read(io, seq_id);
+    } catch (...) {
         if (seq_id == -1) {
             clear(true);
         } else {
             seq_rm(seq_id, -1, -1);
         }
-        throw std::runtime_error("failed to restore compacted-prefix state");
+        throw;
     }
 }
 

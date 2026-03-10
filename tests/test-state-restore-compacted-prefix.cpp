@@ -2,12 +2,15 @@
 #include "common.h"
 #include "llama.h"
 #include "src/llama-context.h"
+#include "src/llama-io.h"
 #include "src/llama-kv-cache.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -58,6 +61,24 @@ int fail(const std::string & message) {
     std::fprintf(stderr, "test-state-restore-compacted-prefix: %s\n", message.c_str());
     return 1;
 }
+
+class test_io_write_buffer : public llama_io_write_i {
+public:
+    void write(const void * src, size_t size) override {
+        const auto * bytes = reinterpret_cast<const uint8_t *>(src);
+        buf.insert(buf.end(), bytes, bytes + size);
+    }
+
+    void write_tensor(const ggml_tensor * /* tensor */, size_t /* offset */, size_t /* size */) override {
+        throw std::runtime_error("tensor writes are not used in state-restore compacted-prefix tests");
+    }
+
+    size_t n_bytes() override {
+        return buf.size();
+    }
+
+    std::vector<uint8_t> buf;
+};
 
 compacted_seq_snapshot snapshot_seq(const llama_compacted_prefix_store::sequence_state & seq) {
     compacted_seq_snapshot snap;
@@ -175,12 +196,39 @@ int main(int argc, char ** argv) {
         return fail("failed to save sequence state");
     }
 
+    test_io_write_buffer compacted_writer;
+    kv->get_compacted_prefix()->state_write(compacted_writer, 0);
+    const auto compacted_begin = std::search(
+        seq_state.begin(), seq_state.end(),
+        compacted_writer.buf.begin(), compacted_writer.buf.end());
+    if (compacted_begin == seq_state.end()) {
+        llama_batch_free(batch);
+        return fail("failed to locate compacted-prefix blob inside saved sequence state");
+    }
+
+    std::vector<uint8_t> corrupt_seq_state = seq_state;
+    corrupt_seq_state[size_t(compacted_begin - seq_state.begin())] ^= 0x7f;
+
     llama_memory_t mem = llama_get_memory(ctx);
     llama_memory_seq_rm(mem, 0, -1, -1);
 
     if (kv->compacted_prefix_enabled(0) || kv->compacted_prefix_execution_enabled(0)) {
         llama_batch_free(batch);
         return fail("clearing the sequence should clear compacted-prefix state");
+    }
+
+    const size_t nbad = llama_state_seq_set_data(ctx, corrupt_seq_state.data(), corrupt_seq_state.size(), 0);
+    if (nbad != 0) {
+        llama_batch_free(batch);
+        return fail("corrupted sequence state restore should fail");
+    }
+    if (llama_memory_seq_pos_min(mem, 0) != -1 || llama_memory_seq_pos_max(mem, 0) != -1) {
+        llama_batch_free(batch);
+        return fail("failed compacted-prefix restore should roll back live KV state");
+    }
+    if (kv->compacted_prefix_enabled(0) || kv->compacted_prefix_execution_enabled(0)) {
+        llama_batch_free(batch);
+        return fail("failed compacted-prefix restore should clear compacted-prefix state");
     }
 
     const size_t nset = llama_state_seq_set_data(ctx, seq_state.data(), seq_state.size(), 0);

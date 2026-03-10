@@ -282,6 +282,7 @@ Make compacted state usable in real session lifecycles.
 - per-sequence and full-store compacted-prefix roundtrip support
 - stale compacted-prefix invalidation before restore
 - restore-time validation of layer layout, payload sizes, and execution-state invariants
+- atomic rollback if compacted-prefix restore fails after live KV state has already been loaded
 - invalidation rules
 - repeated compaction cycles
 - session continuation behavior
@@ -298,7 +299,7 @@ Make compacted state usable in real session lifecycles.
 
 - compacted-prefix store serialization roundtrip
 - public `llama_state_seq_get_data` / `llama_state_seq_set_data` roundtrip for compacted-prefix state
-- failed-restore fallback
+- failed-restore rollback through the public sequence-state API
 - repeated cycles
 - session continuation after restore
 - regression coverage for existing fragmented KV restore behavior
@@ -308,6 +309,7 @@ Make compacted state usable in real session lifecycles.
 - compacted-prefix state survives public save/restore APIs for sequence and full-store paths
 - stale compacted-prefix state cannot survive a restore attempt
 - restore validates layer layout and payload sizes instead of silently accepting mismatches
+- restore failure cannot leave partially restored live-KV state behind
 - session continuation remains safe after restore
 - file-format changes are versioned so old state files fail cleanly instead of mis-parsing
 
