@@ -137,6 +137,13 @@ Near-term observability requirements:
   - state file versions are bumped so old files fail cleanly instead of being mis-parsed,
   - public save/restore regression tests now cover compacted-prefix roundtrip, failed-restore rollback, and continuation behavior,
 - PR-4 still keeps public runtime enablement and post-restore execution/performance claims out of scope,
+- PR-5 begins the real performance path with a narrow but measurable slice:
+  - once a sequence has a configured compacted prefix, the live prefix rows before `live_suffix_pos0` can be retired,
+  - retained live suffix rows are repacked densely to the front of the live KV cache,
+  - `active_n_kv` is reduced without changing the underlying fixed KV allocation,
+  - model-backed regression coverage now proves the runtime-visible active range drops after reclaim,
+  - a manual compacted-prefix perf harness reports before/after `active_n_kv` and decode tok/s for the same compacted execution slice,
+  - on the current Apple Silicon debug smoke run with `stories15M-q4_0`, that harness reduced `active_n_kv` from `512` to `256` and improved continuation throughput from `244.1 tok/s` to `309.8 tok/s`; this is a branch validation result, not a general release claim,
 - narrow v0 compaction path on the supported matrix,
 - measured long-session improvements on ModelAI workloads,
 - measured repeated-turn follow-up improvements on at least one supported workload.

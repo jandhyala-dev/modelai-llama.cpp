@@ -255,6 +255,13 @@ llama_build_and_test(test-state-restore-compacted-prefix.cpp LABEL "model" ARGS 
 target_include_directories(test-state-restore-compacted-prefix PRIVATE ${PROJECT_SOURCE_DIR})
 set_tests_properties(test-state-restore-compacted-prefix PROPERTIES FIXTURES_REQUIRED test-download-model)
 
+llama_build_and_test(test-kv-compacted-prefix-pack.cpp LABEL "model" ARGS -m "${MODEL_DEST}")
+target_include_directories(test-kv-compacted-prefix-pack PRIVATE ${PROJECT_SOURCE_DIR})
+set_tests_properties(test-kv-compacted-prefix-pack PROPERTIES FIXTURES_REQUIRED test-download-model)
+
+llama_build(test-kv-compacted-prefix-perf.cpp get-model.cpp)
+target_include_directories(test-kv-compacted-prefix-perf PRIVATE ${PROJECT_SOURCE_DIR})
+
 if (NOT GGML_BACKEND_DL)
     # these tests use the backends directly and cannot be built with dynamic loading
     llama_build_and_test(test-barrier.cpp)

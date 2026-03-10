@@ -2121,13 +2121,12 @@ ggml_tensor * llm_graph_context::build_attn(
                     compacted->kq_b->ne[1],
                     compacted->kq_b->ne[2],
                     compacted->kq_b->ne[3]);
+            ggml_tensor * zero_scalar_src = ggml_cont(
+                    ctx0,
+                    ggml_view_1d(ctx0, compacted->kq_b, 1, 0));
             ggml_tensor * zero_scalar = ggml_scale(
                     ctx0,
-                    ggml_view_4d(ctx0, compacted->kq_b, 1, 1, 1, 1,
-                        compacted->kq_b->nb[1],
-                        compacted->kq_b->nb[2],
-                        compacted->kq_b->nb[3],
-                        0),
+                    zero_scalar_src,
                     0.0f);
             ggml_tensor * live_kq_b_zero = ggml_repeat(ctx0, zero_scalar, live_kq_b_shape);
             kq_b_combined = ggml_concat(ctx0, compacted->kq_b, live_kq_b_zero, 0);

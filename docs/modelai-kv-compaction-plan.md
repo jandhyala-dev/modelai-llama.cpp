@@ -321,18 +321,24 @@ Turn logical compaction into measurable product wins.
 
 **Scope**
 
-- packed layout so reduced active range lowers real compute
-- real memory reuse / release where possible
-- repeated-turn optimization
-- benchmark harness integration
+- retire the live prefix once an equivalent compacted prefix exists
+- densely repack the retained live suffix to the front of the live KV cache
+- lower the runtime-visible active `n_kv` range without changing the fixed buffer allocation
+- expose an internal `active_n_kv` query for model-backed verification
+- add model-backed regression coverage proving the active range crosses the 256-pad boundary after reclaim
+- add a manual benchmark harness that reports before/after `active_n_kv` and decode tok/s for the same compacted execution slice
 
 Important note:
 - PR-5 is the phase that turns logical KV reduction into real throughput claims,
 - PR-3 correctness alone must not be described as a speed win.
+- the first landed P5 slice targets active-range reduction and repeated-turn throughput on the existing fixed KV allocation;
+  true physical KV buffer release remains a later extension.
 
 **Merge gate**
 
-Measured progress on Goal 1 and/or Goal 2 on at least one ModelAI workload.
+Measured progress on Goal 1 and/or Goal 2 on at least one supported workload, with:
+- a model-backed regression proving `active_n_kv` shrinks after reclaim, and
+- attached benchmark output from the manual compacted-prefix perf harness.
 
 ## PR-6: Coverage Expansion
 

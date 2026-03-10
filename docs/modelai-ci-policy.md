@@ -88,7 +88,7 @@ CI jobs that configure the engine must fetch `upstream-master` before the config
 | PR-2 memory architecture | build + `ctest` + state/layout tests |
 | PR-3 correctness | build + `ctest` + compacted-prefix execution/materialization fixtures + state regression |
 | PR-4 session/state | build + `ctest` + save/restore tests |
-| PR-5 performance | build + `ctest` + benchmark runs |
+| PR-5 performance | build + `ctest` + model-backed active-range regression + compacted-prefix perf harness output |
 | PR-6 coverage | build + `ctest` + backend-specific regression suite |
 
 ## Benchmark Regression Detection
@@ -160,3 +160,8 @@ CI must archive:
 4. release-candidate benchmark summaries
 
 No benchmark claim belongs in planning or release documents unless measured outputs are attached or referenced.
+
+For the current PR-5 slice, the minimum attached evidence is:
+1. model-backed `test-kv-compacted-prefix-pack`
+2. manual `test-kv-compacted-prefix-perf` output showing before/after `active_n_kv`
+3. matching before/after decode tok/s from the same compacted execution slice
