@@ -108,6 +108,17 @@ Near-term observability requirements:
 
 ### Mid-Term
 
+- PR-2 establishes an internal compacted-prefix store inside `llama_kv_cache` with:
+  - per-sequence logical position bookkeeping,
+  - per-layer / per-KV-head `(C_k, beta, C_v)` storage shape,
+  - forwarding of core sequence ops (`seq_rm`, `seq_cp`, `seq_keep`, `seq_add`, `seq_div`),
+  - compacted-prefix bytes folded into context memory accounting as host-side sidecar memory,
+  - scalar compacted cache types only in P2 (`F16`, `BF16`, `F32`),
+  - stale compacted-prefix state invalidated on `state_read`, and warned as non-serialized on `state_write`,
+  - compacted-prefix ownership restricted to the base cache in ISWA layouts,
+  - compacted `V` sidecar storage remains logical `[head][token][embd]`; any transpose-sensitive execution compatibility is deferred to PR-3,
+- no execution path, serialization lifecycle, or public runtime enablement is part of PR-2,
+- compacted-prefix logical positions are not yet merged into the live KV cache `seq_pos_min/seq_pos_max` view before PR-3,
 - narrow v0 compaction path on the supported matrix,
 - measured long-session improvements on ModelAI workloads,
 - measured repeated-turn follow-up improvements on at least one supported workload.
@@ -121,14 +132,18 @@ Near-term observability requirements:
 
 ## V0 Support Matrix
 
+The matrix below describes the intended v0 execution-path scope for the fork as a whole. PR-2 only lands the internal memory representation and guardrails needed to reach that scope later.
+
 | Category | Status |
 |---|---|
 | Standard causal models with `llama_kv_cache` | Supported |
 | Non-flash attention path | Supported |
+| Scalar K/V cache element types for compacted-prefix sidecar (`F16`, `BF16`, `F32`) | Supported |
 | Non-quantized V cache | Supported |
 | Uncompacted chat-template / BOS prefix | Supported |
 | Uniform budgets (default) | Supported |
 | Precomputed nonuniform schedules | Supported where validated |
+| Quantized K compaction | Unsupported |
 | Flash-attention compaction path | Unsupported |
 | Quantized V compaction | Unsupported |
 | SWA / split-memory compaction | Unsupported |

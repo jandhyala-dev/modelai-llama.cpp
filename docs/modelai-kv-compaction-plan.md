@@ -162,26 +162,42 @@ Establish the internal representation for compacted KV state.
 - separate compacted-prefix representation under `llama_memory_t`
 - per-layer / per-KV-head storage of `(C_k, beta, C_v)`
 - logical position bookkeeping
-- memory accounting hooks
+- forwarding of core sequence operations into the compacted-prefix state
+- memory accounting hooks for host-side sidecar allocation
+- scalar compacted cache element types only (`F16`, `BF16`, `F32`)
+- stale compacted-prefix invalidation on `state_read`
+- non-serialized-state warning on `state_write`
+- compacted-prefix ownership limited to the base cache in ISWA configurations
+- compacted `V` sidecar stored in canonical `[head][token][embd]` order only; transpose-aware execution remains a later phase
 
 **Non-goals**
 
 - no end-to-end compaction execution yet
+- no save / restore serialization yet
+- no server/runtime enablement yet
 - no flash path
+- no quantized K
 - no quantized V
+- no integration of compacted-prefix positions into live `seq_pos_min` / `seq_pos_max` yet
 
 **Tests**
 
 - layout tests
 - metadata tests
 - position bookkeeping tests
-- serialization-shape tests
+- sequence-op integration tests
 - memory accounting tests
+- self-copy and partial-range `seq_cp` tests
+- payload integrity tests for `k_data`, `beta_data`, and `v_data`
+- guardrail tests for invalid divisors, negative shifts, duplicate positions, zero-layout stores, and unsupported quantized cache types
 
 **Merge gate**
 
 - representation is isolated
 - memory accounting is test-covered
+- compacted-prefix sequence ops preserve payload integrity on the supported scalar cache types
+- state restore cannot leave stale compacted-prefix state behind
+- compacted-prefix ownership is explicit for ISWA
 - no flat per-slot `beta` design remains in the plan
 
 ## PR-3: Non-Flash Correctness Path

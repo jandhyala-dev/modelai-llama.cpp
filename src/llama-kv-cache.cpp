@@ -30,7 +30,8 @@ llama_kv_cache::llama_kv_cache(
                  uint32_t   n_swa,
            llama_swa_type   swa_type,
     const layer_filter_cb & filter,
-    const  layer_reuse_cb & reuse) :
+    const  layer_reuse_cb & reuse,
+                     bool   enable_compacted_prefix) :
     model(model), hparams(model.hparams), v_trans(v_trans),
     n_seq_max(n_seq_max), n_stream(unified ? 1 : n_seq_max), n_pad(n_pad), n_swa(n_swa), swa_type(swa_type) {
 
@@ -178,6 +179,24 @@ llama_kv_cache::llama_kv_cache(
         }
     }
 
+    if (enable_compacted_prefix) {
+        std::vector<llama_compacted_prefix_layer_layout> compacted_layouts;
+        compacted_layouts.reserve(layers.size());
+
+        for (const auto & layer : layers) {
+            compacted_layouts.push_back({
+                /* layer_id       = */ layer.il,
+                /* n_head_kv      = */ hparams.n_head_kv(layer.il),
+                /* n_embd_head_k  = */ hparams.n_embd_head_k(layer.il),
+                /* n_embd_head_v  = */ layer.v ? hparams.n_embd_head_v(layer.il) : 0u,
+                /* type_k         = */ layer.k ? layer.k->type : type_k,
+                /* type_v         = */ layer.v ? layer.v->type : type_v,
+            });
+        }
+
+        compacted_prefix = llama_compacted_prefix_store(std::move(compacted_layouts));
+    }
+
     // allocate tensors and initialize the buffers to avoid NaNs in the padding
     for (auto & [buft, ctx] : ctx_map) {
         ggml_backend_buffer_t buf;
@@ -219,6 +238,8 @@ void llama_kv_cache::clear(bool data) {
         v_heads[s] = 0;
     }
 
+    compacted_prefix.clear(data);
+
     if (data) {
         for (auto & [_, buf] : ctxs_bufs) {
             ggml_backend_buffer_clear(buf.get(), 0);
@@ -236,6 +257,8 @@ bool llama_kv_cache::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
     if (p1 < 0) {
         p1 = std::numeric_limits<llama_pos>::max();
     }
+
+    compacted_prefix.seq_rm(seq_id, p0, p1);
 
     if (seq_id >= 0) {
         auto & cells = v_cells[seq_to_stream[seq_id]];
@@ -292,6 +315,8 @@ bool llama_kv_cache::seq_rm(llama_seq_id seq_id, llama_pos p0, llama_pos p1) {
 void llama_kv_cache::seq_cp(llama_seq_id seq_id_src, llama_seq_id seq_id_dst, llama_pos p0, llama_pos p1) {
     GGML_ASSERT(seq_id_src >= 0 && (size_t) seq_id_src < seq_to_stream.size());
     GGML_ASSERT(seq_id_dst >= 0 && (size_t) seq_id_dst < seq_to_stream.size());
+
+    compacted_prefix.seq_cp(seq_id_src, seq_id_dst, p0, p1);
 
     const auto s0 = seq_to_stream[seq_id_src];
     const auto s1 = seq_to_stream[seq_id_dst];
@@ -379,6 +404,8 @@ void llama_kv_cache::seq_cp(llama_seq_id seq_id_src, llama_seq_id seq_id_dst, ll
 void llama_kv_cache::seq_keep(llama_seq_id seq_id) {
     GGML_ASSERT(seq_id >= 0 && (size_t) seq_id < seq_to_stream.size());
 
+    compacted_prefix.seq_keep(seq_id);
+
     auto & cells = v_cells[seq_to_stream[seq_id]];
     auto & head  = v_heads[seq_to_stream[seq_id]];
 
@@ -401,6 +428,8 @@ void llama_kv_cache::seq_keep(llama_seq_id seq_id) {
 void llama_kv_cache::seq_add(llama_seq_id seq_id, llama_pos p0, llama_pos p1, llama_pos shift) {
     GGML_ASSERT(seq_id >= 0 && (size_t) seq_id < seq_to_stream.size());
     GGML_ASSERT(hparams.n_pos_per_embd() == 1 && "seq_add() is only supported for n_pos_per_embd() == 1");
+
+    compacted_prefix.seq_add(seq_id, p0, p1, shift);
 
     auto & cells = v_cells[seq_to_stream[seq_id]];
     auto & head  = v_heads[seq_to_stream[seq_id]];
@@ -447,6 +476,8 @@ void llama_kv_cache::seq_div(llama_seq_id seq_id, llama_pos p0, llama_pos p1, in
     GGML_ASSERT(seq_id >= 0 && (size_t) seq_id < seq_to_stream.size());
     GGML_ASSERT(hparams.n_pos_per_embd() == 1 && "seq_div() is only supported for n_pos_per_embd() == 1");
 
+    compacted_prefix.seq_div(seq_id, p0, p1, d);
+
     auto & cells = v_cells[seq_to_stream[seq_id]];
 
     if (d == 1) {
@@ -481,7 +512,6 @@ llama_pos llama_kv_cache::seq_pos_min(llama_seq_id seq_id) const {
     GGML_ASSERT(seq_id >= 0 && (size_t) seq_id < seq_to_stream.size());
 
     const auto & cells = v_cells[seq_to_stream[seq_id]];
-
     return cells.seq_pos_min(seq_id);
 }
 
@@ -489,7 +519,6 @@ llama_pos llama_kv_cache::seq_pos_max(llama_seq_id seq_id) const {
     GGML_ASSERT(seq_id >= 0 && (size_t) seq_id < seq_to_stream.size());
 
     const auto & cells = v_cells[seq_to_stream[seq_id]];
-
     return cells.seq_pos_max(seq_id);
 }
 
@@ -507,7 +536,44 @@ std::map<ggml_backend_buffer_type_t, size_t> llama_kv_cache::memory_breakdown() 
         }
     }
 
+    for (const auto & [buft, size] : compacted_prefix.memory_breakdown()) {
+        ret[buft] += size;
+    }
+
     return ret;
+}
+
+bool llama_kv_cache::compacted_prefix_configure(
+        llama_seq_id seq_id,
+        uint32_t logical_token_count,
+        const std::vector<llama_pos> & logical_positions,
+        llama_pos live_suffix_pos0) {
+    return compacted_prefix.configure_seq(seq_id, logical_token_count, logical_positions, live_suffix_pos0);
+}
+
+void llama_kv_cache::compacted_prefix_clear(llama_seq_id seq_id, bool data) {
+    if (seq_id < 0) {
+        compacted_prefix.clear(data);
+        return;
+    }
+
+    compacted_prefix.clear_seq(seq_id, data);
+}
+
+bool llama_kv_cache::compacted_prefix_enabled(llama_seq_id seq_id) const {
+    return compacted_prefix.is_enabled(seq_id);
+}
+
+size_t llama_kv_cache::compacted_prefix_bytes(llama_seq_id seq_id) const {
+    if (seq_id < 0) {
+        return compacted_prefix.total_allocated_bytes();
+    }
+
+    return compacted_prefix.seq_allocated_bytes(seq_id);
+}
+
+const llama_compacted_prefix_store * llama_kv_cache::get_compacted_prefix() const {
+    return &compacted_prefix;
 }
 
 llama_memory_context_ptr llama_kv_cache::init_batch(
@@ -1649,6 +1715,10 @@ ggml_cgraph * llama_kv_cache::build_graph_shift(llm_graph_result * res, llama_co
 void llama_kv_cache::state_write(llama_io_write_i & io, llama_seq_id seq_id, llama_state_seq_flags flags) const {
     GGML_UNUSED(flags);
 
+    if (compacted_prefix.total_allocated_bytes() > 0) {
+        LLAMA_LOG_WARN("%s: compacted-prefix state is not serialized in P2 and will be dropped on restore\n", __func__);
+    }
+
     io.write(&n_stream, sizeof(n_stream));
 
     for (uint32_t s = 0; s < n_stream; ++s) {
@@ -1703,6 +1773,8 @@ void llama_kv_cache::state_read(llama_io_read_i & io, llama_seq_id seq_id, llama
     GGML_UNUSED(flags);
 
     GGML_ASSERT(seq_id == -1 || (seq_id >= 0 && (size_t) seq_id < seq_to_stream.size()));
+
+    compacted_prefix_clear(seq_id, true);
 
     uint32_t n_stream_cur;
     io.read_to(&n_stream_cur, sizeof(n_stream_cur));
