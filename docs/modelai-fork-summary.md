@@ -2,46 +2,113 @@
 
 ## Purpose
 
-This is a private product fork of `llama.cpp` maintained by COT Labs / ModelAI.
+This repository is a private product fork of `ggml-org/llama.cpp` maintained by COT Labs / ModelAI.
 
 It exists to:
-1. Implement KV cache compaction via Attention Matching for long-session efficiency and post-prefill speed
-2. Serve as the primary local inference runtime for ModelAI (replacing Ollama-first assumptions)
-3. Enable direct product control over engine releases, CI, and benchmarking
+1. implement KV cache compaction via Attention Matching for ModelAI’s long-session workloads,
+2. make `llama-server` the primary local runtime path for ModelAI,
+3. keep release control, CI policy, and benchmarking under direct product ownership.
 
-## Product Goals
+This is a product fork first. Optional upstreaming is a later track, not the current delivery constraint.
+
+## Fork Goals
 
 ### Goal 1: Long-Session Efficiency
-- Store old immutable context as a compacted prefix
-- Keep recent mutable context as a live suffix
-- Preserve chat-template / system-prefix tokens outside the compacted block
-- Expose allocated KV bytes and active KV length separately
+
+ModelAI needs to keep long documents and long analyst sessions usable without forcing the model to attend over the full original prefix forever.
+
+This fork targets that by:
+- storing old immutable context as a compacted prefix,
+- keeping recent mutable context as a live suffix,
+- preserving chat-template / BOS / system-prefix tokens outside the compacted block,
+- exposing allocated KV bytes and active KV length as separate runtime signals.
 
 ### Goal 2: Post-Prefill Speed / Decode Throughput
-- Compact only old immutable prefixes
-- Reduce effective active KV length in repeated-turn inference
-- Packed layout or equivalent changes so logical reduction becomes real compute reduction
 
-## KV Compaction Algorithm (Attention Matching)
+ModelAI gets value only if repeated follow-up turns become cheaper after large prefills.
 
-**Paper:** "Fast KV Compaction via Attention Matching" (arXiv:2602.16284)
-**Reference code:** https://github.com/adamzweiger/compaction (MIT, Python)
+This fork targets that by:
+- compacting only old immutable prefixes,
+- lowering the effective active KV range on repeated turns,
+- packing active cells into a backend-usable layout so logical KV reduction becomes real compute reduction.
 
-Given a KV prefix of length T, build a compacted representation of length t << T:
+Reducing active `n_kv` alone is not enough. It improves throughput only if the active cells are packed low enough for the graph/backend to exploit a shorter effective range.
 
-1. Generate reference queries from prefill path
-2. Select compacted keys (topk by attention score or OMP greedy)
-3. Solve for beta via NNLS to preserve attention mass
-4. Solve for compacted values via OLS to match attention output
-5. Replace KV cache: T entries → t entries
+Important v0 caveat:
+- the first compaction-capable path is expected to be non-flash first,
+- it may be architecturally correct before it is faster than current defaults on every workload,
+- broad performance claims belong only after packed-layout and backend-specific measurements exist.
 
-Modified attention: `softmax(q @ C_k^T + beta) @ C_v`
+## What The MIT Paper Contributes
 
-Key facts:
-- Approximate, not exact
-- beta is essential (per layer / per KV head / per compacted token)
-- Nonuniform budgets matter at high compression ratios
-- Chat-template/BOS tokens must stay uncompacted
+**Paper:** `Fast KV Compaction via Attention Matching`
+**Reference code:** `https://github.com/adamzweiger/compaction`
+**Upstream tracking issue:** `ggml-org/llama.cpp#20037`
+
+Given an original KV prefix of length `T`, the paper builds a compacted representation of length `t << T`:
+
+1. generate reference queries from the prefill path,
+2. select compacted keys (`topk` or more advanced selection such as OMP),
+3. solve for `beta` with NNLS to preserve attention mass,
+4. solve for compacted values with least-squares to match attention output,
+5. evaluate future queries against the compacted prefix instead of the original full prefix.
+
+Modified attention becomes:
+
+`softmax(q @ C_k^T + beta) @ C_v`
+
+Key algorithm facts:
+- approximate, not exact,
+- `beta` is essential,
+- `beta` is per layer / per KV head / per compacted token,
+- nonuniform budgets matter at higher compression ratios,
+- chat-template / BOS / uncompacted prefix handling is required in a production runtime.
+
+## What The Paper Does Not Give Us For Free
+
+The paper does not solve the main `llama.cpp` integration problems for us:
+
+1. it does not guarantee exact equivalence for arbitrary future queries,
+2. it does not produce automatic physical VRAM reduction inside the current fixed-size KV layout,
+3. it does not make flash attention, quantized V, SWA, or hybrid memory paths work automatically,
+4. it does not solve runtime state/save-restore integration,
+5. it does not guarantee throughput gains unless the active memory layout is repacked for the backend.
+
+## Current llama.cpp Constraints
+
+The current runtime constraints that shape this fork are:
+
+1. `llama_memory_t` is the real memory abstraction boundary.
+2. KV buffers are fixed-size allocations, so logical reduction does not automatically mean physical memory savings.
+3. The non-flash path supports additive `kq_b`; the flash-attention path does not.
+4. Quantized V cache currently depends on flash attention.
+5. Position continuity and state-restore invariants are strict.
+6. Multiple memory types exist:
+   - standard `llama_kv_cache`
+   - SWA / split-memory cache
+   - hybrid recurrent + attention memory
+7. `beta` cannot be represented as a flat slot scalar; its dimensionality is per layer / per KV head / per compacted token.
+
+## Expected Results
+
+### Near-Term
+
+- private product-fork docs and governance are in place,
+- CI and release discipline exist before engine dependency promotion,
+- capability and telemetry surfaces exist before compaction itself lands.
+
+### Mid-Term
+
+- narrow v0 compaction path on the supported matrix,
+- measured long-session improvements on ModelAI workloads,
+- measured repeated-turn follow-up improvements on at least one supported workload.
+- explicit fallback to the baseline path on unsupported configs.
+
+### Long-Term
+
+- broader backend/model coverage,
+- real packed-layout performance work,
+- optional sanitized upstream path after the architecture is proven in product use.
 
 ## V0 Support Matrix
 
@@ -50,48 +117,52 @@ Key facts:
 | Standard causal models with `llama_kv_cache` | Supported |
 | Non-flash attention path | Supported |
 | Non-quantized V cache | Supported |
-| Uncompacted chat-template/BOS prefix | Supported |
+| Uncompacted chat-template / BOS prefix | Supported |
 | Uniform budgets (default) | Supported |
-| Precomputed nonuniform schedules | Supported where available |
-| Flash attention path | Unsupported |
+| Precomputed nonuniform schedules | Supported where validated |
+| Flash-attention compaction path | Unsupported |
 | Quantized V compaction | Unsupported |
 | SWA / split-memory compaction | Unsupported |
-| Hybrid recurrent+attention | Unsupported |
-| M-RoPE path | Unsupported |
+| Hybrid recurrent + attention compaction | Unsupported |
+| M-RoPE edge cases | Unsupported |
 | Public API guarantees | Unsupported |
 
 ## Runtime Strategy
 
-- `llama-server` is the primary runtime target for ModelAI
-- Ollama becomes optional compatibility fallback
-- ModelAI must own model management and process lifecycle
+- `llama-server` is the primary runtime target for ModelAI.
+- Ollama becomes optional compatibility fallback, not the architectural center.
+- ModelAI owns model management, process lifecycle, telemetry consumption, and engine pinning.
 
-## Tracks
+## Product Track vs Upstream Track
 
-### Track A — Private Product Fork (current)
-- Target repo: `jandhyala-dev/modelai-llama.cpp`
-- Optimized for speed of iteration and product value
-- AI-assisted implementation is allowed
+### Track A — Private Product Fork
+
+- repo: `jandhyala-dev/modelai-llama.cpp`
+- optimized for product iteration speed and measurable ModelAI value,
+- AI-assisted implementation is allowed,
+- shipping discipline is governed by `modelai-main`, CI, and release tags.
 
 ### Track B — Optional Future Upstreaming
-- Begins only after Track A has measured results and stable architecture
-- Requires separate upstream-ready review pass
-- Subject to upstream AI-contribution policy
 
-## Constraints from llama.cpp
+- begins only after Track A has measured results and stable architecture,
+- requires a separate upstream-ready cleanup pass,
+- must satisfy upstream contribution and review expectations independently.
 
-1. `llama_memory_t` is the real memory abstraction boundary
-2. KV buffers are fixed-size allocations (logical reduction ≠ physical memory savings automatically)
-3. Non-flash supports additive `kq_b`; flash does not
-4. Quantized V requires flash attention
-5. Position continuity and restore invariants are strict
-6. Multiple memory types exist (standard KV, SWA split, hybrid recurrent+attention)
-7. Beta cannot live as a flat slot scalar — dimensionality is per layer/head/token
+## Governance And Related Documents
 
-## Governance
+- `docs/modelai-kv-compaction-plan.md` — staged PR plan from docs baseline through coverage expansion
+- `docs/modelai-git-policy.md` — upstream sync, branch, merge, and release governance
+- `docs/modelai-ci-policy.md` — CI jobs, regression thresholds, and artifact rules
+- `docs/modelai-release-checklist.md` — release promotion and rollback checklist
 
-- `modelai-main` is the stable shipping branch
-- CI is mandatory before merge into `modelai-main`
-- Releases are tagged only from `modelai-main`
-- ModelAI pins to exact tags or SHAs
-- Every release tag records upstream base SHA and benchmark deltas
+Release discipline:
+- `modelai-main` is the stable shipping branch,
+- CI is mandatory before merge or release promotion,
+- releases are tagged only from `modelai-main`,
+- ModelAI pins only to exact tags or SHAs,
+- each release records upstream base SHA and benchmark deltas.
+
+Current branch protection state:
+- `modelai-main` is protected against force-push and deletion,
+- `upstream-master` is protected against force-push and deletion,
+- CI is the intended merge gate for promoted changes.

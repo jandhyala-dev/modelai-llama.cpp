@@ -1,10 +1,62 @@
 # KV Compaction — Implementation Plan
 
+## Executive Summary
+
+This plan implements KV compaction as a private product-fork feature for ModelAI, not as an upstream-ready monolith.
+
+The two product goals are:
+1. long-session efficiency,
+2. post-prefill speed / decode throughput.
+
+The main blocker is runtime and memory architecture, not solver math alone.
+
+The implementation strategy is:
+1. establish governance and observability first,
+2. build the internal compacted-prefix representation under `llama_memory_t`,
+3. prove correctness on a narrow non-flash matrix,
+4. integrate session/state lifecycle,
+5. pursue real performance gains only after representation and correctness are stable.
+
+Upstream reference point:
+- `ggml-org/llama.cpp#20037` is the standing upstream tracking issue for this work.
+
+## Design Constraints
+
+The plan assumes the following current `llama.cpp` realities:
+
+1. `llama_memory_t` is the correct architecture boundary.
+2. The current KV allocation model is fixed-size, so logical reduction does not automatically reduce physical memory.
+3. Non-flash currently supports additive `kq_b`; flash does not.
+4. Quantized V depends on flash attention today.
+5. Position continuity and state restore behavior are strict.
+6. SWA and hybrid recurrent-memory paths require separate treatment.
+7. Active `n_kv` reduction matters only if active cells are packed into a backend-usable layout.
+
+## Supported And Unsupported Matrix
+
+### v0 Supported
+
+- standard causal models with `llama_kv_cache`
+- non-flash attention path
+- non-quantized V cache
+- uncompacted chat-template / BOS prefix
+- uniform budgets by default
+- precomputed nonuniform schedules where explicitly validated
+
+### v0 Unsupported
+
+- flash-attention compaction path
+- quantized V compaction
+- SWA / split-memory compaction
+- hybrid recurrent + attention compaction
+- M-RoPE edge cases not yet validated
+- broad public API guarantees
+
 ## Milestone Overview
 
 | PR | Branch | Scope |
 |---|---|---|
-| PR-0 | `kv-compact-pr0-docs` | Docs baseline |
+| PR-0 | `kv-compact-pr0-docs` | Docs baseline and governance |
 | PR-1 | `kv-compact-pr1-observability` | Capability flags and observability |
 | PR-2 | `kv-compact-pr2-memory-arch` | Compacted-prefix memory architecture |
 | PR-3 | `kv-compact-pr3-correctness` | Non-flash correctness path |
@@ -12,89 +64,204 @@
 | PR-5 | `kv-compact-pr5-performance` | Real performance path |
 | PR-6 | `kv-compact-pr6-coverage` | Coverage expansion |
 
-## PR-0: Docs Baseline
+## PR-0: Docs Baseline And Governance
 
-**Objective:** Finalize architecture and implementation docs for the private product fork.
+**Objective**
 
-Scope: executive summary, implementation plan, git/CI/release policy.
+Finalize architecture and implementation docs for the private product fork and make the operating model explicit.
 
-No runtime code. Merge gate: docs are internally consistent, no overclaims.
+**Scope**
 
-## PR-1: Capability Flags and Observability
+- executive summary
+- implementation plan
+- git policy
+- CI policy
+- release checklist
 
-**Objective:** Add infrastructure ModelAI needs before compaction exists.
+**Non-goals**
 
-Scope:
-- Feature flags (compile-time and runtime)
-- Capability reporting via `llama-server` endpoints
-- Telemetry hooks: allocated KV bytes, active `n_kv`, prefill timing, decode timing/tok-s, fallback-state reporting, `query_generation_time_ms`, `solver_time_ms`
+- no runtime behavior changes
+- no benchmark claims beyond measured CI smoke artifacts
 
-Tests: feature flag tests, capability-query tests, telemetry presence tests, control-path no-regression tests.
+**Merge gate**
 
-Merge gate: flags default off, existing behavior unchanged when disabled.
+- docs are internally consistent
+- no exactness or fake VRAM claims
+- support matrix is explicit
+- governance is documented end-to-end
+
+## PR-1: Capability Flags And Observability
+
+**Objective**
+
+Add the infrastructure ModelAI needs before compaction exists.
+
+**Scope**
+
+- feature flags, default-off
+- capability reporting via `llama-server` endpoints, including:
+  - effective context window
+  - flash-attention availability
+  - prompt / prefix cache behavior
+  - structured output / JSON-schema availability
+  - chat-template control availability
+  - embeddings / rerank availability
+  - save / restore safety
+  - compacted-prefix availability
+- telemetry hooks for:
+  - allocated KV bytes
+  - active `n_kv`
+  - prefill timing
+  - decode timing / tok-s
+  - fallback-state reporting
+  - `query_generation_time_ms`
+  - `solver_time_ms`
+
+**Non-goals**
+
+- no compacted-prefix representation yet
+- no flash support
+- no new public API guarantees outside documented server surfaces
+
+**Tests**
+
+- feature flag tests
+- capability-query tests
+- telemetry presence tests
+- control-path no-regression tests
+
+**Merge gate**
+
+- flags default off
+- existing behavior unchanged when disabled
+- ModelAI can query capabilities and telemetry without needing compaction enabled
+- unsupported configs are reported explicitly rather than inferred indirectly
 
 ## PR-2: Compacted-Prefix Memory Architecture
 
-**Objective:** Establish internal representation for compacted KV state.
+**Objective**
 
-Scope:
-- Separate compacted-prefix representation under `llama_memory_t`
-- Per-layer/per-head storage of `(C_k, beta, C_v)`
-- Logical position bookkeeping
-- Memory accounting hooks
+Establish the internal representation for compacted KV state.
 
-Tests: layout, metadata, position bookkeeping, serialization-shape, memory accounting.
+**Scope**
 
-Merge gate: representation is isolated and test-covered.
+- separate compacted-prefix representation under `llama_memory_t`
+- per-layer / per-KV-head storage of `(C_k, beta, C_v)`
+- logical position bookkeeping
+- memory accounting hooks
+
+**Non-goals**
+
+- no end-to-end compaction execution yet
+- no flash path
+- no quantized V
+
+**Tests**
+
+- layout tests
+- metadata tests
+- position bookkeeping tests
+- serialization-shape tests
+- memory accounting tests
+
+**Merge gate**
+
+- representation is isolated
+- memory accounting is test-covered
+- no flat per-slot `beta` design remains in the plan
 
 ## PR-3: Non-Flash Correctness Path
 
-**Objective:** End-to-end compaction on narrow supported matrix.
+**Objective**
 
-Scope:
-- Query extraction from prefill path
+Make compaction work end-to-end on the narrow supported matrix.
+
+**Scope**
+
+- query extraction from prefill path
 - GQA regrouping into KV-head query space
-- Key selection fast path (topk by attention score)
+- key selection fast path (`topk` by attention score)
 - NNLS beta fitting
-- OLS value fitting (primary: Householder QR; fallback: regularized Cholesky, lambda=1e-6)
-- Chat-template/BOS preservation
-- Optional model-specific nonuniform schedules with uniform fallback
-- Non-flash execution using additive `kq_b`
-- Explicit fallback for unsupported configs
+- OLS value fitting:
+  - primary: Householder QR
+  - fallback: regularized Cholesky with `lambda=1e-6`
+- chat-template / BOS preservation
+- optional model-specific nonuniform schedules with uniform fallback
+- non-flash execution using additive `kq_b`
+- explicit fallback for unsupported configs
 
-Solver policy: all math in fp32, cast results to model dtype for KV storage.
+**Solver policy**
 
-Tests: solver unit tests, reference parity on fixed fixtures, end-to-end sanity, unsupported-config fallback, no-NaN/no-crash.
+All solver math runs in fp32. Results are cast to the model dtype only for KV storage.
 
-Merge gate: supported matrix works end-to-end with tolerance bounds.
+**Tests**
 
-## PR-4: Session and State Integration
+- solver unit tests
+- reference parity on fixed fixtures
+- end-to-end sanity tests
+- unsupported-config fallback tests
+- no-NaN / no-crash tests
 
-**Objective:** Compacted state usable in real session lifecycles.
+**Merge gate**
 
-Scope: compact/decompact lifecycle, save/restore handling, invalidation rules, repeated compaction cycles, session continuation.
+- supported matrix works end-to-end within defined tolerances
+- unsupported matrix fails or falls back explicitly
 
-Tests: save/load roundtrip, failed-restore fallback, repeated cycles, session continuation.
+## PR-4: Session And State Integration
+
+**Objective**
+
+Make compacted state usable in real session lifecycles.
+
+**Scope**
+
+- compact / decompact lifecycle
+- save / restore handling
+- invalidation rules
+- repeated compaction cycles
+- session continuation behavior
+
+**Tests**
+
+- save/load roundtrip
+- failed-restore fallback
+- repeated cycles
+- session continuation
 
 ## PR-5: Real Performance Path
 
-**Objective:** Turn logical compaction into measurable wins.
+**Objective**
 
-Scope:
-- Packed layout so reduced active range lowers real compute
-- Real memory reuse/release where possible
-- Repeated-turn optimization
-- Benchmark harness integration
+Turn logical compaction into measurable product wins.
 
-Benchmarks required: W1-W6 workloads (see below).
+**Scope**
 
-Merge gate: measured progress on Goal 1 and/or Goal 2 on at least one ModelAI workload.
+- packed layout so reduced active range lowers real compute
+- real memory reuse / release where possible
+- repeated-turn optimization
+- benchmark harness integration
+
+Important note:
+- PR-5 is the phase that turns logical KV reduction into real throughput claims,
+- PR-3 correctness alone must not be described as a speed win.
+
+**Merge gate**
+
+Measured progress on Goal 1 and/or Goal 2 on at least one ModelAI workload.
 
 ## PR-6: Coverage Expansion
 
-**Objective:** Broaden support after narrow path works.
+**Objective**
 
-Scope: flash-compatible path with real `kq_b` support, quantized V, SWA evaluation, hybrid-memory evaluation, improved query-generation (self-study, OMP).
+Broaden support after the narrow path works.
+
+**Scope**
+
+- flash-compatible path with real `kq_b` support
+- quantized V
+- SWA evaluation
+- hybrid-memory evaluation
+- improved query-generation paths such as self-study and OMP
 
 Each added path must have isolated tests and benchmark evidence.
 
@@ -102,30 +269,36 @@ Each added path must have isolated tests and benchmark evidence.
 
 | ID | Workload | Purpose |
 |---|---|---|
-| W1 | 80K filing → first answer | Cold long-context behavior |
-| W2 | 80K filing → 20 follow-up questions | Repeated-turn speed |
-| W3 | Executive summary generation | Standard analyst workflow |
-| W4 | Full research report generation | Heavy multi-step workflow |
-| W5 | 3 concurrent sessions on 32GB | Local scalability |
-| W6 | Save/restore + continue | Session continuity |
+| W1 | 80K filing -> first answer | cold long-context behavior |
+| W2 | 80K filing -> 20 follow-up questions | repeated-turn speed |
+| W3 | executive summary generation | standard analyst workflow |
+| W4 | full research report generation | heavy multi-step workflow |
+| W5 | 3 concurrent sessions on 32GB | local scalability |
+| W6 | save/restore + continue | session continuity |
 
 ## Per-Run Metrics
 
-1. Model name and quantization
-2. Backend (Metal / CUDA / CPU)
-3. Flash attention on/off
-4. Compaction on/off and ratio
-5. Prefill latency ms
-6. First-token latency ms
-7. Decode throughput tok/s
-8. Allocated KV bytes
-9. Active KV length
-10. Quality delta vs full cache
+1. model name and quantization
+2. backend (Metal / CUDA / CPU)
+3. flash attention on/off
+4. compaction on/off and ratio
+5. prefill latency ms
+6. first-token latency ms
+7. decode throughput tok/s
+8. allocated KV bytes
+9. active KV length
+10. quality delta vs full cache
 11. `query_generation_time_ms`
 12. `solver_time_ms`
 
 ## Regression Rules
 
-- Performance regression > 10% on a key metric requires investigation before release
-- Quality regression > 1% perplexity delta requires investigation before release
-- No benchmark claim without measured outputs
+- performance regression > 10% on a key metric requires investigation before release
+- quality regression > 1% perplexity delta requires investigation before release
+- no benchmark claim without measured outputs
+
+## Related Governance Documents
+
+- `docs/modelai-git-policy.md`
+- `docs/modelai-ci-policy.md`
+- `docs/modelai-release-checklist.md`

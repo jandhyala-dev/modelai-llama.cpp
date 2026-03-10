@@ -14,6 +14,9 @@ Private product fork of [ggml-org/llama.cpp](https://github.com/ggml-org/llama.c
 
 - `docs/modelai-fork-summary.md` — Fork executive summary and goals
 - `docs/modelai-kv-compaction-plan.md` — Staged implementation plan (PR-0 through PR-6)
+- `docs/modelai-git-policy.md` — Branching, upstream sync, merge, and release governance
+- `docs/modelai-ci-policy.md` — CI gates, jobs, regression thresholds, and artifact rules
+- `docs/modelai-release-checklist.md` — Release promotion and rollback checklist
 
 ## Build Commands
 
