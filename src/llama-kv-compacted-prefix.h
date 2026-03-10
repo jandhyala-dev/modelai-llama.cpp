@@ -18,6 +18,9 @@ struct llama_compacted_prefix_layer_layout {
 
 class llama_compacted_prefix_store {
 public:
+    static constexpr const char * k_quantized_cache_error =
+        "compacted-prefix store currently supports only scalar cache types (F16/BF16/F32)";
+
     struct layer_storage {
         llama_compacted_prefix_layer_layout layout;
         uint32_t n_compacted_tokens = 0;
@@ -35,6 +38,9 @@ public:
     struct sequence_state {
         bool enabled = false;
 
+        // Snapshot of the logical prefix length represented at configure time.
+        // Sequence operations mutate compacted token positions but do not infer a
+        // new original logical-prefix length.
         uint32_t logical_token_count = 0;
         llama_pos live_suffix_pos0 = -1;
         std::vector<llama_pos> logical_positions;
@@ -76,11 +82,13 @@ public:
 
     std::map<ggml_backend_buffer_type_t, size_t> memory_breakdown() const;
 
+    sequence_state * get_seq(llama_seq_id seq_id);
     const sequence_state * get_seq(llama_seq_id seq_id) const;
 
 private:
     static void normalize_range(llama_pos & p0, llama_pos & p1);
     static bool pos_in(llama_pos pos, llama_pos p0, llama_pos p1);
+    static void validate_positions(const sequence_state & state);
 
     sequence_state & seq(llama_seq_id seq_id);
     const sequence_state & seq(llama_seq_id seq_id) const;

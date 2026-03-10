@@ -30,7 +30,8 @@ llama_kv_cache::llama_kv_cache(
                  uint32_t   n_swa,
            llama_swa_type   swa_type,
     const layer_filter_cb & filter,
-    const  layer_reuse_cb & reuse) :
+    const  layer_reuse_cb & reuse,
+                     bool   enable_compacted_prefix) :
     model(model), hparams(model.hparams), v_trans(v_trans),
     n_seq_max(n_seq_max), n_stream(unified ? 1 : n_seq_max), n_pad(n_pad), n_swa(n_swa), swa_type(swa_type) {
 
@@ -178,7 +179,7 @@ llama_kv_cache::llama_kv_cache(
         }
     }
 
-    {
+    if (enable_compacted_prefix) {
         std::vector<llama_compacted_prefix_layer_layout> compacted_layouts;
         compacted_layouts.reserve(layers.size());
 
@@ -511,34 +512,14 @@ llama_pos llama_kv_cache::seq_pos_min(llama_seq_id seq_id) const {
     GGML_ASSERT(seq_id >= 0 && (size_t) seq_id < seq_to_stream.size());
 
     const auto & cells = v_cells[seq_to_stream[seq_id]];
-    const auto pos_cells = cells.seq_pos_min(seq_id);
-    const auto pos_compacted = compacted_prefix.seq_pos_min(seq_id);
-
-    if (pos_cells < 0) {
-        return pos_compacted;
-    }
-    if (pos_compacted < 0) {
-        return pos_cells;
-    }
-
-    return std::min(pos_cells, pos_compacted);
+    return cells.seq_pos_min(seq_id);
 }
 
 llama_pos llama_kv_cache::seq_pos_max(llama_seq_id seq_id) const {
     GGML_ASSERT(seq_id >= 0 && (size_t) seq_id < seq_to_stream.size());
 
     const auto & cells = v_cells[seq_to_stream[seq_id]];
-    const auto pos_cells = cells.seq_pos_max(seq_id);
-    const auto pos_compacted = compacted_prefix.seq_pos_max(seq_id);
-
-    if (pos_cells < 0) {
-        return pos_compacted;
-    }
-    if (pos_compacted < 0) {
-        return pos_cells;
-    }
-
-    return std::max(pos_cells, pos_compacted);
+    return cells.seq_pos_max(seq_id);
 }
 
 std::map<ggml_backend_buffer_type_t, size_t> llama_kv_cache::memory_breakdown() const {
@@ -1734,6 +1715,10 @@ ggml_cgraph * llama_kv_cache::build_graph_shift(llm_graph_result * res, llama_co
 void llama_kv_cache::state_write(llama_io_write_i & io, llama_seq_id seq_id, llama_state_seq_flags flags) const {
     GGML_UNUSED(flags);
 
+    if (compacted_prefix.total_allocated_bytes() > 0) {
+        LLAMA_LOG_WARN("%s: compacted-prefix state is not serialized in P2 and will be dropped on restore\n", __func__);
+    }
+
     io.write(&n_stream, sizeof(n_stream));
 
     for (uint32_t s = 0; s < n_stream; ++s) {
@@ -1788,6 +1773,8 @@ void llama_kv_cache::state_read(llama_io_read_i & io, llama_seq_id seq_id, llama
     GGML_UNUSED(flags);
 
     GGML_ASSERT(seq_id == -1 || (seq_id >= 0 && (size_t) seq_id < seq_to_stream.size()));
+
+    compacted_prefix_clear(seq_id, true);
 
     uint32_t n_stream_cur;
     io.read_to(&n_stream_cur, sizeof(n_stream_cur));
