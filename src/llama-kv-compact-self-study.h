@@ -40,21 +40,32 @@ struct llama_q_capture_state {
     int32_t n_layers = 0;
 
     struct layer_q {
-        uint32_t n_embd_head = 0;
-        uint32_t n_head_q    = 0;
-        uint32_t n_tokens    = 0;   // tokens captured so far
+        uint32_t n_embd_head  = 0;
+        uint32_t n_head_q     = 0;
+        uint32_t n_tokens     = 0;   // committed tokens
+        bool     has_pending  = false;  // true if current step wrote data
+        size_t   pending_off  = 0;      // offset of pending data in data[]
         std::vector<float> data;    // token-major: [tok0_head0..headN, tok1_head0..headN, ...]
     };
     std::vector<layer_q> layers;    // indexed by il
 
     // Initialize per-layer storage for n_layers layers.
+    // n_reserve: expected number of tokens (pre-allocates to avoid hot-path realloc).
     // Must be called before activating the callback.
-    void reset(int32_t n_layers, uint32_t n_embd_head, uint32_t n_head_q);
+    void reset(int32_t n_layers, uint32_t n_embd_head, uint32_t n_head_q,
+               uint32_t n_reserve = 0);
 
-    // Append tensor data for layer il.  Called from the cb_eval receive phase.
-    // The overwrite strategy means this may be called multiple times per layer
-    // per decode step — only the last call's data is kept for each token.
+    // Write tensor data for layer il.  Called from the cb_eval receive phase.
+    //
+    // Overwrite strategy: multiple 3D Qcur-prefixed tensors may fire per layer
+    // per decode step (e.g. Qcur after RoPE, Qcur_normed after norm).  Only
+    // the last one per step is kept.  First call for a layer in a step appends;
+    // subsequent calls overwrite at the same offset.
     void append_from_tensor(int32_t il, const struct ggml_tensor * t);
+
+    // Finalize the current decode step: commit pending data across all layers.
+    // Must be called by the generation loop after each llama_decode().
+    void finalize_step();
 };
 
 // cb_eval callback function for Q-capture.

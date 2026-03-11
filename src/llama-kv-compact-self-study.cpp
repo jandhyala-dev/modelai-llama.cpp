@@ -11,15 +11,22 @@
 // llama_q_capture_state
 // ---------------------------------------------------------------------------
 
-void llama_q_capture_state::reset(int32_t n_layers_, uint32_t n_embd_head_, uint32_t n_head_q_) {
+void llama_q_capture_state::reset(int32_t n_layers_, uint32_t n_embd_head_, uint32_t n_head_q_,
+                                  uint32_t n_reserve) {
     active   = false;
     n_layers = n_layers_;
     layers.resize(n_layers_);
+    const size_t floats_per_token = (size_t)n_embd_head_ * n_head_q_;
     for (auto & lq : layers) {
-        lq.n_embd_head = n_embd_head_;
-        lq.n_head_q    = n_head_q_;
-        lq.n_tokens    = 0;
+        lq.n_embd_head  = n_embd_head_;
+        lq.n_head_q     = n_head_q_;
+        lq.n_tokens     = 0;
+        lq.has_pending  = false;
+        lq.pending_off  = 0;
         lq.data.clear();
+        if (n_reserve > 0) {
+            lq.data.reserve(floats_per_token * n_reserve);
+        }
     }
 }
 
@@ -38,34 +45,9 @@ void llama_q_capture_state::append_from_tensor(int32_t il, const struct ggml_ten
     const uint32_t d2 = (uint32_t)t->ne[2];  // n_tokens (usually 1 during autoregressive)
 
     if (d0 != lq.n_embd_head || d1 != lq.n_head_q) {
-        // Mismatched dimensions — this is a pre-reshape 2D projection or
-        // a different Qcur variant.  Skip it.
+        // Mismatched dimensions — skip (pre-reshape or different variant)
         return;
     }
-
-    // For the overwrite strategy: during autoregressive generation, d2 == 1
-    // (one token at a time).  We append each token's Q data.
-    //
-    // Data layout target: head-major — [head0_tok0..tokN, head1_tok0..tokN, ...]
-    // But the tensor is [n_embd_head, n_head_q, 1] — we need to scatter each
-    // head's n_embd_head floats to the right position in the head-major layout.
-    //
-    // For single-token decode (d2 == 1):
-    //   For each head h: append n_embd_head floats to position
-    //   [h * (n_tokens+1) ... ] — but that requires shifting existing data.
-    //
-    // Simpler approach for single-token: store token-major during capture,
-    // then rearrange in regroup.  But the plan says head-major.
-    //
-    // Actually for efficiency: store as flat per-token blocks during capture.
-    // Each decode step appends [n_embd_head * n_head_q] floats (one block per token).
-    // Regrouping (slice 6b-3) will rearrange into per-KV-head matrices.
-    //
-    // This is token-major: [tok0_head0..headN, tok1_head0..headN, ...]
-    // which is the natural tensor layout and avoids scattered inserts.
-
-    const size_t floats_per_token = (size_t)d0 * d1;
-    const size_t new_floats = floats_per_token * d2;
 
     // Ensure the tensor is F32
     if (t->type != GGML_TYPE_F32) {
@@ -73,13 +55,46 @@ void llama_q_capture_state::append_from_tensor(int32_t il, const struct ggml_ten
         return;
     }
 
-    const size_t old_size = lq.data.size();
-    lq.data.resize(old_size + new_floats);
+    const size_t floats_per_token = (size_t)d0 * d1;
+    const size_t new_floats = floats_per_token * d2;
 
-    // Copy from GPU (or host) into our buffer
-    ggml_backend_tensor_get(t, lq.data.data() + old_size, 0, new_floats * sizeof(float));
+    // Overwrite strategy: multiple 3D Qcur-prefixed tensors may fire per layer
+    // per decode step (e.g. Qcur after RoPE, then Qcur_normed after norm).
+    // Graph nodes execute in topological order, so the last one is always the
+    // final post-processed version passed to build_attn().
+    //
+    // First call for this layer in the current step: append new data.
+    // Subsequent calls: overwrite at the same offset (last one wins).
+    if (lq.has_pending) {
+        // Overwrite the pending data at the same offset
+        ggml_backend_tensor_get(t, lq.data.data() + lq.pending_off, 0, new_floats * sizeof(float));
+    } else {
+        // First Qcur for this layer in this step: append
+        const size_t old_size = lq.data.size();
+        lq.data.resize(old_size + new_floats);
+        ggml_backend_tensor_get(t, lq.data.data() + old_size, 0, new_floats * sizeof(float));
 
-    lq.n_tokens += d2;
+        lq.pending_off = old_size;
+        lq.has_pending = true;
+    }
+
+    // Note: n_tokens is NOT incremented here — finalize_step() does that
+    // to avoid double-counting from multiple overwrites.
+}
+
+void llama_q_capture_state::finalize_step() {
+    for (auto & lq : layers) {
+        if (lq.has_pending) {
+            // Commit: count the token(s) written in this step.
+            // For autoregressive d2 == 1; if a future prefill path uses d2 > 1,
+            // the floats already in data[] are correct — just count them.
+            const size_t floats_per_token = (size_t)lq.n_embd_head * lq.n_head_q;
+            const size_t pending_floats   = lq.data.size() - lq.pending_off;
+            const uint32_t d2 = (uint32_t)(pending_floats / floats_per_token);
+            lq.n_tokens += d2;
+            lq.has_pending = false;
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
