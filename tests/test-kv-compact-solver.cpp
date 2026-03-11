@@ -1,6 +1,7 @@
 #include "src/llama-kv-compact-select.h"
 #include "src/llama-kv-compact-solver.h"
 
+#include <cmath>
 #include <cstdio>
 #include <string>
 #include <vector>
@@ -84,6 +85,30 @@ int main() {
     if (!check(full_out.data.size() == compact_out.data.size(), "attention outputs should be comparable", rc)) return rc;
     const float cos = llama_kv_compact_cosine_similarity(full_out.data, compact_out.data);
     if (!check(cos >= 0.95f, "synthetic attention-output cosine should meet the baseline threshold", rc)) return rc;
+
+    // OMP key selection test
+    {
+        llama_kv_compact_omp_opts omp_opts;
+        omp_opts.k_choice = 1;
+        omp_opts.nnls_interval = 1;
+        std::vector<float> omp_beta;
+
+        auto omp_selected = llama_kv_compact_select_omp(
+            queries, full_k, 2, omp_opts, omp_beta);
+
+        if (!check(omp_selected.size() == 2, "OMP should select exactly 2 keys", rc)) return rc;
+        if (!check(omp_beta.size() == 2, "OMP should produce 2 beta values", rc)) return rc;
+        std::printf("  OMP selected positions: %u, %u\n",
+                    omp_selected[0], omp_selected[1]);
+        std::printf("  OMP beta: %.4f, %.4f\n", omp_beta[0], omp_beta[1]);
+
+        for (float b : omp_beta) {
+            if (!check(std::isfinite(b), "OMP beta values should be finite", rc)) return rc;
+        }
+
+        // OMP results should be sorted by position
+        if (!check(omp_selected[0] < omp_selected[1], "OMP results should be position-sorted", rc)) return rc;
+    }
 
     return 0;
 }

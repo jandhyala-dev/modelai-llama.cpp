@@ -59,3 +59,223 @@ std::vector<uint32_t> llama_kv_compact_select_topk(
     std::sort(idx.begin(), idx.end());
     return idx;
 }
+
+namespace {
+
+bool omp_solve_nnls(
+        const llama_kv_compact_matrix & M,
+        const std::vector<float> & target,
+        float lower_bound,
+        std::vector<float> & B_out) {
+    const uint32_t n = M.rows;
+    const uint32_t t = M.cols;
+
+    // Build normal equations: M^T M x = M^T target
+    std::vector<float> mtm(size_t(t) * t, 0.0f);
+    std::vector<float> mty(t, 0.0f);
+
+    for (uint32_t r = 0; r < n; ++r) {
+        const float * row = M.row(r);
+        for (uint32_t i = 0; i < t; ++i) {
+            const float ri = row[i];
+            for (uint32_t j = 0; j <= i; ++j) {
+                mtm[size_t(i) * t + j] += ri * row[j];
+            }
+            mty[i] += ri * target[r];
+        }
+    }
+
+    // Symmetrize + regularize
+    const float lambda = 1e-6f;
+    for (uint32_t i = 0; i < t; ++i) {
+        for (uint32_t j = 0; j < i; ++j) {
+            mtm[size_t(j) * t + i] = mtm[size_t(i) * t + j];
+        }
+        mtm[size_t(i) * t + i] += lambda;
+    }
+
+    // Cholesky decomposition
+    std::vector<float> L = mtm;
+    for (uint32_t i = 0; i < t; ++i) {
+        for (uint32_t j = 0; j <= i; ++j) {
+            float sum = L[size_t(i) * t + j];
+            for (uint32_t k = 0; k < j; ++k) {
+                sum -= L[size_t(i) * t + k] * L[size_t(j) * t + k];
+            }
+            if (i == j) {
+                if (sum <= 0.0f) return false;
+                L[size_t(i) * t + j] = std::sqrt(sum);
+            } else {
+                L[size_t(i) * t + j] = sum / L[size_t(j) * t + j];
+            }
+        }
+        for (uint32_t j = i + 1; j < t; ++j) {
+            L[size_t(i) * t + j] = 0.0f;
+        }
+    }
+
+    // Forward substitution
+    B_out = mty;
+    for (uint32_t i = 0; i < t; ++i) {
+        float sum = B_out[i];
+        for (uint32_t k = 0; k < i; ++k) {
+            sum -= L[size_t(i) * t + k] * B_out[k];
+        }
+        B_out[i] = sum / L[size_t(i) * t + i];
+    }
+    // Back substitution
+    for (int i = int(t) - 1; i >= 0; --i) {
+        float sum = B_out[i];
+        for (uint32_t k = uint32_t(i + 1); k < t; ++k) {
+            sum -= L[size_t(k) * t + uint32_t(i)] * B_out[k];
+        }
+        B_out[i] = sum / L[size_t(i) * t + uint32_t(i)];
+    }
+
+    // Clamp to non-negative
+    for (float & w : B_out) {
+        w = std::max(w, lower_bound);
+    }
+    return true;
+}
+
+} // namespace
+
+std::vector<uint32_t> llama_kv_compact_select_omp(
+        const llama_kv_compact_matrix & queries,
+        const llama_kv_compact_matrix & keys,
+        uint32_t t,
+        const llama_kv_compact_omp_opts & opts,
+        std::vector<float> & beta_out) {
+    const uint32_t n = queries.rows;
+    const uint32_t T = keys.rows;
+    const uint32_t d = keys.cols;
+    const float inv_sqrt_d = 1.0f / std::sqrt(float(d));
+
+    t = std::min(t, T);
+
+    // Step 1: Compute exp_scores[n x T] and target[n]
+    llama_kv_compact_matrix exp_scores(n, T);
+    std::vector<float> target(n, 0.0f);
+
+    for (uint32_t qi = 0; qi < n; ++qi) {
+        const float * q = queries.row(qi);
+        float row_max = -std::numeric_limits<float>::infinity();
+        for (uint32_t ki = 0; ki < T; ++ki) {
+            float score = dot_row(q, keys.row(ki), d) * inv_sqrt_d;
+            exp_scores(qi, ki) = score;
+            row_max = std::max(row_max, score);
+        }
+        float sum = 0.0f;
+        for (uint32_t ki = 0; ki < T; ++ki) {
+            float e = std::exp(exp_scores(qi, ki) - row_max);
+            exp_scores(qi, ki) = e;
+            sum += e;
+        }
+        target[qi] = sum;
+    }
+
+    // Step 2: Greedy OMP loop
+    std::vector<uint32_t> selected;
+    selected.reserve(t);
+    std::vector<bool> mask(T, false);
+    std::vector<float> current(n, 0.0f);
+    std::vector<float> B;
+    std::vector<float> corr(T);
+
+    uint32_t iteration = 0;
+    while (selected.size() < t) {
+        // Compute correlation of each key with residual
+        for (uint32_t ki = 0; ki < T; ++ki) {
+            if (mask[ki]) {
+                corr[ki] = -std::numeric_limits<float>::infinity();
+                continue;
+            }
+            float c = 0.0f;
+            for (uint32_t qi = 0; qi < n; ++qi) {
+                c += exp_scores(qi, ki) * (target[qi] - current[qi]);
+            }
+            corr[ki] = c;
+        }
+
+        // Select top k_choice keys
+        uint32_t k_select = std::min(opts.k_choice,
+                                      uint32_t(t - selected.size()));
+
+        std::vector<uint32_t> candidates(T);
+        std::iota(candidates.begin(), candidates.end(), 0);
+        std::partial_sort(
+            candidates.begin(),
+            candidates.begin() + std::min(k_select + uint32_t(selected.size()), T),
+            candidates.end(),
+            [&](uint32_t a, uint32_t b) { return corr[a] > corr[b]; });
+
+        uint32_t added = 0;
+        for (uint32_t ci = 0; ci < T && added < k_select; ++ci) {
+            uint32_t idx = candidates[ci];
+            if (mask[idx]) continue;
+            selected.push_back(idx);
+            mask[idx] = true;
+            added++;
+        }
+
+        // Solve NNLS conditionally based on interval
+        bool should_solve = (B.empty())
+                         || (iteration % opts.nnls_interval == 0)
+                         || (selected.size() >= t);
+
+        if (should_solve) {
+            uint32_t i = selected.size();
+            llama_kv_compact_matrix M(n, i);
+            for (uint32_t qi = 0; qi < n; ++qi) {
+                for (uint32_t si = 0; si < i; ++si) {
+                    M(qi, si) = exp_scores(qi, selected[si]);
+                }
+            }
+            if (!omp_solve_nnls(M, target, opts.lower_bound, B)) {
+                B.resize(selected.size(), opts.lower_bound);
+            }
+        } else {
+            B.resize(selected.size(), opts.lower_bound);
+        }
+
+        // Update approximation: current = M @ B
+        std::fill(current.begin(), current.end(), 0.0f);
+        for (uint32_t qi = 0; qi < n; ++qi) {
+            for (uint32_t si = 0; si < selected.size(); ++si) {
+                current[qi] += exp_scores(qi, selected[si]) * B[si];
+            }
+        }
+
+        iteration++;
+    }
+
+    // Final NNLS if last iteration was skipped
+    if (opts.nnls_interval > 1 && !selected.empty()) {
+        uint32_t i = selected.size();
+        llama_kv_compact_matrix M(n, i);
+        for (uint32_t qi = 0; qi < n; ++qi) {
+            for (uint32_t si = 0; si < i; ++si) {
+                M(qi, si) = exp_scores(qi, selected[si]);
+            }
+        }
+        omp_solve_nnls(M, target, opts.lower_bound, B);
+    }
+
+    // Convert to beta (log-weights) and sort by position
+    std::vector<uint32_t> order(selected.size());
+    std::iota(order.begin(), order.end(), 0);
+    std::sort(order.begin(), order.end(),
+              [&](uint32_t a, uint32_t b) {
+                  return selected[a] < selected[b];
+              });
+
+    std::vector<uint32_t> result(selected.size());
+    beta_out.resize(selected.size());
+    for (size_t i = 0; i < order.size(); ++i) {
+        result[i] = selected[order[i]];
+        beta_out[i] = std::log(std::max(B[order[i]], opts.lower_bound));
+    }
+
+    return result;
+}
