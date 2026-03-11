@@ -22,7 +22,7 @@ struct llama_compacted_prefix_layer_layout {
 class llama_compacted_prefix_store {
 public:
     static constexpr const char * k_quantized_cache_error =
-        "compacted-prefix store currently supports only scalar cache types (F16/BF16/F32)";
+        "compacted-prefix store requires cache types where head_dim is a multiple of the quantization block size";
 
     struct layer_storage {
         llama_compacted_prefix_layer_layout layout;
@@ -59,6 +59,10 @@ public:
 
         bool set_execution_enabled(bool enabled);
         bool is_execution_enabled() const;
+
+        // Returns true when all beta values across all layers are zero.
+        // This enables the flash-attention path since kq_b is unnecessary.
+        bool is_zero_beta() const;
 
     private:
         bool execution_enabled = false;

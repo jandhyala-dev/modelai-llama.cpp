@@ -74,6 +74,7 @@ bool llama_compacted_prefix_can_execute(
     if (out) {
         out->seq_id = seq_id;
         out->n_tokens = state->logical_positions.size();
+        out->zero_beta = state->is_zero_beta();
     }
 
     return true;
@@ -85,7 +86,10 @@ void llama_compacted_prefix_set_input_mask(
         const llama_ubatch & ubatch,
         const llama_hparams & hparams,
         bool causal_attn) {
-    require_tensor_type(dst, GGML_TYPE_F32, "mask");
+    const bool is_f16 = (dst->type == GGML_TYPE_F16);
+    if (!is_f16) {
+        require_tensor_type(dst, GGML_TYPE_F32, "mask");
+    }
     require_host_or_direct_data(dst, "mask");
 
     const int64_t n_prefix = (int64_t) state.logical_positions.size();
@@ -114,8 +118,13 @@ void llama_compacted_prefix_set_input_mask(
                     value = -std::abs(float(p0 - p1));
                 }
 
-                auto * dst_ptr = reinterpret_cast<float *>(base + size_t(s) * dst->nb[3] + size_t(ii) * dst->nb[1] + size_t(j) * dst->nb[0]);
-                *dst_ptr = value;
+                if (is_f16) {
+                    auto * dst_ptr = reinterpret_cast<ggml_fp16_t *>(base + size_t(s) * dst->nb[3] + size_t(ii) * dst->nb[1] + size_t(j) * dst->nb[0]);
+                    *dst_ptr = ggml_fp32_to_fp16(value);
+                } else {
+                    auto * dst_ptr = reinterpret_cast<float *>(base + size_t(s) * dst->nb[3] + size_t(ii) * dst->nb[1] + size_t(j) * dst->nb[0]);
+                    *dst_ptr = value;
+                }
             }
         }
     }

@@ -16,8 +16,9 @@
 
 namespace {
 
-bool is_scalar_solver_type(ggml_type type) {
-    return type == GGML_TYPE_F16 || type == GGML_TYPE_BF16 || type == GGML_TYPE_F32;
+bool is_block_aligned_for_head(ggml_type type, uint32_t head_dim) {
+    const int64_t blk = ggml_blck_size(type);
+    return blk > 0 && head_dim > 0 && (head_dim % blk) == 0;
 }
 
 void type_to_float(const void * src, ggml_type type, float * dst, int64_t n) {
@@ -794,6 +795,18 @@ bool llama_kv_cache::compacted_prefix_select_from_live_kv(
     return llama_kv_compact_select_from_live_kv(*this, seq_id, target_tokens, live_suffix_pos0, stats, p0);
 }
 
+bool llama_kv_cache::compacted_prefix_omp_from_live_kv(
+        llama_seq_id seq_id,
+        uint32_t target_tokens,
+        llama_pos live_suffix_pos0,
+        llama_kv_compact_pipeline_stats * stats,
+        llama_pos p0,
+        uint32_t max_queries,
+        int nnls_iters,
+        float lambda) {
+    return llama_kv_compact_omp_from_live_kv(*this, seq_id, target_tokens, live_suffix_pos0, stats, p0, max_queries, nnls_iters, lambda);
+}
+
 bool llama_kv_cache::compacted_prefix_layer_layout_for_solver(int32_t il, llama_compacted_prefix_layer_layout & out) const {
     const auto it = map_layer_ids.find(il);
     if (it == map_layer_ids.end()) {
@@ -853,7 +866,7 @@ bool llama_kv_cache::compacted_prefix_copy_k_head_f32(
     out.clear();
 
     llama_compacted_prefix_layer_layout layout;
-    if (!compacted_prefix_layer_layout_for_solver(il, layout) || !is_scalar_solver_type(layout.type_k)) {
+    if (!compacted_prefix_layer_layout_for_solver(il, layout) || !is_block_aligned_for_head(layout.type_k, layout.n_embd_head_k)) {
         return false;
     }
 
@@ -866,9 +879,8 @@ bool llama_kv_cache::compacted_prefix_copy_k_head_f32(
     const auto & cells = v_cells[strm];
     const uint32_t n_embd_k_gqa = hparams.n_embd_k_gqa(il);
     const uint32_t head_dim = layout.n_embd_head_k;
-    const size_t type_size = ggml_type_size(layout.type_k);
     const size_t row_size = ggml_row_size(layout.type_k, n_embd_k_gqa);
-    const size_t head_offset = size_t(head_kv) * head_dim * type_size;
+    const size_t head_offset = ggml_row_size(layout.type_k, size_t(head_kv) * head_dim);
 
     std::unordered_map<llama_pos, uint32_t> pos_to_idx;
     for (uint32_t idx = 0; idx < cells.used_max_p1(); ++idx) {
@@ -909,7 +921,7 @@ bool llama_kv_cache::compacted_prefix_copy_v_head_f32(
     out.clear();
 
     llama_compacted_prefix_layer_layout layout;
-    if (!compacted_prefix_layer_layout_for_solver(il, layout) || !is_scalar_solver_type(layout.type_v)) {
+    if (!compacted_prefix_layer_layout_for_solver(il, layout) || !is_block_aligned_for_head(layout.type_v, layout.n_embd_head_v)) {
         return false;
     }
     if (layout.n_embd_head_v == 0) {
@@ -943,7 +955,7 @@ bool llama_kv_cache::compacted_prefix_copy_v_head_f32(
 
     if (!v_trans) {
         const size_t row_size = ggml_row_size(layout.type_v, n_embd_v_gqa);
-        const size_t head_offset = size_t(head_kv) * head_dim * type_size;
+        const size_t head_offset = ggml_row_size(layout.type_v, size_t(head_kv) * head_dim);
         std::vector<uint8_t> row_bytes(row_size);
         std::vector<float> row_f32(head_dim);
 
@@ -962,6 +974,11 @@ bool llama_kv_cache::compacted_prefix_copy_v_head_f32(
     // Batch column extraction: read one full column per embedding dimension.
     // Transposed V layout: v[cell_idx + (head_offset + j) * kv_size].
     // O(head_dim) backend calls instead of O(positions * head_dim).
+    // Note: transposed V with quantized types is not supported — quantization
+    // blocks span the embedding dimension, incompatible with column layout.
+    if (ggml_blck_size(layout.type_v) > 1) {
+        return false;
+    }
     const uint32_t kv_size = get_size();
     const uint32_t head_offset = head_kv * head_dim;
     const size_t col_bytes = size_t(kv_size) * type_size;
@@ -2874,6 +2891,10 @@ llama_seq_id llama_kv_cache_context::compacted_prefix_seq_id() const {
 
 uint32_t llama_kv_cache_context::compacted_prefix_n_tokens() const {
     return compacted_exec.n_tokens;
+}
+
+bool llama_kv_cache_context::compacted_prefix_zero_beta() const {
+    return compacted_exec.zero_beta;
 }
 
 void llama_kv_cache_context::set_input_compacted_prefix_mask(ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const {

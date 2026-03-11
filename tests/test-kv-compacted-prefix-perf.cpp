@@ -9,6 +9,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <string>
 #include <vector>
 
@@ -69,7 +70,12 @@ int main(int argc, char ** argv) {
         return 1;
     }
 
-    params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_DISABLED;
+    if (std::getenv("USE_FLASH")) {
+        std::printf("USE_FLASH=1: enabling flash attention\n");
+        params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_ENABLED;
+    } else {
+        params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_DISABLED;
+    }
 
     common_init();
 

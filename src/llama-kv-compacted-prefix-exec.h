@@ -9,6 +9,7 @@
 struct llama_compacted_prefix_exec_candidate {
     llama_seq_id seq_id = -1;
     uint32_t n_tokens = 0;
+    bool zero_beta = false; // true when all beta values are zero (selection-only pipeline)
 };
 
 bool llama_compacted_prefix_can_execute(
