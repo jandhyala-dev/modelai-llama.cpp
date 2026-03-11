@@ -132,6 +132,10 @@ bool llama_kv_compact_self_study_generate(
         uint32_t n_generate,
         llama_seq_id seq_id) {
 
+    // llama_batch_get_one() hardcodes sequence 0 (llama.h).
+    // Until we build batches manually, enforce this precondition.
+    GGML_ASSERT(seq_id == 0 && "self-study generation requires seq_id == 0 (llama_batch_get_one limitation)");
+
     const llama_model * model = llama_get_model(ctx);
     const llama_vocab * vocab = llama_model_get_vocab(model);
     const int32_t n_vocab     = llama_vocab_n_tokens(vocab);
@@ -179,6 +183,15 @@ bool llama_kv_compact_self_study_generate(
 
         if (llama_decode(ctx, batch) != 0) {
             LLAMA_LOG_ERROR("self-study: decode failed at step %u\n", i);
+            // Clear any pending state from partial cb_eval callbacks
+            // that may have fired before the decode failure.
+            for (auto & lq : q_state.layers) {
+                if (lq.has_pending) {
+                    // Discard uncommitted data: revert to pre-pending size
+                    lq.data.resize(lq.pending_off);
+                    lq.has_pending = false;
+                }
+            }
             break;
         }
 

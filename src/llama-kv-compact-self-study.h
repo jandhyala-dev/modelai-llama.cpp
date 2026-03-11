@@ -87,20 +87,25 @@ struct llama_context;
 // capturing post-RoPE Q tensors into q_state via cb_eval.
 //
 // Caller contract:
+//   - seq_id MUST be 0 (enforced by assert). This is because
+//     llama_batch_get_one() hardcodes sequence 0. When manual batch
+//     construction is added, this constraint can be lifted.
 //   - Context must have been prefilled (logits available from last decode)
 //   - q_state must be initialized via reset() before this call
 //   - KV cache must have room for n_generate additional tokens
 //
 // The function:
-//   1. Checks KV capacity (n_ctx - current_pos >= n_generate)
-//   2. Saves existing cb_eval, installs Q-capture callback
-//   3. Seeds first token from last prefill logits (argmax)
-//   4. Runs autoregressive loop: batch_get_one → decode → finalize_step → argmax
-//   5. Restores previous cb_eval
-//   6. Removes generated tokens from memory (llama_memory_seq_rm)
+//   1. Asserts seq_id == 0
+//   2. Checks KV capacity (n_ctx - current_pos >= n_generate)
+//   3. Saves existing cb_eval, installs Q-capture callback
+//   4. Seeds first token from last prefill logits (argmax)
+//   5. Runs autoregressive loop: batch_get_one → decode → finalize_step → argmax
+//   6. Restores previous cb_eval
+//   7. Removes generated tokens from memory (llama_memory_seq_rm)
 //
 // EOS tokens are ignored — generation continues for Q diversity.
-// On decode failure, breaks with partial capture (still usable).
+// On decode failure, discards uncommitted pending data and breaks
+// with partial capture (still usable).
 // Returns true if at least one token was generated.
 bool llama_kv_compact_self_study_generate(
         struct llama_context * ctx,
