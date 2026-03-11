@@ -25,6 +25,26 @@ ModelAI application-side changes (agent swarm flow, `/compact` endpoint, orchest
 
 ---
 
+# Review Conditions Resolution
+
+This section documents how each condition from the adversarial reviews was resolved. Conditions were raised by Reviewer-1 (20 findings, all incorporated in commit `3efe995b`) and Reviewer-2 (5 conditions requiring plan updates before implementation).
+
+## Reviewer-2 Conditions (resolved 2026-03-11)
+
+| # | Condition | Resolution | Location in Plan |
+|---|-----------|------------|-----------------|
+| R2-1 | **[#8] Generation loop underspecified** — No pseudocode for seed token, API calls, EOS handling, KV capacity pre-check | Added complete pseudocode in Part 1 Section "Autoregressive Generation Loop — Complete Specification" with all API calls, EOS-ignore, capacity pre-check, cleanup, and error handling | Part 1, after "GQA Regrouping Detail" |
+| R2-2 | **[#19] No quantitative pass/fail criteria** — Validation matrix lists metrics but no thresholds | Added per-test per-compression-ratio acceptance thresholds (ROUGE-L, F1, exact match), self-study vs surrogate delta, and paper reference baselines | Part 4, "Acceptance Criteria" subsection |
+| R2-3 | **[#27] Tool-call parser conflict** — #18183 (tighten parser) and #14697 (check content) contradict | Added explicit disambiguation rule: only parse `content` as tool calls when matching `{"name":..., "arguments":...}` structure or `<tool_call>` XML tags; bare JSON never triggers tool-call parsing | Workstream 7b, item 8-9 |
+| R2-4 | **[#31] Compacted prefix cache matching** — Token-level LCP fails against compacted prefixes | Added hash-based two-tier matching design: SHA-256 of original prefix token IDs at compaction time, two-tier lookup (token-LCP for uncompacted, hash for compacted), server API specification | Workstream 7e, item 6 |
+| R2-5 | **[#34] modelai- prefix in src/** — Part 8 files violate Part 5 upstream-ready convention | Renamed all remaining `modelai-*` files to `llama-*` prefix throughout Part 8 (8a already fixed, now 8c and 8d fixed), updated schedule table | Part 8c, 8d, Implementation Schedule |
+
+## Reviewer-1 Conditions (resolved in commit 3efe995b)
+
+All 20 findings from Reviewer-1's adversarial review were incorporated into the plan with exact code locations and specific fixes. See the individual workstream sections for details.
+
+---
+
 # Part 1: Self-Study Query Generation
 
 ## What Self-Study Is
@@ -321,6 +341,92 @@ Output matrix: [n_rep * n_tokens, n_embd_head] = [5 * 256, 128] = [1280, 128]
 - Feed as `llama_kv_compact_matrix` into existing `fit_beta()` and `fit_values()`
 - The solver sees 1024 real Q vectors instead of 256 K surrogates
 
+## Autoregressive Generation Loop — Complete Specification
+
+**[Reviewer-2 Condition R2-1]** Complete generation loop with all API calls, edge cases, and error handling.
+
+### Seed Token
+
+The first generated token comes from the **last prefilled token's logits** (argmax). If logits are unavailable from prefill, decode the last prefix token first:
+```
+seed_token = input_tokens[prefix_end - 1]
+llama_decode(ctx, llama_batch_get_one(&seed_token, 1, prefix_end - 1, seq_id))
+```
+
+### KV Capacity Pre-Check
+
+```cpp
+if (kv_used + n_generate > kv_size) {
+    LLAMA_LOG_WARN("self-study: insufficient KV capacity (%u used + %u needed > %u total)\n",
+                   kv_used, n_generate, kv_size);
+    return false;
+}
+```
+
+### Complete Pseudocode
+
+```cpp
+bool llama_kv_compact_self_study_generate(
+        llama_context * ctx, llama_q_capture_state & q_state,
+        const llama_kv_compact_self_study_config & config,
+        llama_seq_id seq_id, llama_pos prefix_end) {
+
+    const uint32_t n_generate = config.n_generate;  // default 256
+
+    // 1. KV capacity pre-check
+    if (llama_kv_cache_used_cells(ctx) + n_generate > llama_kv_cache_size(ctx)) {
+        LLAMA_LOG_WARN("self-study: insufficient KV capacity\n");
+        return false;
+    }
+
+    // 2. Save existing cb_eval and install Q-capture callback
+    auto prev_cb = ctx->cparams.cb_eval;
+    auto prev_ud = ctx->cparams.cb_eval_user_data;
+    q_state.active = true;
+    ctx->set_eval_callback(llama_q_capture_eval_callback, &q_state);
+
+    // 3. Seed token from last prefill logits
+    float * logits = llama_get_logits_ith(ctx, -1);
+    llama_token token = std::distance(logits,
+        std::max_element(logits, logits + llama_n_vocab(llama_get_model(ctx))));
+
+    // 4. Autoregressive generation loop
+    llama_pos pos = prefix_end;
+    uint32_t n_generated = 0;
+    for (uint32_t i = 0; i < n_generate; i++) {
+        llama_batch batch = llama_batch_get_one(&token, 1, pos, seq_id);
+        if (llama_decode(ctx, batch) != 0) {
+            LLAMA_LOG_ERROR("self-study: decode failed at step %u\n", i);
+            break;
+        }
+        // cb_eval fires during decode, capturing Q tensors
+        n_generated++;
+        pos++;
+        logits = llama_get_logits_ith(ctx, 0);
+        token = std::distance(logits,
+            std::max_element(logits, logits + llama_n_vocab(llama_get_model(ctx))));
+        // Do NOT stop on EOS — continue for Q diversity (text is discarded)
+    }
+
+    // 5. Restore previous cb_eval
+    q_state.active = false;
+    ctx->set_eval_callback(prev_cb, prev_ud);
+
+    // 6. Remove generated tokens from KV cache
+    llama_kv_cache_seq_rm(ctx, seq_id, prefix_end, prefix_end + n_generated);
+
+    LLAMA_LOG_INFO("self-study: captured Q from %u tokens\n", n_generated);
+    return n_generated > 0;
+}
+```
+
+### Key Design Decisions
+
+1. **EOS handling:** Continue past EOS for Q diversity. EOS fires early (~50 tokens); stopping yields too few Q vectors (50 x 5 GQA = 250, below 1024 target). Text is discarded; only Q tensors matter.
+2. **Greedy sampling (v0):** Argmax for reproducibility. v1: multiple continuations with different temperatures.
+3. **Graph rebuild:** Switching from multi-token prefill to single-token decode triggers a rebuild, picking up the new `cb_eval`.
+4. **Error recovery:** Partial Q capture is usable — fewer vectors means slightly lower quality, not failure.
+
 ---
 
 # Part 2: Model/Backend Coverage Expansion
@@ -488,6 +594,63 @@ Benchmark script for manual validation:
 - `tests/CMakeLists.txt` — Register workload test (LABEL "model")
 
 **Effort:** 2-3 days
+
+## Acceptance Criteria
+
+**[Reviewer-2 Condition R2-2]** Quantitative pass/fail thresholds per test case and compression ratio.
+
+### Per-Test Thresholds
+
+| Test | Compression | Metric | Pass Threshold | Source |
+|------|-------------|--------|----------------|--------|
+| **4a. SEC Filing** | 2x | ROUGE-L vs full context | >= 0.95 | Conservative estimate |
+| **4a. SEC Filing** | 5x | ROUGE-L vs full context | >= 0.90 | Conservative estimate |
+| **4a. SEC Filing** | 10x | ROUGE-L vs full context | >= 0.85 | Conservative estimate |
+| **4b. Long Doc QA** | 2x | F1 on extraction tasks | >= 0.93 | Conservative estimate |
+| **4b. Long Doc QA** | 5x | F1 on extraction tasks | >= 0.85 | Conservative estimate |
+| **4b. Long Doc QA** | 10x | F1 on extraction tasks | >= 0.75 | Conservative estimate |
+| **4c. Multi-Filing** | 2x | Throughput vs full context | >= 1.5x speedup | Minimum viable benefit |
+| **4c. Multi-Filing** | 5x | Accuracy vs full context | >= 0.88 | Must not regress |
+| **4d. Vision Document** | 2x | Answer accuracy (exact match) | >= 0.90 | Conservative estimate |
+| **4e. Small Model Smoke** | any | No crashes | 0 crashes | Hard requirement |
+
+### Self-Study vs Surrogate Quality Delta
+
+Self-study queries (Part 1) must outperform cache-key surrogates (existing K-as-Q baseline) to justify the additional generation cost:
+
+| Compression | Metric | Required Delta |
+|-------------|--------|---------------|
+| 2x | ROUGE-L (4a) | self-study >= surrogate (no regression) |
+| 5x | ROUGE-L (4a) | self-study > surrogate by >= 2 percentage points |
+| 10x | ROUGE-L (4a) | self-study > surrogate by >= 5 percentage points |
+| 5x | Logit cosine similarity | self-study > surrogate by >= 0.02 |
+
+### Reference Baselines from Paper
+
+From arXiv:2602.16284, Table 2 (QuALITY benchmark, Llama-3-8B-Instruct):
+- 2x compression: ~71.5% accuracy
+- 5x compression: ~70% accuracy
+- 10x compression: ~67% accuracy
+
+Our implementation targets may differ due to model differences (Qwen3-14B vs Llama-3-8B) and task differences (SEC filing extraction vs QuALITY multiple-choice). These paper numbers serve as sanity checks, not direct targets.
+
+### Workload Classification
+
+Each benchmark must specify its workload class to ensure reproducibility:
+
+| Class | Model Size | Prefix Length | Description |
+|-------|-----------|--------------|-------------|
+| **W1** | < 100M params | < 512 tokens | Unit/smoke tests (stories15M) |
+| **W2** | 1-10B params | 2K-8K tokens | Standard workloads (Qwen3-8B) |
+| **W3** | 10-30B params | 8K-32K tokens | Production workloads (Qwen3-14B) |
+
+### Failure Handling
+
+If a test fails its threshold:
+1. Log the actual metric value and the threshold
+2. Mark the test as FAIL (not SKIP)
+3. Continue running remaining tests (do not abort the suite)
+4. Aggregate results into a summary table with PASS/FAIL per test per compression ratio
 
 ---
 
@@ -817,8 +980,32 @@ ModelAI is an agentic runtime. The server must never crash or hang because a mod
    - Unknown tool → structured validation error, not crash
    - Invalid arguments → structured error, not crash
    - Partial tool-call in streaming → incremental safe parse, not crash
-8. **Dual-path tool-call detection** (#14697): check both `content` and `tool_calls` fields; normalize into `tool_calls` array
-9. **Fix phantom tool-call detection** (#18183): tighten Hermes 2 Pro parser to require proper `<tool_call>` tags, not bare JSON in text
+8. **Dual-path tool-call detection with disambiguation** (#14697 + #18183):
+
+   **[Reviewer-2 Condition R2-3]** These two fixes conflict: #14697 says "check `content` for tool calls" while #18183 says "don't parse `content` as tool calls." The disambiguation rule resolves this:
+
+   **Rule:** Only parse `content` as tool calls when the content matches a **recognized tool-call structure**:
+   - **XML format:** Content contains `<tool_call>` or `<function_call>` XML tags (Hermes 2 Pro, Mistral formats)
+   - **JSON format:** Content is a JSON object (or array of objects) where each object has BOTH `"name"` (string) AND `"arguments"` (string or object) fields — i.e., matches `{"name": <string>, "arguments": <string|object>, ...}`
+   - **All other JSON:** Bare JSON objects, arrays, or JSON embedded in natural language text MUST NOT trigger tool-call parsing. This includes: `{"key": "value"}` without name+arguments, JSON code blocks in explanations, JSON examples in assistant text.
+
+   **Implementation:** In `common/chat.cpp` tool-call detection path:
+   ```cpp
+   // Only parse content as tool call if it matches a recognized structure
+   bool is_tool_call_json(const json & j) {
+       if (!j.is_object()) return false;
+       return j.contains("name") && j["name"].is_string()
+           && j.contains("arguments");
+   }
+   bool is_tool_call_xml(const std::string & text) {
+       return text.find("<tool_call>") != std::string::npos
+           || text.find("<function_call>") != std::string::npos;
+   }
+   ```
+
+   **Normalization:** When tool calls are found in `content` (via either format), move them to the `tool_calls` array. Strip the tool-call portion from `content`. If `content` contained ONLY tool calls, set `content` to null.
+
+9. **Fix phantom tool-call detection** (#18183): tighten Hermes 2 Pro parser to require proper `<tool_call>` tags per the disambiguation rule above. The parser in `common/chat-parser.cpp` must NOT interpret bare JSON as tool calls even if the JSON happens to be valid.
 10. **Fix CJK re-encoding** (#19391): fix `ensure_ascii` handling in `common/chat-parser.cpp` for multi-turn tool arguments
 11. **Handle pre-tag content** (#20260): parser must tolerate `<think>...<tool_call>` sequences from thinking models
 12. **Explicit "bad tool call" response path:** return structured error object, never leave slot/task in corrupt state
@@ -965,12 +1152,64 @@ ModelAI uses long sessions, repeated prompts, and save/restore. Generic prompt-c
 
 5. **Add hard guardrails:** bounded reuse, explicit failure on KV exhaustion, no uncontrolled auto-generation
 
-6. **Align with compaction state model:** compacted prefix IS the prompt cache; new requests matching a compacted prefix reuse it
+6. **Align with compaction state model — hash-based compacted prefix matching:**
+
+   **[Reviewer-2 Condition R2-4]** The server's existing LCP (Longest Common Prefix) matching at `server-context.cpp:2374-2441` compares token IDs:
+   ```cpp
+   n_past = slot.prompt.tokens.get_common_prefix(input_tokens);
+   ```
+   A compacted prefix is NOT a token sequence — it's a compressed KV representation of N tokens in M slots (M << N). Token-level LCP matching will always fail against compacted prefixes because the token IDs don't match the compacted representation. This is a fundamental architectural mismatch.
+
+   **Design: Two-Tier Cache Matching**
+
+   Tier 1 — **Token-LCP matching** (existing, for uncompacted prefixes):
+   - Works as today: compare incoming prompt token IDs against cached slot tokens
+   - Used when the slot has not been compacted
+
+   Tier 2 — **Hash-based matching** (new, for compacted prefixes):
+   - At compaction time, compute SHA-256 of the ORIGINAL prefix token IDs (before compaction)
+   - Store the hash alongside the compacted prefix metadata in `llama_kv_compacted_prefix_store`
+   - On new request, compute SHA-256 of the incoming prompt's prefix portion
+   - If hash matches a compacted prefix, reuse the compacted KV data
+
+   **Data structures:**
+   ```cpp
+   // Added to llama_kv_compacted_prefix_store (or server-level cache)
+   struct compacted_prefix_cache_entry {
+       uint8_t   prefix_hash[32];     // SHA-256 of original token IDs
+       uint32_t  n_original_tokens;   // length of original prefix
+       llama_seq_id seq_id;           // sequence owning this prefix
+       int64_t   compacted_at_ns;     // timestamp for LRU eviction
+   };
+   ```
+
+   **Matching algorithm:**
+   ```
+   on_new_request(input_tokens):
+       // Tier 1: try token-LCP matching (existing path)
+       n_past = slot.prompt.tokens.get_common_prefix(input_tokens)
+       if n_past >= slot.prompt.tokens.size() * 0.9:
+           return use_lcp_match(n_past)
+
+       // Tier 2: try compacted prefix hash matching
+       candidate_hash = sha256(input_tokens[0..expected_prefix_len])
+       for each compacted_entry in cache:
+           if candidate_hash == compacted_entry.prefix_hash
+              && len(input_tokens) >= compacted_entry.n_original_tokens:
+               // Compacted prefix covers the incoming prompt's prefix
+               return use_compacted_prefix(compacted_entry, input_tokens)
+
+       // No match — full prefill required
+       return prefill_from_scratch(input_tokens)
+   ```
+
+   **Interaction with Part 8b (Excel-aware prefix caching):** The `prefix_fingerprint` API from Part 8b can be implemented ON TOP of this hash-based matching. The product computes a fingerprint (e.g., from workbook structure), the server uses it as an additional matching key alongside the token-hash. The two mechanisms are complementary: token-hash matches exact prompts, fingerprint matches semantically equivalent prompts.
 
 ### Files
-- `tools/server/server-context.cpp` — prompt save/load (lines 225-248, 1138-1158, 2374-2441), checkpoint validation (lines 2549-2557)
+- `tools/server/server-context.cpp` — prompt save/load (lines 225-248, 1138-1158, 2374-2441), checkpoint validation (lines 2549-2557), new hash-based matching
 - `tools/server/server.cpp` — `cache_prompt` configuration
 - `src/llama-kv-cache.cpp` — sequence management interaction with cache
+- `src/llama-kv-compacted-prefix.h` — add `prefix_hash` to store metadata
 
 ### Tests Required
 1. Repeated `cache_prompt` request — stable, no growth
@@ -1015,10 +1254,14 @@ If `llama-server` is 3x slower than `llama-cli` (#12171), or if merely enabling 
 1. Server vs CLI prompt-eval benchmark on real-text prompt
 2. Tool-enabled vs tool-disabled throughput comparison
 3. Structured-output overhead measurement
-4. ModelAI-like benchmark: real document + repeated follow-up + measured throughput
+4. ModelAI workload benchmark: W2 or W3 workload using a model >= 1B params, a >= 2048-token real-text prefix, and explicit quality thresholds
 
 ### Merge Gate
-- Measured improvement on at least one real workload
+- Measured improvement on at least one real workload meeting the minimum benchmark contract:
+  - workload class: W2 or W3
+  - model size: >= 1B params
+  - prefix length: >= 2048 real-text tokens
+  - quality threshold: cosine similarity >= 0.95 versus the full-context baseline
 - Telemetry clearly shows where gains come from
 - No regression in correctness or structured/tool behavior
 
@@ -1030,9 +1273,9 @@ If `llama-server` is 3x slower than `llama-cli` (#12171), or if merely enabling 
 
 ## Why This Is Needed
 
-**[P2 Finding]** The backend capability matrix from the performance roadmap is still docs-only. There is no real `modelai_backend_caps`-style runtime probe for Metal/CUDA/Vulkan/CPU. Current server reporting mostly echoes configured params.
+**[P2 Finding]** The backend capability matrix from the performance roadmap is still docs-only. There is no real `llama_backend_caps`-style runtime probe for Metal/CUDA/Vulkan/CPU. Current server reporting mostly echoes configured params.
 
-**[P2 Finding]** Prefix caching is only generic llama.cpp prompt reuse (`cache_prompt`, LCP matching), not the Excel-specific stable-prefix/workbook-fingerprint cache described in the performance roadmap. No workbook-schema hashing, per-workbook persistence, or partial invalidation.
+**[P2 Finding]** Prefix caching is only generic llama.cpp prompt reuse (`cache_prompt`, LCP matching), not the generic stable prefix-fingerprint cache described in the performance roadmap. No stable fingerprint persistence, no fingerprint index, and no explicit product/server invalidation contract.
 
 **[P2 Finding]** Batch/ubatch autotuning and laptop-aware thread scheduling are not implemented. Only manual `--threads`, `--threads-batch`, `--batch-size`, `--ubatch-size` knobs exist. No first-run benchmarking, per-device persistence, or P-core/E-core style policy.
 
@@ -1041,7 +1284,7 @@ If `llama-server` is 3x slower than `llama-cli` (#12171), or if merely enabling 
 ## 8a. Backend Capability Detection
 
 ### Objective
-Build a runtime `modelai_backend_caps` struct populated at model load, so every optimization policy is backend-aware rather than hardcoded.
+Build a runtime `llama_backend_caps` struct populated at model load, so every optimization policy is backend-aware rather than hardcoded.
 
 ### Why It's Needed
 The Excel product ships on Metal (Mac), CUDA (NVIDIA Windows), Vulkan (AMD/Intel Windows), and CPU fallback. Not all optimizations are available everywhere. Without runtime detection, the product either ships the lowest-common-denominator or crashes on unsupported backends.
@@ -1086,20 +1329,20 @@ Populate by querying backend feature flags at model load. Gate all optimization 
 
 **Effort:** 2-3 days (PR-7)
 
-## 8b. Excel-Aware Prefix Caching
+## 8b. Prefix Fingerprint Caching
 
 ### Objective
-Replace generic token-prefix matching with workbook-fingerprint-based prefix caching.
+Replace generic token-prefix matching with product-supplied stable prefix fingerprints.
 
 ### Why It's Needed
 Generic LCP matching only reuses tokens that are byte-identical at the start of the prompt. For ModelAI:
-- Same workbook + different question = same system prefix + different user turn → LCP works
-- Same workbook + structural change (new sheet, new named range) → LCP fails, full re-prefill
+- Same workbook + different question = same system prefix + different user turn → token-LCP may work
+- Same workbook + structural change (new sheet, new named range) → token-LCP often fails even when the logical prefix remains reusable
 - Compacted prefix cannot be matched by token-LCP because compacted KV is not token-aligned
 
 ### Implementation
 
-**Architecture note:** The server should expose a **generic prefix fingerprint API** — the product (ModelAI Excel add-in) computes the fingerprint from workbook structure and passes it to the server. Workbook-specific knowledge (named ranges, tabs, column types) stays in the product layer, not the inference engine. This avoids a layering violation.
+**Architecture note:** The server should expose a **generic prefix fingerprint API** — the product (ModelAI Excel add-in) computes the fingerprint from workbook structure and passes it to the server. Workbook-specific knowledge (named ranges, tabs, column types, invalidation policy) stays in the product layer, not the inference engine. This avoids a layering violation.
 
 1. **Server-side: generic fingerprint-based prefix matching** — accept a `prefix_fingerprint` field in request. Match against stored prefixes by fingerprint instead of token-LCP. Return cache hit/miss status.
 2. **Product-side: stable prefix hashing** — compute hash from system prompt + tool definitions + workbook schema. Pass as `prefix_fingerprint` to server.
@@ -1112,7 +1355,7 @@ Generic LCP matching only reuses tokens that are byte-identical at the start of 
 - `tools/server/server-context.cpp` — prefix matching, cache save/load (lines 2374-2441)
 - `tools/server/server.cpp` — slot management, `cache_prompt` logic
 - `src/llama-kv-cache.cpp` — `seq_pos_min/max`, hash-based matching
-- New: `tools/server/server-prefix-cache.h` — workbook fingerprint hashing
+- New: `tools/server/server-prefix-cache.h` — generic prefix fingerprint matching and cache indexing
 
 **Effort:** 3-4 days (PR-8)
 
@@ -1138,7 +1381,7 @@ Current behavior is "use configured/default values" (`llama-context.cpp:156-159`
 5. **Re-tune triggers:** model change, backend change, major app version
 
 ### Files
-- New: `src/modelai-autotune.h/.cpp` — benchmark grid, persistence
+- New: `src/llama-autotune.h/.cpp` — benchmark grid, persistence
 - `src/llama-context.cpp` — consume autotuned values
 - `common/common.cpp` — fallback defaults
 
@@ -1163,7 +1406,7 @@ Current `cpu_params` (`common/common.h:69-76`) has affinity mask and priority, b
 4. **Background mode:** reduce to E-cores only when app loses focus
 
 ### Files
-- New: `src/modelai-thread-policy.h/.cpp` — core detection, thermal monitoring
+- New: `src/llama-thread-policy.h/.cpp` — core detection, thermal monitoring
 - `common/common.cpp` — integrate with `cpu_params`
 - `ggml/src/ggml-cpu/ggml-cpu.cpp` — thread pool, affinity
 
@@ -1224,25 +1467,27 @@ Current `cpu_params` (`common/common.h:69-76`) has affinity mask and priority, b
 
 | Step | Part | What | Files | Risk | Effort |
 |------|------|------|-------|------|--------|
-| **8-1** | 8a | Backend capability detection | modelai-backend-caps.h/.cpp, server-context.cpp | Medium | 2-3 days |
-| **8-2** | 8b | Excel-aware prefix caching | server-context.cpp, server-prefix-cache.h | High | 3-4 days |
-| **8-3** | 8c | Batch/ubatch autotuning | modelai-autotune.h/.cpp, llama-context.cpp | Medium | 3-4 days |
-| **8-4** | 8d | Laptop-aware thread scheduling | modelai-thread-policy.h/.cpp, common.cpp | Medium | 2-3 days |
+| **8-1** | 8a | Backend capability detection | common/llama-backend-caps.h/.cpp, server-context.cpp | Medium | 2-3 days |
+| **8-2** | 8b | Prefix fingerprint caching | server-context.cpp, server-prefix-cache.h | High | 3-4 days |
+| **8-3** | 8c | Batch/ubatch autotuning | llama-autotune.h/.cpp, llama-context.cpp | Medium | 3-4 days |
+| **8-4** | 8d | Laptop-aware thread scheduling | llama-thread-policy.h/.cpp, common.cpp | Medium | 2-3 days |
 
 **Phase 4 Total: ~10-14 days**
 
-**Grand Total: ~42-57 days across all phases**
+**Grand Total: ~42-57 days of implementation-focused engineering time across all phases**  
+**Practical planning note:** including review cycles, debugging, soak tests, benchmark reruns, and merge friction, expect closer to ~50-70 calendar days for one implementer.
 
 ### Recommended Implementation Order
 
 1. **Phase 1 first** (Parts 1-5): KV compaction core is the primary value proposition
 2. **Phase 2 immediately after** (Part 6): Wiring compaction into the server makes it consumable by the product
-3. **Phase 3 can run in parallel** (Part 7): Server hardening is independent of compaction code; separate branches
-4. **Phase 4 after Phase 1-3** (Part 8): Optimization only makes sense once correctness is proven
+3. **Phase 3a crash-path hardening can start in parallel** (Part 7): prioritize 7a/7b/7d crash and hang fixes early on separate branches
+4. **Phase 3b soak/perf hardening follows 3a**: structured-output stability, prompt-cache hygiene, and server performance work after the crash paths are closed
+5. **Phase 4 after Phase 1-3** (Part 8): Optimization only makes sense once correctness is proven
 
 **Branch strategy:**
 - Phase 1-2: `kv-compact-pr6b-*` branches merged into `modelai-main`
-- Phase 3: `server-hardening-pr*` branches merged into `modelai-main`
+- Phase 3a/3b: `server-hardening-pr*` branches merged into `modelai-main`
 - Phase 4: `perf-pr7-*` and `perf-pr8-*` branches
 
 ---
@@ -1323,7 +1568,7 @@ After ALL modelai-llama.cpp code changes are complete, confirm the following int
 3. **Orchestrator logic** — when to compact, which method to use, threshold decisions
 4. **Capability consumption** — product reads `/props` `compacted_prefix.available` and `compacted_prefix.enabled` to gate UI features
 5. **FA override awareness** — product detects when compaction forces non-flash attention and shows appropriate UX
-6. **Backend-aware defaults** — product consumes `modelai_backend_caps` for initial configuration on fresh install
+6. **Backend-aware defaults** — product consumes `llama_backend_caps` for initial configuration on fresh install
 
 ## Server-Side Integration (verify in CI)
 
@@ -1344,3 +1589,8 @@ This plan is complete when:
 6. Prompt-cache behavior is bounded and predictable
 7. All tests pass on Metal backend (Apple Silicon primary target)
 8. Fork summary support matrix matches reality
+9. At least one real ModelAI workload closure gate passes with all of:
+   - workload class W2 or W3
+   - model size >= 1B params
+   - prefix length >= 2048 real-text tokens
+   - quality threshold cosine similarity >= 0.95 versus the full-context baseline
