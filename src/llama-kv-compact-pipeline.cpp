@@ -197,3 +197,92 @@ bool llama_kv_compact_fit_from_live_kv(
 
     return true;
 }
+
+bool llama_kv_compact_select_from_live_kv(
+        llama_kv_cache & kv,
+        llama_seq_id seq_id,
+        uint32_t target_tokens,
+        llama_pos live_suffix_pos0,
+        llama_kv_compact_pipeline_stats * stats,
+        llama_pos p0) {
+    if (seq_id < 0 || target_tokens == 0 || live_suffix_pos0 <= p0) {
+        return false;
+    }
+
+    std::vector<llama_pos> prefix_positions;
+    if (!kv.compacted_prefix_seq_positions(seq_id, p0, live_suffix_pos0, prefix_positions)) {
+        return false;
+    }
+    if (prefix_positions.empty()) {
+        return false;
+    }
+
+    const auto & layouts = kv.get_compacted_prefix()->get_layouts();
+    if (layouts.empty()) {
+        return false;
+    }
+
+    const uint32_t n_prefix_tokens = prefix_positions.size();
+    const uint32_t n_selected = std::min<uint32_t>(target_tokens, n_prefix_tokens);
+
+    // Selection-only: keep the earliest n_selected positions (already sorted).
+    std::vector<llama_pos> selected_positions(prefix_positions.begin(),
+                                               prefix_positions.begin() + n_selected);
+
+    const llama_pos seq_max = kv.seq_pos_max(seq_id);
+    const uint32_t logical_token_count = seq_max >= 0 ? uint32_t(seq_max + 1) : uint32_t(live_suffix_pos0);
+    if (!kv.compacted_prefix_configure(seq_id, logical_token_count, selected_positions, live_suffix_pos0)) {
+        return false;
+    }
+
+    auto * seq = kv.get_compacted_prefix()->get_seq(seq_id);
+    if (seq == nullptr || !seq->enabled || seq->layers.size() != layouts.size()) {
+        return false;
+    }
+
+    // Populate K/V from original cache values with zero beta.
+    for (size_t li = 0; li < layouts.size(); ++li) {
+        const auto & layout = layouts[li];
+        auto & dst_layer = seq->layers[li];
+
+        for (uint32_t head = 0; head < layout.n_head_kv; ++head) {
+            // Copy original K
+            std::vector<float> k_f32;
+            if (!kv.compacted_prefix_copy_k_head_f32(
+                        int32_t(layout.layer_id), seq_id, head, selected_positions, k_f32)) {
+                return false;
+            }
+            llama_kv_compact_matrix k_mat(n_selected, layout.n_embd_head_k);
+            k_mat.data = std::move(k_f32);
+            write_compacted_payload(dst_layer.k_data, layout.type_k, layout.n_head_kv,
+                                    n_selected, head, layout.n_embd_head_k, k_mat);
+
+            // Copy original V
+            if (layout.n_embd_head_v > 0) {
+                std::vector<float> v_f32;
+                if (!kv.compacted_prefix_copy_v_head_f32(
+                            int32_t(layout.layer_id), seq_id, head, selected_positions, v_f32)) {
+                    return false;
+                }
+                llama_kv_compact_matrix v_mat(n_selected, layout.n_embd_head_v);
+                v_mat.data = std::move(v_f32);
+                write_compacted_payload(dst_layer.v_data, layout.type_v, layout.n_head_kv,
+                                        n_selected, head, layout.n_embd_head_v, v_mat);
+            }
+
+            // Zero beta
+            for (uint32_t t = 0; t < n_selected; ++t) {
+                dst_layer.beta_data[size_t(head) * n_selected + t] = 0.0f;
+            }
+        }
+    }
+
+    if (stats) {
+        stats->query_generation_time_ms = 0.0;
+        stats->solver_time_ms = 0.0;
+        stats->n_prefix_tokens = n_prefix_tokens;
+        stats->n_selected_tokens = n_selected;
+    }
+
+    return true;
+}

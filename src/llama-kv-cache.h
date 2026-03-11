@@ -184,6 +184,12 @@ public:
             uint32_t max_queries = 256,
             int nnls_iters = 64,
             float lambda = 1e-6f);
+    bool compacted_prefix_select_from_live_kv(
+            llama_seq_id seq_id,
+            uint32_t target_tokens,
+            llama_pos live_suffix_pos0,
+            llama_kv_compact_pipeline_stats * stats = nullptr,
+            llama_pos p0 = 0);
 
     bool compacted_prefix_layer_layout_for_solver(int32_t il, llama_compacted_prefix_layer_layout & out) const;
     bool compacted_prefix_seq_positions(llama_seq_id seq_id, llama_pos p0, llama_pos p1, std::vector<llama_pos> & out) const;

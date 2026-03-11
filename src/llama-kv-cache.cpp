@@ -785,6 +785,15 @@ bool llama_kv_cache::compacted_prefix_fit_from_live_kv(
     return llama_kv_compact_fit_from_live_kv(*this, seq_id, target_tokens, live_suffix_pos0, stats, p0, max_queries, nnls_iters, lambda);
 }
 
+bool llama_kv_cache::compacted_prefix_select_from_live_kv(
+        llama_seq_id seq_id,
+        uint32_t target_tokens,
+        llama_pos live_suffix_pos0,
+        llama_kv_compact_pipeline_stats * stats,
+        llama_pos p0) {
+    return llama_kv_compact_select_from_live_kv(*this, seq_id, target_tokens, live_suffix_pos0, stats, p0);
+}
+
 bool llama_kv_cache::compacted_prefix_layer_layout_for_solver(int32_t il, llama_compacted_prefix_layer_layout & out) const {
     const auto it = map_layer_ids.find(il);
     if (it == map_layer_ids.end()) {

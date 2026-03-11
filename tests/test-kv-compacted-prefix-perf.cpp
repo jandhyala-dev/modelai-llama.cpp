@@ -102,9 +102,9 @@ int main(int argc, char ** argv) {
     }
 
     llama_kv_compact_pipeline_stats stats = {};
-    if (!kv->compacted_prefix_fit_from_live_kv(0, 64, 256, &stats)) {
+    if (!kv->compacted_prefix_select_from_live_kv(0, 64, 256, &stats)) {
         llama_batch_free(batch);
-        return fail("failed to fit compacted prefix from live KV");
+        return fail("failed to select compacted prefix from live KV");
     }
     if (!kv->compacted_prefix_set_execution(0, true)) {
         llama_batch_free(batch);

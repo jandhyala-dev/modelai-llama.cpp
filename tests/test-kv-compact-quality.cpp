@@ -121,139 +121,22 @@ int main(int argc, char ** argv) {
         return fail("failed to restore compacted state");
     }
 
-    const bool bypass_solver = std::getenv("BYPASS_SOLVER") != nullptr;
-    const bool raw_v_mode    = std::getenv("RAW_V") != nullptr;
-    const bool zero_beta_mode = std::getenv("ZERO_BETA") != nullptr;
+    const bool use_solver = std::getenv("USE_SOLVER") != nullptr;
 
     llama_kv_compact_pipeline_stats stats = {};
 
-    if (bypass_solver) {
-        // Diagnostic mode: populate compacted prefix with original K/V and zero beta.
-        // This isolates the execution path from the solver.
-        std::printf("BYPASS_SOLVER=1: using raw K/V with zero beta\n");
-
-        std::vector<llama_pos> prefix_positions;
-        if (!kv->compacted_prefix_seq_positions(0, 0, live_suffix_pos0, prefix_positions)) {
-            llama_batch_free(batch);
-            return fail("bypass: failed to get prefix positions");
-        }
-
-        // For bypass, select all positions (or first compacted_tokens)
-        if ((int)prefix_positions.size() > compacted_tokens) {
-            prefix_positions.resize(compacted_tokens);
-        }
-
-        const llama_pos seq_max = kv->seq_pos_max(0);
-        const uint32_t logical_count = seq_max >= 0 ? uint32_t(seq_max + 1) : uint32_t(live_suffix_pos0);
-        if (!kv->compacted_prefix_configure(0, logical_count, prefix_positions, live_suffix_pos0)) {
-            llama_batch_free(batch);
-            return fail("bypass: failed to configure compacted prefix");
-        }
-
-        auto * seq = kv->get_compacted_prefix()->get_seq(0);
-        if (seq == nullptr || !seq->enabled) {
-            llama_batch_free(batch);
-            return fail("bypass: sequence not configured");
-        }
-
-        const auto & layouts = kv->get_compacted_prefix()->get_layouts();
-        const uint32_t n_sel = prefix_positions.size();
-
-        for (size_t li = 0; li < layouts.size(); ++li) {
-            const auto & layout = layouts[li];
-            auto & dst_layer = seq->layers[li];
-
-            for (uint32_t head = 0; head < layout.n_head_kv; ++head) {
-                // Copy K directly from cache
-                std::vector<float> k_f32;
-                if (!kv->compacted_prefix_copy_k_head_f32(int32_t(layout.layer_id), 0, head, prefix_positions, k_f32)) {
-                    llama_batch_free(batch);
-                    return fail("bypass: failed to copy K");
-                }
-
-                // Write K to store
-                auto from_float_k = ggml_get_type_traits(layout.type_k)->from_float_ref;
-                const size_t k_token_bytes = ggml_row_size(layout.type_k, layout.n_embd_head_k);
-                for (uint32_t t = 0; t < n_sel; ++t) {
-                    void * dst_ptr = dst_layer.k_data.data() + (size_t(head) * n_sel + t) * k_token_bytes;
-                    from_float_k(k_f32.data() + size_t(t) * layout.n_embd_head_k, dst_ptr, layout.n_embd_head_k);
-                }
-
-                // Copy V directly from cache
-                std::vector<float> v_f32;
-                if (!kv->compacted_prefix_copy_v_head_f32(int32_t(layout.layer_id), 0, head, prefix_positions, v_f32)) {
-                    llama_batch_free(batch);
-                    return fail("bypass: failed to copy V");
-                }
-
-                // Write V to store
-                auto from_float_v = ggml_get_type_traits(layout.type_v)->from_float_ref;
-                const size_t v_token_bytes = ggml_row_size(layout.type_v, layout.n_embd_head_v);
-                for (uint32_t t = 0; t < n_sel; ++t) {
-                    void * dst_ptr = dst_layer.v_data.data() + (size_t(head) * n_sel + t) * v_token_bytes;
-                    from_float_v(v_f32.data() + size_t(t) * layout.n_embd_head_v, dst_ptr, layout.n_embd_head_v);
-                }
-
-                // Set beta to 0
-                for (uint32_t t = 0; t < n_sel; ++t) {
-                    dst_layer.beta_data[size_t(head) * n_sel + t] = 0.0f;
-                }
-            }
-        }
-
-        stats.n_prefix_tokens = n_sel;
-        stats.n_selected_tokens = n_sel;
-        stats.query_generation_time_ms = 0.0;
-        stats.solver_time_ms = 0.0;
-    } else {
+    if (use_solver) {
+        std::printf("USE_SOLVER=1: full solver pipeline (beta + V fitting)\n");
         if (!kv->compacted_prefix_fit_from_live_kv(0, compacted_tokens, live_suffix_pos0, &stats)) {
             llama_batch_free(batch);
             return fail("failed to fit compacted prefix from live KV");
         }
-
-        // Post-solver diagnostic overrides
-        if (raw_v_mode || zero_beta_mode) {
-            auto * seq = kv->get_compacted_prefix()->get_seq(0);
-            if (seq == nullptr || !seq->enabled) {
-                llama_batch_free(batch);
-                return fail("diagnostic: sequence not configured after solver");
-            }
-
-            const auto & layouts = kv->get_compacted_prefix()->get_layouts();
-
-            if (zero_beta_mode) {
-                std::printf("ZERO_BETA=1: zeroing all beta values (keeping solver K/V)\n");
-                for (size_t li = 0; li < layouts.size(); ++li) {
-                    auto & dst_layer = seq->layers[li];
-                    std::fill(dst_layer.beta_data.begin(), dst_layer.beta_data.end(), 0.0f);
-                }
-            }
-
-            if (raw_v_mode) {
-                std::printf("RAW_V=1: overwriting solver V with original cache V (keeping solver beta)\n");
-                for (size_t li = 0; li < layouts.size(); ++li) {
-                    const auto & layout = layouts[li];
-                    auto & dst_layer = seq->layers[li];
-                    const uint32_t n_sel = dst_layer.n_compacted_tokens;
-
-                    for (uint32_t head = 0; head < layout.n_head_kv; ++head) {
-                        std::vector<float> v_f32;
-                        if (!kv->compacted_prefix_copy_v_head_f32(
-                                    int32_t(layout.layer_id), 0, head,
-                                    seq->logical_positions, v_f32)) {
-                            llama_batch_free(batch);
-                            return fail("RAW_V: failed to copy V from cache");
-                        }
-
-                        auto from_float_v = ggml_get_type_traits(layout.type_v)->from_float_ref;
-                        const size_t v_token_bytes = ggml_row_size(layout.type_v, layout.n_embd_head_v);
-                        for (uint32_t t = 0; t < n_sel; ++t) {
-                            void * dst_ptr = dst_layer.v_data.data() + (size_t(head) * n_sel + t) * v_token_bytes;
-                            from_float_v(v_f32.data() + size_t(t) * layout.n_embd_head_v, dst_ptr, layout.n_embd_head_v);
-                        }
-                    }
-                }
-            }
+    } else {
+        // Default: selection-only pipeline (raw K/V, zero beta).
+        // More robust on GQA architectures than cache-key-query solver.
+        if (!kv->compacted_prefix_select_from_live_kv(0, compacted_tokens, live_suffix_pos0, &stats)) {
+            llama_batch_free(batch);
+            return fail("failed to select compacted prefix from live KV");
         }
     }
 
@@ -269,15 +152,13 @@ int main(int argc, char ** argv) {
     const std::vector<float> compacted_logits = decode_one_and_capture_logits(ctx, continuation, seed_tokens);
     const float logits_cos = llama_kv_compact_cosine_similarity(baseline_logits, compacted_logits);
 
-    if (!bypass_solver) {
-        if (stats.n_prefix_tokens != (uint32_t)live_suffix_pos0 || stats.n_selected_tokens != (uint32_t)compacted_tokens) {
-            llama_batch_free(batch);
-            return fail("unexpected pipeline stats after compacted fit");
-        }
-        if (stats.query_generation_time_ms <= 0.0 || stats.solver_time_ms <= 0.0) {
-            llama_batch_free(batch);
-            return fail("pipeline timings should be populated");
-        }
+    if (stats.n_prefix_tokens != (uint32_t)live_suffix_pos0 || stats.n_selected_tokens != (uint32_t)compacted_tokens) {
+        llama_batch_free(batch);
+        return fail("unexpected pipeline stats after compacted fit");
+    }
+    if (use_solver && (stats.query_generation_time_ms <= 0.0 || stats.solver_time_ms <= 0.0)) {
+        llama_batch_free(batch);
+        return fail("solver pipeline timings should be populated");
     }
     if (kv->compacted_prefix_active_n_kv(0) > 256) {
         llama_batch_free(batch);
