@@ -903,7 +903,66 @@ Independent GitHub scan found these additional issues worth fixing in the fork:
 | **#9492** | First query extremely slow | Bad first impression for local runtime |
 | **#4218** | Grammar sampling performance (roadmap) | Structured output latency degrades all schema/tool responses |
 
-## Workstream 7a: Structured JSON Schema Correctness (#10732, #19716)
+### Additional Issues from March 2026 GitHub Scan
+
+**Tier 1 — Fix in Fork (CRITICAL, discovered 2026-03-11):**
+
+| Issue | Title | Why It Matters for ModelAI |
+|-------|-------|---------------------------|
+| **#19679** | Random crash on Apple Metal — grammar stack empty | `llama_grammar_accept_token` throws on empty grammar stack; M4 Mac Mini + Qwen3-Coder-Next + FA + jinja. Random crashes during agentic tool-call generation. **Affects PRIMARY deployment target.** |
+| **#19304** | Crash at 86K context / 50+ tool calls (grammar stack) | Same root cause as #19679 — grammar state machine fails on certain token pieces at grammar rule boundaries. Long agentic sessions will crash. |
+| **#19051** | Server fails open when JSON schema grammar parsing fails | When grammar parsing fails, server logs error but continues generation **unconstrained** (HTTP 200). Silent loss of structured output guarantees. Plan's 7a item 4 already covers intent — add issue # for traceability. |
+| **#19010** | Stack overflow in std::regex from crafted JSON Schema `pattern` | `_visit_pattern()` in `json-schema-to-grammar.cpp` uses `std::regex` which has unbounded stack depth. Crafted patterns cause server crash via stack overflow. DoS vector. |
+| **#19292** | Context shifting broken after PR #18986 (regression) | `llama_memory_seq_rm + llama_memory_seq_add` produces incoherent output. Directly relevant to compaction — if fork baseline includes this regression, compaction output will be garbage. **Verify fork baseline.** |
+| **#20093** | Heap buffer OOB in KV cache with M-RoPE (Qwen 3.5) | OOB read in `apply_ubatch()` during prompt cache restore — `pos.resize(n_tokens)` but M-RoPE needs `n_tokens * n_pos_per_embd`. Crashes on M-RoPE models. |
+
+**Tier 1 — Fix in Fork (HIGH):**
+
+| Issue | Title | Why It Matters for ModelAI |
+|-------|-------|---------------------------|
+| **#18591** | Tool calling broken in streaming mode (index regression) | Multiple tool calls all get index 0 instead of sequential. OpenAI API contract violation. **Verify fix in fork baseline.** |
+| **#19513** | Premature EOS instead of tool call after 10-20 calls | Model generates EOS instead of `<tool_call>` — agentic workflows terminate prematurely. Affects Qwen3-Coder-Next, Minimax, GLM. |
+| **#19869** | PEG parser crash with thinking models (Qwen3.5) | `common_chat_peg_parse` throws on degenerate repetition in thinking output. Parser code shared with llama-server. |
+| **#19872** | Qwen3.5 template error 500 on tool calls | Jinja `items` filter error on tool call arguments — HTTP 500. Tool calling broken for Qwen3.5. |
+
+**Tier 2 — Fix in Fork (MEDIUM):**
+
+| Issue | Title | Why It Matters for ModelAI |
+|-------|-------|---------------------------|
+| **#19858** | Qwen3.5 full prompt reprocessing every turn | SWA/hybrid models invalidate checkpoints on every turn — no prompt caching benefit. Duplicate of #19794 pattern. |
+| **#19760** | Stop signals not honored + context leakage between conversations | Multi-client correctness/privacy issue. |
+| **#19520** | gpt-oss template double-escapes tool arguments | Malformed prompts from double JSON escaping. |
+| **#19217** | Memory leak / infinite graph rebuild with LoRA (regression) | Server OOMs when LoRA adapters are used. Bisected to narrow commit range. |
+| **#20140** | KV cache offload corruption with --cpu-moe + GPU | Silent data corruption in KV cache during split CPU/GPU inference. |
+
+**Tier 3 — Monitor Upstream:**
+
+| Issue | Title | Why It Matters |
+|-------|-------|---------------|
+| **#19345** | llama.cpp 40% slower than vLLM on MoE models | Performance gap with dedicated serving frameworks. SWA prompt reprocessing contributes. |
+| **#19366** | llama.cpp 1/3 speed of MLX on Apple Silicon | M4 Pro: 24 tok/s llama.cpp vs 60 tok/s MLX for Qwen3-Coder-Next Q4_K_M |
+| **#19647** | Chat template inflexibility for fine-tuned model variants | Hard-coded tag parsing conflicts with model-specific thinking/tool tags |
+
+### Upstream Architectural Changes Affecting Compaction (merged Jan-Mar 2026)
+
+These merged upstream PRs introduce architectural changes that the compaction implementation must account for:
+
+| PR | Title | Impact on Compaction |
+|----|-------|---------------------|
+| **#19067** | kv-cache: V-less cache for MLA models | MLA models (DeepSeek, GLM 4.7) now store K-only with V as a view. Compaction solver assumes separate K/V — must detect MLA and skip V compaction or handle V-as-K-view. |
+| **#18601** | memory: `llama_memory_hybrid_iswa` abstraction | New hybrid memory interface for attention+recurrent models. Compaction hooks into `llama_kv_cache` must account for this abstraction layer. |
+| **#20301** | Dynamic `head_dim` and `n_rot` for SWA layers | SWA layers can now have per-layer dimensions. iSWA compaction graph (PR-6) assumed uniform dimensions — must validate. |
+| **#19408, #20288** | Server checkpoint overhaul (2-checkpoint strategy) | Server now maintains dual checkpoints near prompt end. Compacted prefix must produce valid checkpoints or server will invalidate and force full reprocessing. |
+| **#18675** | Autoparser: PEG-based tool-call parser rewrite | All legacy per-model parsers replaced. Fork's Workstream 7b tool-call fixes must target the NEW autoparser, not the old per-model parsers. **Major implementation surface change.** |
+| **#19928, #20132** | M-RoPE shift and checkpoint fixes | KV cache save/load now handles `llama_kv_cell_ext` for M-RoPE. Compaction state serialization must match. |
+
+### Strategic Risk: Upstream KV Compaction RFC (#20037)
+
+**[#20037](https://github.com/ggml-org/llama.cpp/issues/20037)** — Filed 2026-03-02 by Gavin0725, titled "Research: Implement Fast KV Compaction via Attention Matching." References the same arXiv:2602.16284 paper that this fork implements. Links to the MIT reference code at `github.com/adamzweiger/compaction`. No core team response yet, no PR attached.
+
+**Risk assessment:** If upstream begins implementing the same algorithm, our fork faces merge conflicts and potential design divergence. **Mitigation:** Our implementation is significantly ahead (Parts 1-6 designed, PR-5b shipped). Maintain upstream-ready naming and API conventions (Part 5) so our work can be contributed upstream if/when the RFC progresses.
+
+## Workstream 7a: Structured JSON Schema Correctness (#10732, #19716, #19051, #19010)
 
 ### Objective
 Make `response_format: { type: "json_schema", json_schema: ... }` behave deterministically with no silent fallback to unconstrained output. Accept all valid JSON Schema drafts.
@@ -922,7 +981,7 @@ ModelAI relies on structured output for report objects, table extraction, financ
    - **Validate `json_schema` is actually a JSON object** — `json_value(data, "json_schema", json::object())` at line 377 silently coerces non-object types to empty object. Add explicit type check.
 4. **Remove silent fallback:** if grammar compilation fails, return structured error, never continue as unconstrained text
 5. **Fix typeless schema node rejection** (#19716): JSON Schema properties with no `type` field (e.g. `{"description": "..."}`) are valid per drafts 4-2020-12. The `json_schema_to_grammar()` converter at `json-schema-to-grammar.cpp:984-987` already handles this (falls back to `value` primitive), but document this as intentional behavior. Consider adding a strict mode.
-6. **[CRITICAL] Add resource limits on grammar compilation** — the `_rules` map in `json-schema-to-grammar.cpp:318-336` has no size limit. Nested `allOf`/`oneOf` generates exponential rules. Recursive `visit()` has no depth limit (`json-schema-to-grammar.cpp:616-620`). Fix: add max depth limit (64), max rule count (10000), and compilation timeout.
+6. **[CRITICAL] Add resource limits on grammar compilation** — the `_rules` map in `json-schema-to-grammar.cpp:318-336` has no size limit. Nested `allOf`/`oneOf` generates exponential rules. Recursive `visit()` has no depth limit (`json-schema-to-grammar.cpp:616-620`). Fix: add max depth limit (64), max rule count (10000), and compilation timeout. **Additionally (#19010):** `_visit_pattern()` uses `std::regex` which has unbounded stack recursion on crafted patterns like `(a+)+b`. Fix: limit regex pattern length to 1024 characters, wrap `std::regex` construction in try-catch for `std::regex_error`, and consider replacing with RE2 for bounded execution.
 7. **Fix error accumulation** — `visit()` at `json-schema-to-grammar.cpp:989-991` returns empty string on unrecognized schema type instead of throwing immediately. Empty rules in the grammar map can produce unexpected behavior before `check_errors()` runs. Fix: throw immediately on unrecognized type.
 8. **Make grammar-generation path observable:** log schema compilation success/failure, surface state in task metadata
 9. **Add request-level metric hooks:** schema request count, compile failure count
@@ -983,9 +1042,13 @@ ModelAI is an agentic runtime. The server must never crash or hang because a mod
 
 6. **[HIGH] Fix uncaught `json::parse()` exceptions** (`chat.cpp:1462, 1466, 1595`): Several `json::parse()` calls in `common_chat_templates_apply_jinja()` have no try-catch. **Fix:** wrap in try-catch with structured error.
 
+**Important: Autoparser Rewrite (upstream PR #18675, merged 2026-03-06)**
+
+Upstream merged a complete rewrite of all tool-call parsers, replacing legacy per-model parsers with a unified PEG-based autoparser. This changes the implementation surface for items 7-13 below. The crash-path fixes (items 1-6) target lower-level code (`json-partial.cpp`, `chat.cpp` argument parsing) that is NOT replaced by the autoparser. But feature fixes 7-13 MUST be validated against the new PEG parser infrastructure. Before starting 7b feature work, sync the fork's `upstream-master` to include PR #18675 and verify which of items 7-13 are already addressed by the autoparser.
+
 **Feature Fixes:**
 
-7. **Harden tool-call parsing path** (`common/chat.cpp`):
+7. **Harden tool-call parsing path** (now PEG-based via `common/chat.cpp` and `common/chat-parser.cpp`):
    - Malformed JSON → structured parse error, not crash
    - Unknown tool → structured validation error, not crash
    - Invalid arguments → structured error, not crash
@@ -1054,10 +1117,10 @@ ModelAI is an agentic runtime. The server must never crash or hang because a mod
 
 **Effort:** 4-5 days
 
-## Workstream 7c: Structured-Output Stability Under Repeated Load (#17391, #19068)
+## Workstream 7c: Structured-Output Stability Under Repeated Load (#17391, #19068, #19679, #19304)
 
 ### Objective
-Make repeated structured-output workloads stable under sustained load with no memory leaks or state corruption.
+Make repeated structured-output workloads stable under sustained load with no memory leaks, state corruption, or grammar stack crashes.
 
 ### Why ModelAI Cares
 ModelAI workloads repeat the same extraction schema many times: many report sections, many company docs, repeated batch analysis. One-off correctness is insufficient — the runtime must survive hours of repetition.
@@ -1069,6 +1132,7 @@ ModelAI workloads repeat the same extraction schema many times: many report sect
    - Task teardown on completion, cancellation, parse failure, timeout
    - No grammar/parser state leaks across requests
 2. **Fix grammar trigger loop** (#19068): add error recovery when grammar sampler enters infinite trigger state. **Detection mechanism:** max iterations = 1000 per token; if exceeded, break with structured error "grammar loop detected at rule [rule_name]". Log the triggering grammar rule for debugging. **Recovery:** reset sampler state, return error to client, ensure slot is clean for next request.
+2b. **[CRITICAL] Fix grammar stack corruption crash** (#19679, #19304): `llama_grammar_accept_token` throws `std::runtime_error("Unexpected empty grammar stack after accepting piece")` during generation. Reproducible on Apple Metal (M4 Mac Mini) with Qwen3-Coder-Next + flash attention + jinja, and at 86K context after 50+ tool calls. Root cause: grammar state machine doesn't handle certain multi-byte token pieces at grammar rule boundaries — the stack becomes empty mid-acceptance. **Fix:** add defensive empty-stack check before accessing `stack.back()` in `llama_grammar_accept_token` (similar to the GGML_ASSERT → exception conversion already planned for `json-partial.cpp`). **Test:** long agentic session (50+ tool calls, 86K+ context) on Apple Metal with flash attention — must not crash.
 3. **Explicit cleanup on all non-happy paths:** timeout, cancel, parse failure, slot reuse, server sleep/wake
 4. **Add stress-safe structured request path:** avoid accumulating parser/grammar state in shared objects; ensure thread-safe lifecycle boundaries
 5. **Add metrics:** active structured requests, structured failures, structured cancellations
