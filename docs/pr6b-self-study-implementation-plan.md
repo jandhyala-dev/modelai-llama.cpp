@@ -586,7 +586,7 @@ Create algorithm and integration documentation suitable for upstream review.
 And lines 145-151 hardcode metrics to `false`/`nullptr`. The `/metrics` endpoint at line 3513 hardcodes `modelai_compacted_prefix_available = 0`.
 
 **Solution:**
-1. Add a `bool compaction_available()` method to `server_context` that checks whether the loaded model supports compaction (non-SWA primary cache, standard attention, non-MLA architecture).
+1. Add a `bool compaction_available()` method to `server_context` that checks whether the loaded model supports compaction. **Required checks:** non-SWA primary cache, standard attention, non-MLA architecture, non-hybrid-recurrent (Mamba layers have no KV), non-lfm2 (non-standard Q names would cause Q-capture to silently fail). For iSWA: report available=true with a `compaction_supported_layers` count (base layers only).
 2. Add a `bool compaction_enabled()` method that checks whether compaction is currently active on any slot.
 3. Wire these into `build_modelai_server_capabilities()` and `build_modelai_runtime_summary_from_metrics()`.
 4. Update the Prometheus metric to reflect real state.
@@ -643,7 +643,8 @@ This test will fail as soon as Q8_0 with block-aligned head dims is exercised, s
 1. Update the test to reflect the new reality: quantized K with block-aligned heads should SUCCEED.
 2. Add a test case for quantized K with NON-block-aligned heads (e.g., head_dim=17 with Q8_0 block_size=32) — this should still fail.
 3. Update `docs/modelai-fork-summary.md` line 186 to change "Quantized K compaction | Unsupported" to "Quantized K compaction | Supported (block-aligned head dims)".
-4. Add quality test: compaction with Q8_0 K cache produces acceptable reconstruction error.
+4. **[MAJOR] Verify full K extraction → solver → store → exec pipeline for Q8_0 K end-to-end.** The store accepts Q8_0 (`is_supported_compacted_type`), but does `compacted_prefix_copy_k_head_f32()` in `llama-kv-cache.cpp` correctly dequantize quantized K? It calls `ggml_backend_tensor_get()` which returns raw bytes — explicit dequantization is needed. If the solver receives raw quantized bytes interpreted as F32, results will be garbage. **Must trace the full path before claiming "Supported."**
+5. Add quality test: compaction with Q8_0 K cache produces acceptable reconstruction error (end-to-end, not just store acceptance).
 
 **Files:**
 - `tests/test-kv-compacted-prefix.cpp` — Fix quantized K test (line 346), add non-aligned negative test
@@ -740,20 +741,24 @@ ModelAI relies on structured output for report objects, table extraction, financ
 ### Implementation Changes
 
 1. **Normalize request parsing** for both `response_format.type == "json_schema"` and legacy `json_schema` field
-2. **Add explicit server-side validation:**
+2. **[CRITICAL] Reject requests that provide both `json_schema` AND `grammar` fields** — currently (`server-task.cpp:376`) the `if (!data.contains("grammar"))` guard means providing both fields silently ignores `json_schema` and uses the raw grammar with zero validation. This is a bypass path. Fix: return 400 if both fields present.
+3. **Add explicit server-side validation:**
    - Malformed schema → structured 4xx error
    - Unsupported schema feature → structured 4xx/5xx with explanation
    - Empty schema → explicit error
-3. **Remove silent fallback:** if grammar compilation fails, return structured error, never continue as unconstrained text
-4. **Fix typeless schema node rejection** (#19716): JSON Schema properties with no `type` field (e.g. `{"description": "..."}`) are valid per drafts 4-2020-12. The `json_schema_to_grammar()` converter must accept them
-5. **Make grammar-generation path observable:** log schema compilation success/failure, surface state in task metadata
-6. **Add request-level metric hooks:** schema request count, compile failure count
+   - **Validate `json_schema` is actually a JSON object** — `json_value(data, "json_schema", json::object())` at line 377 silently coerces non-object types to empty object. Add explicit type check.
+4. **Remove silent fallback:** if grammar compilation fails, return structured error, never continue as unconstrained text
+5. **Fix typeless schema node rejection** (#19716): JSON Schema properties with no `type` field (e.g. `{"description": "..."}`) are valid per drafts 4-2020-12. The `json_schema_to_grammar()` converter at `json-schema-to-grammar.cpp:984-987` already handles this (falls back to `value` primitive), but document this as intentional behavior. Consider adding a strict mode.
+6. **[CRITICAL] Add resource limits on grammar compilation** — the `_rules` map in `json-schema-to-grammar.cpp:318-336` has no size limit. Nested `allOf`/`oneOf` generates exponential rules. Recursive `visit()` has no depth limit (`json-schema-to-grammar.cpp:616-620`). Fix: add max depth limit (64), max rule count (10000), and compilation timeout.
+7. **Fix error accumulation** — `visit()` at `json-schema-to-grammar.cpp:989-991` returns empty string on unrecognized schema type instead of throwing immediately. Empty rules in the grammar map can produce unexpected behavior before `check_errors()` runs. Fix: throw immediately on unrecognized type.
+8. **Make grammar-generation path observable:** log schema compilation success/failure, surface state in task metadata
+9. **Add request-level metric hooks:** schema request count, compile failure count
 
 ### Files
-- `tools/server/server-task.cpp` (lines 376-387) — request parsing, schema-to-grammar
+- `tools/server/server-task.cpp` (lines 376-387) — request parsing, schema-to-grammar, dual-field rejection
 - `tools/server/server-http.cpp` — error responses
-- `common/json-schema-to-grammar.cpp` — schema compilation, typeless node handling
-- `tests/test-json-schema-to-grammar.cpp` — schema edge cases
+- `common/json-schema-to-grammar.cpp` — schema compilation, typeless node handling, depth/rule limits, circular ref protection
+- `tests/test-json-schema-to-grammar.cpp` — schema edge cases, DoS schemas
 - `tools/server/tests/unit/test_chat_completion.py` — streaming/non-streaming parity
 
 ### Tests Required
@@ -763,13 +768,18 @@ ModelAI relies on structured output for report objects, table extraction, financ
 4. Streaming and non-streaming parity
 5. `json_object` vs `json_schema` are not conflated
 6. Repeated schema requests — no residual grammar contamination
+7. **Dual-field rejection** — request with both `json_schema` + `grammar` returns 400
+8. **DoS schema** — deeply nested allOf/oneOf (100+ depth) hits limit, returns error
+9. **Circular $ref** — schema with circular references hits depth limit
 
 ### Merge Gate
 - Schema requests enforced or explicitly rejected (no silent fallback)
+- Dual-field requests rejected
+- Grammar compilation has enforced resource limits
 - Streaming and non-streaming tests both pass
 - Typeless node schemas accepted
 
-**Effort:** 2-3 days
+**Effort:** 3-4 days
 
 ## Workstream 7b: Tool-Call Crash Resistance (#16710, #14697, #18183, #19391, #20260)
 
@@ -786,43 +796,66 @@ ModelAI is an agentic runtime. The server must never crash or hang because a mod
 
 ### Implementation Changes
 
-1. **Harden tool-call parsing path** (`common/chat.cpp`):
+**Crash Fixes (must be first commits — verified crash paths from code review):**
+
+1. **[CRITICAL] Fix `safe_args_parse()` crash on empty string** (`chat.cpp:40`): `.at(0)` and `.at(to_parse.length() - 1)` called without checking if `to_parse` is empty. `.at()` throws `std::out_of_range` which propagates as unhandled exception → server crash. **Fix:** add `if (to_parse.empty()) return json(to_parse);` at top of function.
+
+2. **[CRITICAL] Fix tool-call diff array bounds** (`chat.cpp:183-185`): `msg_new.tool_calls[idx]` accessed using index from `msg_prv.tool_calls.size() - 1` without verifying `msg_new.tool_calls` has enough entries. If streaming delta has fewer tool calls than previous, this is out-of-bounds. **Fix:** check `idx < msg_new.tool_calls.size()` before access.
+
+3. **[CRITICAL] Replace GGML_ASSERT in production JSON partial parser** (`json-partial.cpp:94, 108`): `GGML_ASSERT(!stack.empty() && ...)` in SAX parser callbacks. GGML_ASSERT aborts the process. Malformed partial JSON can desynchronize the stack and trigger these assertions, killing the server. **Fix:** replace with `if (!stack.empty() && ...) { ... } else { throw std::runtime_error(...); }`.
+
+4. **[CRITICAL] Fix empty string buffer overread in JSON healing** (`json-partial.cpp:228, 250, 278, 307`): `str[str.length() - 1]` accessed without checking if `str` is empty. On empty string, `str.length() - 1` wraps to `SIZE_MAX` → buffer overread/crash. **Fix:** add `if (str.empty())` guard before all such accesses.
+
+5. **[HIGH] Fix missing "arguments" field check in tool-call parsing** (`chat.cpp:318`): `fc.at("arguments")` called without `fc.contains("arguments")` check (unlike "name" which IS checked at line 314). **Fix:** add `if (!fc.contains("arguments"))` with default empty object.
+
+6. **[HIGH] Fix uncaught `json::parse()` exceptions** (`chat.cpp:1462, 1466, 1595`): Several `json::parse()` calls in `common_chat_templates_apply_jinja()` have no try-catch. **Fix:** wrap in try-catch with structured error.
+
+**Feature Fixes:**
+
+7. **Harden tool-call parsing path** (`common/chat.cpp`):
    - Malformed JSON → structured parse error, not crash
    - Unknown tool → structured validation error, not crash
    - Invalid arguments → structured error, not crash
    - Partial tool-call in streaming → incremental safe parse, not crash
-2. **Dual-path tool-call detection** (#14697): check both `content` and `tool_calls` fields; normalize into `tool_calls` array
-3. **Fix phantom tool-call detection** (#18183): tighten Hermes 2 Pro parser to require proper `<tool_call>` tags, not bare JSON in text
-4. **Fix CJK re-encoding** (#19391): fix `ensure_ascii` handling in `common/chat-parser.cpp` for multi-turn tool arguments
-5. **Handle pre-tag content** (#20260): parser must tolerate `<think>...<tool_call>` sequences from thinking models
-6. **Explicit "bad tool call" response path:** return structured error object, never leave slot/task in corrupt state
-7. **Add metrics:** malformed/rejected/parse-failure tool-call counts
+8. **Dual-path tool-call detection** (#14697): check both `content` and `tool_calls` fields; normalize into `tool_calls` array
+9. **Fix phantom tool-call detection** (#18183): tighten Hermes 2 Pro parser to require proper `<tool_call>` tags, not bare JSON in text
+10. **Fix CJK re-encoding** (#19391): fix `ensure_ascii` handling in `common/chat-parser.cpp` for multi-turn tool arguments
+11. **Handle pre-tag content** (#20260): parser must tolerate `<think>...<tool_call>` sequences from thinking models
+12. **Explicit "bad tool call" response path:** return structured error object, never leave slot/task in corrupt state
+13. **Add metrics:** malformed/rejected/parse-failure tool-call counts
 
 ### Files
-- `common/chat.cpp` — tool-call parsing, `safe_args_parse()` (lines 38-48)
+- `common/chat.cpp` — tool-call parsing, `safe_args_parse()` (lines 38-48), diff computation (lines 183-185), tool-call field check (line 318), json::parse wrappers (lines 1462, 1466, 1595)
+- `common/json-partial.cpp` — SAX parser assertions (lines 94, 108), empty string guards (lines 228, 250, 278, 307)
 - `common/chat-parser.cpp` — Hermes/generic tag parsing, CJK encoding
 - `tools/server/server-task.cpp` — task lifecycle on tool-call failure
 - `tools/server/server-context.cpp` — slot cleanup after tool-call error
 - `tools/server/tests/unit/test_tool_call.py` — expanded edge case tests
 
 ### Tests Required
-1. Unknown tool name → structured error, next request succeeds
-2. Malformed arguments JSON → error, not crash
-3. Partial/truncated tool-call → safe degradation
-4. Streaming tool-call delta corruption → no hang
-5. CJK tool arguments round-trip correctly across turns
-6. JSON in assistant explanation text → NOT phantom tool call
-7. Thinking model text before `<tool_call>` → correctly parsed
-8. Tool calls in `content` field → normalized to `tool_calls`
-9. Multi-request repeated bad-tool-call stress test
+1. **Empty tool arguments** → `safe_args_parse("")` does not crash
+2. **Streaming delta with fewer tool calls** → no array out-of-bounds
+3. **Malformed partial JSON** → no GGML_ASSERT abort; exception caught
+4. **Empty string in JSON healing** → no buffer overread
+5. **Tool call with missing "arguments" field** → structured error, not crash
+6. Unknown tool name → structured error, next request succeeds
+7. Malformed arguments JSON → error, not crash
+8. Partial/truncated tool-call → safe degradation
+9. Streaming tool-call delta corruption → no hang
+10. CJK tool arguments round-trip correctly across turns
+11. JSON in assistant explanation text → NOT phantom tool call
+12. Thinking model text before `<tool_call>` → correctly parsed
+13. Tool calls in `content` field → normalized to `tool_calls`
+14. Multi-request repeated bad-tool-call stress test
 
 ### Merge Gate
+- All 6 crash-path fixes verified (items 1-6 above)
 - Malformed tool calls cannot kill or wedge the server
 - Request state clean after failure; next request succeeds
 - CJK arguments preserved across turns
 - No phantom tool calls from assistant JSON text
 
-**Effort:** 3-4 days
+**Effort:** 4-5 days
 
 ## Workstream 7c: Structured-Output Stability Under Repeated Load (#17391, #19068)
 
@@ -838,7 +871,7 @@ ModelAI workloads repeat the same extraction schema many times: many report sect
    - Per-request grammar ownership verified
    - Task teardown on completion, cancellation, parse failure, timeout
    - No grammar/parser state leaks across requests
-2. **Fix grammar trigger loop** (#19068): add error recovery when grammar sampler enters infinite trigger state; detect and break loop with structured error
+2. **Fix grammar trigger loop** (#19068): add error recovery when grammar sampler enters infinite trigger state. **Detection mechanism:** max iterations = 1000 per token; if exceeded, break with structured error "grammar loop detected at rule [rule_name]". Log the triggering grammar rule for debugging. **Recovery:** reset sampler state, return error to client, ensure slot is clean for next request.
 3. **Explicit cleanup on all non-happy paths:** timeout, cancel, parse failure, slot reuse, server sleep/wake
 4. **Add stress-safe structured request path:** avoid accumulating parser/grammar state in shared objects; ensure thread-safe lifecycle boundaries
 5. **Add metrics:** active structured requests, structured failures, structured cancellations
@@ -875,29 +908,42 @@ ModelAI's local runtime is frequently started/stopped during development. Slots 
 
 ### Implementation Changes
 
-1. **Fix port reuse on restart** (#19758): add `SO_REUSEADDR`/`SO_REUSEPORT` or proper socket shutdown on SSE stream close
-2. **Fix /slots/0?action=erase hang** (#17387): ensure HTTP response is flushed after slot erase completes
-3. **Fix KV cache truncation** (#11970): audit KV cache state transitions during multi-turn `/v1/chat/completions`; prevent silent prefix truncation
-4. **Add slot state invariant checks:** validate state machine transitions, detect corrupt states early
+1. **Fix port reuse on restart** (#19758): Socket lifecycle is managed by cpp-httplib. The `chunked_content_provider` lambda (`server-http.cpp:356-388`) does NOT check `is_connection_closed()` — server continues generating after client disconnects. **Fix:** add `req.is_connection_closed()` check inside the lambda; also investigate SO_REUSEADDR in httplib configuration.
+
+2. **[CRITICAL] Fix /slots/0?action=erase hang** (#17387): Root cause confirmed — when slot is processing, erase task is deferred (`server-context.cpp:2039`) but `rd.next()` (`server-context.cpp:4297`) blocks the HTTP handler forever. Deferred task only runs via `callback_on_release()` when slot calls `release()`. If slot is stuck, client hangs indefinitely. **Fix:** for erase operations, return 409 Conflict immediately when slot is processing, instead of deferring. Alternative: add timeout to `rd.next()` for erase operations.
+
+3. **Fix KV cache truncation** (#11970): audit KV cache state transitions during multi-turn `/v1/chat/completions`; prevent silent prefix truncation. **Additional finding:** context shift at `server-context.cpp:2176-2177` clears and rebuilds token list AFTER KV cache ops — if token insertion fails (OOM), slot has shifted KV but empty token list (inconsistent state). **Fix:** make token list update transactional with KV ops.
+
+4. **[CRITICAL] Fix child slots stuck in WAIT_OTHER on parent failure** — if parent slot fails/cancels before child slots are found (`server-context.cpp:2880-2897, 1793-1796`), children remain in SLOT_STATE_WAIT_OTHER forever. No timeout or forced release mechanism exists. **Fix:** add timeout on WAIT_OTHER state (e.g., 30s). After timeout, release child slot with error "parent slot timed out".
+
+5. **[HIGH] Fix orphaned KV on LoRA cache skip** — `server-context.cpp:1219` calls `slot.prompt.tokens.clear()` but NOT `prompt_clear()` (which calls `llama_memory_seq_rm()`). This leaves orphaned KV data from the previous LoRA adapter. **Fix:** call `slot.prompt_clear(false)` instead of just `tokens.clear()`.
+
+6. **Add slot state invariant checks:** validate state machine transitions, detect corrupt states early. Use logged warnings (not assertions) in production.
 
 ### Files
-- `tools/server/server-http.cpp` — socket lifecycle, SSE cleanup
-- `tools/server/server-context.cpp` — slot erase handler, KV truncation path (line 2374+)
+- `tools/server/server-http.cpp` — socket lifecycle, SSE cleanup, connection close check (line 356-388)
+- `tools/server/server-context.cpp` — slot erase handler (lines 2025-2053, 4287-4312), child slot lifecycle (lines 2880-2897), LoRA cache (line 1219), context shift (lines 2147-2181)
 - `tools/server/server-task.cpp` — slot state machine
 - `src/llama-kv-cache.cpp` — KV sequence management
 
 ### Tests Required
 1. Server restart after SSE stream — port available immediately
-2. Slot erase via API — returns 200, slot usable afterward
-3. Multi-turn chat — KV cache not silently truncated
-4. Slot state after error/cancel — invariants hold
+2. Slot erase on processing slot — returns 409, not hang
+3. Slot erase on idle slot — returns 200, slot usable afterward
+4. Multi-turn chat — KV cache not silently truncated
+5. Parent slot failure — child slots released within timeout
+6. LoRA adapter change — no orphaned KV data
+7. Slot state after error/cancel — invariants hold
+8. Client disconnect mid-stream — server stops generating
 
 ### Merge Gate
 - Server restarts cleanly after streaming connections
-- Slot erase API returns response
+- Slot erase API never hangs (returns 409 or 200)
+- Child slots cannot be stuck in WAIT_OTHER forever
 - KV cache integrity maintained across turns
+- No orphaned KV on LoRA switch
 
-**Effort:** 2 days
+**Effort:** 3-4 days
 
 ## Workstream 7e: Prompt-Cache Hygiene (#4989, #19794)
 
@@ -910,12 +956,19 @@ ModelAI uses long sessions, repeated prompts, and save/restore. Generic prompt-c
 ### Implementation Changes
 
 1. **Audit `cache_prompt` behavior** for `/completion` and `/chat/completions` and repeated requests
-2. **Fix hybrid model checkpoint invalidation** (#19794): prevent SWA models from clearing the prompt cache on every turn
-3. **Add hard guardrails:** bounded reuse, explicit failure on KV exhaustion, no uncontrolled auto-generation
-4. **Align with compaction state model:** compacted prefix IS the prompt cache; new requests matching a compacted prefix reuse it
+
+2. **[HIGH] Fix silent cache save failure** — `prompt_save()` at `server-context.cpp:234-235` returns silently when `prompt_cache.alloc()` returns nullptr. No log, no metric, no notification. Future cache-hit expectations will miss silently. **Fix:** log at WARN level, increment `cache_save_failures` metric.
+
+3. **[MEDIUM] Fix overly aggressive cache load failure handling** — when `prompt_load()` fails (`server-context.cpp:1153-1154`), ALL KV state is cleared via `prompt_clear(false)`, even though partial prefix reuse might have worked. **Fix:** on cache load failure, fall back to LCP matching instead of full clear.
+
+4. **Fix hybrid model checkpoint invalidation** (#19794): checkpoint validation at `server-context.cpp:2549-2557` erases checkpoints when `pos_min > pos_min_thold` but doesn't validate that checkpoint data pointers aren't stale after context shift. Prevent SWA models from clearing the prompt cache on every turn.
+
+5. **Add hard guardrails:** bounded reuse, explicit failure on KV exhaustion, no uncontrolled auto-generation
+
+6. **Align with compaction state model:** compacted prefix IS the prompt cache; new requests matching a compacted prefix reuse it
 
 ### Files
-- `tools/server/server-context.cpp` — prompt save/load (lines 225-248, 1138-1158, 2374-2441)
+- `tools/server/server-context.cpp` — prompt save/load (lines 225-248, 1138-1158, 2374-2441), checkpoint validation (lines 2549-2557)
 - `tools/server/server.cpp` — `cache_prompt` configuration
 - `src/llama-kv-cache.cpp` — sequence management interaction with cache
 
@@ -923,15 +976,18 @@ ModelAI uses long sessions, repeated prompts, and save/restore. Generic prompt-c
 1. Repeated `cache_prompt` request — stable, no growth
 2. KV exhaustion → graceful error, not crash
 3. Cached prompt does not trigger unintended extra generation
-4. Slot state coherent after cache failure
-5. SWA/hybrid model prompt cache not invalidated per-turn
+4. **Cache save failure** → logged, metric incremented
+5. **Cache load failure** → falls back to LCP, not full clear
+6. Slot state coherent after cache failure
+7. SWA/hybrid model prompt cache not invalidated per-turn
 
 ### Merge Gate
 - Prompt-cache behavior bounded and predictable
+- Cache failures logged and metriced (no silent failures)
 - KV exhaustion graceful
 - Hybrid model prompt cache survives across turns
 
-**Effort:** 2 days
+**Effort:** 2-3 days
 
 ## Workstream 7f: Server Performance & Observability (#12171, #15389)
 
@@ -993,7 +1049,9 @@ The Excel product ships on Metal (Mac), CUDA (NVIDIA Windows), Vulkan (AMD/Intel
 ### Implementation
 
 ```cpp
-struct modelai_backend_caps {
+// NOTE: Uses llama_ prefix (not modelai_) to maintain upstream-ready naming convention.
+// Placed in common/ (not src/) to avoid polluting internal llama library.
+struct llama_backend_caps {
     bool supports_flash_attn;
     bool supports_kv_quant_q8;
     bool supports_kv_quant_q4;
@@ -1021,8 +1079,8 @@ Populate by querying backend feature flags at model load. Gate all optimization 
 | CPU | Chunked | Yes | Yes | Yes (non-FA path) | Most compatible |
 
 ### Files
-- `src/modelai-backend-caps.h` — New header with struct + probe function
-- `src/modelai-backend-caps.cpp` — Implementation: query ggml backends
+- `common/llama-backend-caps.h` — New header with struct + probe function (uses `llama_` prefix, not `modelai_`, for upstream-ready naming)
+- `common/llama-backend-caps.cpp` — Implementation: query ggml backends
 - `tools/server/server-context.cpp` — Populate at model load, expose in `/props`
 - `src/llama-context.cpp` — Use for default parameter selection
 
@@ -1041,11 +1099,14 @@ Generic LCP matching only reuses tokens that are byte-identical at the start of 
 
 ### Implementation
 
-1. **Stable prefix hashing:** compute hash from system prompt + tool definitions + workbook schema (named ranges, tabs, column types)
-2. **KV cache persistence per workbook fingerprint:** use `--slot-save-path` or equivalent API
-3. **Delta-only appending:** on each user turn, only process user question + changed cells
-4. **Partial invalidation:** structural workbook changes invalidate only the workbook portion
-5. **Interaction with compaction:** compacted prefix IS a valid cache entry; new requests match against it via hash, not token-LCP
+**Architecture note:** The server should expose a **generic prefix fingerprint API** — the product (ModelAI Excel add-in) computes the fingerprint from workbook structure and passes it to the server. Workbook-specific knowledge (named ranges, tabs, column types) stays in the product layer, not the inference engine. This avoids a layering violation.
+
+1. **Server-side: generic fingerprint-based prefix matching** — accept a `prefix_fingerprint` field in request. Match against stored prefixes by fingerprint instead of token-LCP. Return cache hit/miss status.
+2. **Product-side: stable prefix hashing** — compute hash from system prompt + tool definitions + workbook schema. Pass as `prefix_fingerprint` to server.
+3. **KV cache persistence per fingerprint:** use `--slot-save-path` or equivalent API
+4. **Delta-only appending:** on each user turn, only process user question + changed cells
+5. **Partial invalidation:** structural workbook changes invalidate only the workbook portion (product-side decision, server sees new fingerprint)
+6. **Interaction with compaction:** compacted prefix IS a valid cache entry; new requests match against it via fingerprint, not token-LCP
 
 ### Files
 - `tools/server/server-context.cpp` — prefix matching, cache save/load (lines 2374-2441)
@@ -1065,14 +1126,16 @@ Current behavior is "use configured/default values" (`llama-context.cpp:156-159`
 
 ### Implementation
 
-1. **First-run benchmark grid** on model load:
+**Note on startup delay:** 48 combinations at ~5s each = ~4 minutes, which is unacceptable for Excel add-in cold start. Benchmark grid MUST run asynchronously in background. Use conservative defaults until tuning completes. Show progress indicator in product UI.
+
+1. **First-run benchmark grid** on model load (**async, background**):
    - `batch_size`: [256, 512, 1024, 2048]
    - `ubatch_size`: [128, 256, 512]
    - `threads_batch`: [2, 4, physical_cores/2, physical_cores]
-2. **Persist best settings** per tuple: `(model_id, quant_type, backend, device_id)`
-3. **Separate tuning for prefill vs decode**
-4. **Re-tune triggers:** model change, backend change, major app version
-5. **Sane defaults while tuning runs**
+2. **Sane defaults while tuning runs** — use platform-specific conservative defaults immediately (Metal: ubatch=256, threads=physical_cores/2)
+3. **Persist best settings** per tuple: `(model_id, quant_type, backend, device_id)`
+4. **Separate tuning for prefill vs decode**
+5. **Re-tune triggers:** model change, backend change, major app version
 
 ### Files
 - New: `src/modelai-autotune.h/.cpp` — benchmark grid, persistence
@@ -1148,14 +1211,14 @@ Current `cpu_params` (`common/common.h:69-76`) has affinity mask and priority, b
 
 | Step | Part | What | Files | Risk | Effort |
 |------|------|------|-------|------|--------|
-| **7-1** | 7a | Structured JSON schema correctness | server-task.cpp, json-schema-to-grammar.cpp | Medium | 2-3 days |
-| **7-2** | 7b | Tool-call crash resistance (5 upstream issues) | chat.cpp, chat-parser.cpp, server-task.cpp | Medium | 3-4 days |
+| **7-1** | 7a | Structured JSON schema correctness + resource limits | server-task.cpp, json-schema-to-grammar.cpp | Medium | 3-4 days |
+| **7-2** | 7b | Tool-call crash resistance (6 crash fixes + 5 features) | chat.cpp, json-partial.cpp, chat-parser.cpp | **High** | 4-5 days |
 | **7-3** | 7c | Structured-output stability + memory leaks | server-context.cpp, server-task.cpp, server-queue.cpp | Medium | 2-3 days |
-| **7-4** | 7d | Server lifecycle + slot management (3 issues) | server-http.cpp, server-context.cpp, llama-kv-cache.cpp | Medium | 2 days |
-| **7-5** | 7e | Prompt-cache hygiene + hybrid model fix | server-context.cpp, server.cpp | Medium | 2 days |
+| **7-4** | 7d | Server lifecycle + slot management (6 fixes) | server-http.cpp, server-context.cpp, llama-kv-cache.cpp | **High** | 3-4 days |
+| **7-5** | 7e | Prompt-cache hygiene + hybrid model fix | server-context.cpp, server.cpp | Medium | 2-3 days |
 | **7-6** | 7f | Server performance + observability | server-context.cpp, server-task.cpp, bench/ | Low | 2-3 days |
 
-**Phase 3 Total: ~13-18 days**
+**Phase 3 Total: ~16-22 days**
 
 ## Phase 4: Product Optimization Pipeline (Part 8) — Future PR-7/PR-8
 
@@ -1168,7 +1231,7 @@ Current `cpu_params` (`common/common.h:69-76`) has affinity mask and priority, b
 
 **Phase 4 Total: ~10-14 days**
 
-**Grand Total: ~39-53 days across all phases**
+**Grand Total: ~42-57 days across all phases**
 
 ### Recommended Implementation Order
 
