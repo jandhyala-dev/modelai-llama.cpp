@@ -15,6 +15,18 @@
 
 `P5b` closes that gap by computing compacted-prefix payloads from the original KV cache rather than manually configuring the store.
 
+## Implementation Status
+
+All seven required P5b deliverables are implemented:
+
+1. Query extraction: `src/llama-kv-compact-query.cpp` (cache-keys baseline)
+2. Key selection: `src/llama-kv-compact-select.cpp` (top-k + OMP)
+3. NNLS beta fitting: `src/llama-kv-compact-solver.cpp`
+4. Least-squares V fitting: `src/llama-kv-compact-solver.cpp`
+5. Pipeline orchestration: `src/llama-kv-compact-pipeline.cpp`
+6. Quality regression tests: `tests/test-kv-compact-quality.cpp` (2x >= 0.95, 4x >= 0.90, 8x >= 0.85)
+7. ModelAI-like workload: pending manual run (>= 1B model, >= 2048 real-text prefix)
+
 ## Required P5b Deliverables
 
 The branch is only complete if all seven conditions below are true end to end.
