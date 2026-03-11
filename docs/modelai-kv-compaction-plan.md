@@ -261,7 +261,7 @@ The following items are intentionally not part of this branch and must be addres
 - key selection policies (`topk`, OMP, or nonuniform schedules)
 - NNLS beta fitting
 - least-squares value fitting:
-  - primary: Householder QR
+  - primary: `lstsq`-equivalent dense fp32 least-squares
   - fallback: regularized Cholesky with `lambda=1e-6`
 - chat-template / BOS preservation policy
 - public runtime/server enablement
@@ -357,6 +357,21 @@ Turn the compacted-prefix store from a manually populated container into a solve
 - quality validation on fixed tolerances
 - benchmark proof on a real ModelAI-like workload
 
+**Correctness assumptions**
+
+- the first query-extraction path uses cache keys as surrogate queries
+- that baseline is valid only because live cached `K` tensors are already RoPE-applied, so the solver’s query and key sides remain in the same rotated space
+- any later pre-RoPE or self-study query source must apply matching RoPE and GQA regrouping before fitting
+
+**Solver dependency and precision policy**
+
+- no LAPACK dependency is allowed for `PR-5b`
+- the solver must be implemented as pure dense C++ because the matrix sizes are small enough for an internal fp32 path
+- query extraction must upcast runtime K/V data to fp32
+- all fitting math runs in fp32
+- fitted `C_k` and `C_v` are cast back to store dtype only when written into compacted storage
+- `beta` remains fp32 throughout
+
 Primary implementation files:
 - `src/llama-kv-compact-solver.h/.cpp`
 - `src/llama-kv-compact-select.h/.cpp`
@@ -371,9 +386,51 @@ Also impacted:
 - `docs/modelai-kv-compaction-plan.md`
 - `docs/modelai-fork-summary.md`
 
+Required internal read-only accessors in `src/llama-kv-cache.h/.cpp`:
+- `compacted_prefix_copy_k_head_f32(...)`
+- `compacted_prefix_copy_v_head_f32(...)`
+- `compacted_prefix_layer_layout_for_solver(...)`
+- `compacted_prefix_seq_positions(...)`
+
+These accessors stay internal to `src/` and must not become part of the public `include/llama.h` API.
+
+Required solver-input behavior:
+- live `K` extraction is row-major but must be upcast to fp32
+- live `V` extraction must handle `v_trans` correctly and de-transpose to canonical token-major fp32 matrices before fitting
+
+Minimum quality metrics and thresholds:
+- attention-output cosine similarity `>= 0.95`
+- continuation-logit cosine similarity `>= 0.95`
+- partition-sum relative error must be emitted
+
+Minimum benchmark workload for merge:
+- model size `>= 1B`
+- real-text prefix `>= 2048` tokens
+- workload `W2` or `W3`
+- quality thresholds satisfied on the same run
+
 Important note:
 - `PR-5a` proves that reducing runtime-visible active KV range can improve repeated-turn throughput,
 - `PR-5b` is the first branch allowed to claim paper-aligned KV compression because it computes compacted payloads from the original KV cache.
+- steps 1-3 of the `PR-5b` implementation order are only unit-testable with synthetic matrices until the pipeline orchestration step exists; merge confidence requires the model-backed path, not synthetic math tests alone
+
+**Quality gate**
+
+Minimum `PR-5b` quality metrics:
+- compacted-vs-full attention-output cosine similarity `>= 0.95`
+- compacted-vs-full continuation-logit cosine similarity `>= 0.95`
+- partition-sum relative error must be reported explicitly
+
+Minimum benchmark workload for merge:
+- model size `>= 1B`
+- real-text prefix `>= 2048` tokens
+- workload `W2` or `W3`
+- quality thresholds satisfied on the same run
+
+**Non-goals**
+
+- chat-template / BOS / uncompacted system-prefix policy changes remain out of scope for the first `PR-5b` pass
+- V-transpose layout optimizations remain out of scope; the first solver pass may de-transpose live `V` into canonical fp32 rows for fitting
 
 **Merge gate**
 

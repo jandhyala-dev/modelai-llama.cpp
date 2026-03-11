@@ -39,6 +39,18 @@ A branch that lacks any of the above must not be labeled as final `P5` completio
 
 These pieces are content-agnostic. `P5b` supplies solver-computed contents for the existing store.
 
+## Correctness Assumptions That Must Be Explicit
+
+### RoPE-baked cache-key queries
+
+The first query-extraction path uses cache keys as surrogate queries.
+That works only because both sides live in the same rotated space:
+- the live K tensors stored in the KV cache are already RoPE-applied,
+- the compacted-prefix execution path also consumes RoPE-aligned attention inputs.
+
+This assumption must stay explicit in code and tests.
+If later query paths capture pre-RoPE `Q`, they must apply the same RoPE transform and GQA regrouping before entering the solver pipeline.
+
 ## Impacted Files Beyond The New Modules
 
 `P5b` is not only four new source files.
@@ -49,6 +61,17 @@ It also requires small integration changes in:
 - `src/llama-kv-cache.cpp`
 - `docs/modelai-kv-compaction-plan.md`
 - `docs/modelai-fork-summary.md`
+
+These integration changes are not optional.
+The new modules cannot reach `layers`, `v_trans`, or `hparams` directly because those are private to `llama_kv_cache`.
+
+Required internal read-only accessors:
+- `compacted_prefix_copy_k_head_f32(...)`
+- `compacted_prefix_copy_v_head_f32(...)`
+- `compacted_prefix_layer_layout_for_solver(...)`
+- `compacted_prefix_seq_positions(...)`
+
+The accessor contract must remain internal to `src/` and must not become a public `include/llama.h` API.
 
 ## File-Level Implementation Plan
 
@@ -61,13 +84,23 @@ New files:
 Required contents:
 - fp32-only solver math
 - NNLS beta fitting with:
-  - `lstsq` primary path
+  - projected / clamped NNLS built on a pure C++ dense least-squares core
   - regularized Cholesky fallback with `lambda = 1e-6`
   - positivity clamp and `beta = log(B)` conversion
 - least-squares V fitting with:
-  - Householder QR primary path
+  - pure C++ `lstsq`-equivalent dense least-squares path (normal equations or QR)
   - regularized Cholesky fallback
 - ridge regularization policy documented in code and docs
+
+Dependency rule:
+- do not add a LAPACK dependency for `P5b`
+- the solver implementation must be self-contained C++ because the problem sizes are small enough (`t ~= 32-256`, `n_q ~= 128-1024`)
+
+Precision and casting policy:
+- query extraction outputs fp32
+- all solver math runs in fp32
+- selected `C_k` and fitted `C_v` are cast back to the compacted store dtype only when written into `k_data` / `v_data`
+- `beta` remains fp32 in storage and execution
 
 Output targets:
 - `layer_storage::beta_data`
@@ -107,6 +140,7 @@ Why first:
 Required behavior:
 - extract fp32 per-layer / per-KV-head query matrices from live cache-backed tensors
 - support GQA regrouping when queries originate in attention-head space later
+- document explicitly that the cache-keys baseline operates in the RoPE-baked key space
 
 Deferred but planned:
 - self-study queries
@@ -137,6 +171,10 @@ Output targets:
 - `layer_storage::beta_data`
 - `layer_storage::v_data`
 
+Required solver-input behavior:
+- `K` and `V` must be copied out of the live cache through the new read-only accessors
+- transposed live `V` cache must be de-transposed to canonical token-major fp32 matrices before fitting
+
 ### 5. Quality and benchmark validation
 
 New file:
@@ -147,13 +185,24 @@ Required coverage:
 - attention-output error stays within an explicit tolerance on fixed fixtures
 - quality delta is reported with exact metrics
 
+Required quality metrics and initial tolerances:
+- compacted-vs-full attention-output cosine similarity: `>= 0.95`
+- compacted-vs-full continuation-logit cosine similarity: `>= 0.95`
+- partition-sum relative error: must be reported explicitly
+
+The exact thresholds may be tightened after first calibration, but they must be defined before the branch can merge.
+
 Required benchmark path:
 - extend the current perf harness or add a ModelAI-oriented harness that measures:
   - prefill time
   - follow-up decode tok/s
   - active `n_kv`
   - quality delta
-- workload must be closer to ModelAI usage than `stories15M-q4_0`
+- the minimum accepted “real ModelAI-like workload” for merge is:
+  - model size `>= 1B` parameters
+  - real-text prefix `>= 2048` tokens
+  - workload `W2` or `W3`
+  - quality bar satisfied on the same run
 
 ### 6. OMP expansion
 
@@ -176,6 +225,10 @@ Required contents:
 This order is intentional.
 It gets a solver-complete baseline running sooner because the math is self-contained and testable before full wiring.
 
+Test strategy note:
+- steps 1-3 are allowed to land with synthetic/unit coverage while the pipeline is still being wired,
+- but the branch merge gate is not satisfied until step 4 and step 5 are complete with model-backed quality evidence.
+
 ## Non-Goals For First P5b Pass
 
 The first `P5b` pass should not expand scope into:
@@ -185,6 +238,7 @@ The first `P5b` pass should not expand scope into:
 - broad multi-sequence routing
 - SWA or hybrid-memory support
 - physical KV buffer reallocation/release
+- changing the established policy that chat-template / BOS / uncompacted system-prefix tokens remain outside the compacted block
 
 Those remain later work.
 
