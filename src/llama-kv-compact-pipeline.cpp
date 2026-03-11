@@ -36,7 +36,7 @@ bool gather_matrix_rows(
 void write_compacted_payload(
         std::vector<uint8_t> & dst,
         ggml_type type,
-        uint32_t n_head_kv,
+        uint32_t /*n_head_kv*/,
         uint32_t n_tokens,
         uint32_t head,
         uint32_t dim,
