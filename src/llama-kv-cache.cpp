@@ -959,21 +959,33 @@ bool llama_kv_cache::compacted_prefix_copy_v_head_f32(
         return true;
     }
 
-    std::vector<uint8_t> elem_bytes(type_size);
-    std::vector<float> elem_f32(1);
+    // Batch column extraction: read one full column per embedding dimension.
+    // Transposed V layout: v[cell_idx + (head_offset + j) * kv_size].
+    // O(head_dim) backend calls instead of O(positions * head_dim).
     const uint32_t kv_size = get_size();
     const uint32_t head_offset = head_kv * head_dim;
+    const size_t col_bytes = size_t(kv_size) * type_size;
+    std::vector<uint8_t> col_buf(col_bytes);
+    std::vector<float> col_f32(kv_size);
+
+    // Build cell index lookup for positions.
+    std::vector<uint32_t> cell_indices(positions.size());
     for (size_t i = 0; i < positions.size(); ++i) {
         const auto pos_it = pos_to_idx.find(positions[i]);
         if (pos_it == pos_to_idx.end()) {
             return false;
         }
-        const uint32_t cell_idx = pos_it->second;
-        for (uint32_t j = 0; j < head_dim; ++j) {
-            const size_t src_offset = (size_t(cell_idx) + size_t(head_offset + j) * kv_size) * type_size;
-            ggml_backend_tensor_get(v, elem_bytes.data(), src_offset, type_size);
-            type_to_float(elem_bytes.data(), layout.type_v, elem_f32.data(), 1);
-            out[i * head_dim + j] = elem_f32[0];
+        cell_indices[i] = pos_it->second;
+    }
+
+    auto to_float = ggml_get_type_traits(layout.type_v)->to_float;
+    for (uint32_t j = 0; j < head_dim; ++j) {
+        const size_t col_offset = size_t(head_offset + j) * kv_size * type_size;
+        ggml_backend_tensor_get(v, col_buf.data(), col_offset, col_bytes);
+        to_float(col_buf.data(), col_f32.data(), kv_size);
+
+        for (size_t i = 0; i < positions.size(); ++i) {
+            out[i * head_dim + j] = col_f32[cell_indices[i]];
         }
     }
 
