@@ -139,3 +139,46 @@ bool llama_q_capture_regroup_for_kv_head(
 void llama_q_capture_subsample(
         llama_kv_compact_matrix & mat,
         uint32_t max_queries);
+
+// ---------------------------------------------------------------------------
+// Self-study pipeline entry point (slice 6b-5)
+// ---------------------------------------------------------------------------
+
+class llama_kv_cache;
+
+// Full self-study compaction pipeline: Q-capture generation → selection → solver.
+//
+// Replaces cache-key surrogates with real post-RoPE Q vectors captured from
+// autoregressive continuation of the prefix.
+//
+// Pipeline:
+//   1. Initialize Q-capture state from model hparams
+//   2. Generate n_generate continuation tokens, capturing Q via cb_eval (6b-4)
+//   3. For each layer, for each KV head:
+//      a. Regroup captured Q for this KV head (GQA mapping) (6b-3)
+//      b. Subsample to max_queries_per_kv_head
+//      c. Extract full K/V from live cache
+//      d. Accumulate attention scores, select top-k positions
+//   4. Aggregate selection across all heads → global top-k
+//   5. Configure compacted prefix store with selected positions
+//   6. For each layer, for each KV head:
+//      a. Gather selected K, fit beta via NNLS, fit V via least-squares
+//      b. Write compacted K/V/beta payloads
+//
+// Caller contract:
+//   - seq_id MUST be 0 (llama_batch_get_one limitation)
+//   - Context must have been prefilled (logits available)
+//   - KV cache must have room for config.n_generate additional tokens
+//   - live_suffix_pos0 must be > p0
+//   - target_tokens must be > 0
+//
+// Returns true on success.  Populates stats if non-null.
+bool llama_kv_compact_self_study_from_live_kv(
+        struct llama_context * ctx,
+        llama_kv_cache       & kv,
+        llama_seq_id           seq_id,
+        uint32_t               target_tokens,
+        llama_pos              live_suffix_pos0,
+        const llama_kv_compact_self_study_config & config,
+        llama_kv_compact_self_study_stats * stats = nullptr,
+        llama_pos p0 = 0);
