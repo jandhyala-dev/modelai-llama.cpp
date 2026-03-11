@@ -172,7 +172,91 @@ int main(int argc, char ** argv) {
 
     if (logits_cos < 0.95f) {
         llama_batch_free(batch);
-        return fail("continuation-logit cosine should meet the baseline threshold");
+        return fail("2x continuation-logit cosine should meet the 0.95 threshold");
+    }
+
+    // ---- 4x compression test ----
+    {
+        const int target_4x = live_suffix_pos0 / 4;  // 64 tokens
+        std::printf("\n  Testing 4x compression (%d -> %d tokens)...\n",
+                    live_suffix_pos0, target_4x);
+
+        if (llama_state_seq_set_data(ctx, seq_state.data(), seq_state.size(), 0) != seq_state.size()) {
+            llama_batch_free(batch);
+            return fail("failed to restore state for 4x test");
+        }
+
+        llama_kv_compact_pipeline_stats stats_4x = {};
+        if (use_solver) {
+            if (!kv->compacted_prefix_fit_from_live_kv(0, target_4x, live_suffix_pos0, &stats_4x)) {
+                llama_batch_free(batch);
+                return fail("failed to fit compacted prefix at 4x");
+            }
+        } else {
+            if (!kv->compacted_prefix_select_from_live_kv(0, target_4x, live_suffix_pos0, &stats_4x)) {
+                llama_batch_free(batch);
+                return fail("failed to select compacted prefix at 4x");
+            }
+        }
+        if (!kv->compacted_prefix_set_execution(0, true)) {
+            llama_batch_free(batch);
+            return fail("failed to enable compacted-prefix execution for 4x");
+        }
+        if (!kv->compacted_prefix_reclaim_live_kv(0)) {
+            llama_batch_free(batch);
+            return fail("failed to reclaim live KV after 4x fit");
+        }
+
+        const std::vector<float> logits_4x = decode_one_and_capture_logits(ctx, continuation, seed_tokens);
+        const float cos_4x = llama_kv_compact_cosine_similarity(baseline_logits, logits_4x);
+        std::printf("  4x logit_cosine_similarity=%.6f (threshold >= 0.90)\n", cos_4x);
+
+        if (cos_4x < 0.90f) {
+            llama_batch_free(batch);
+            return fail("4x continuation-logit cosine should meet the 0.90 threshold");
+        }
+    }
+
+    // ---- 8x compression test ----
+    {
+        const int target_8x = live_suffix_pos0 / 8;  // 32 tokens
+        std::printf("\n  Testing 8x compression (%d -> %d tokens)...\n",
+                    live_suffix_pos0, target_8x);
+
+        if (llama_state_seq_set_data(ctx, seq_state.data(), seq_state.size(), 0) != seq_state.size()) {
+            llama_batch_free(batch);
+            return fail("failed to restore state for 8x test");
+        }
+
+        llama_kv_compact_pipeline_stats stats_8x = {};
+        if (use_solver) {
+            if (!kv->compacted_prefix_fit_from_live_kv(0, target_8x, live_suffix_pos0, &stats_8x)) {
+                llama_batch_free(batch);
+                return fail("failed to fit compacted prefix at 8x");
+            }
+        } else {
+            if (!kv->compacted_prefix_select_from_live_kv(0, target_8x, live_suffix_pos0, &stats_8x)) {
+                llama_batch_free(batch);
+                return fail("failed to select compacted prefix at 8x");
+            }
+        }
+        if (!kv->compacted_prefix_set_execution(0, true)) {
+            llama_batch_free(batch);
+            return fail("failed to enable compacted-prefix execution for 8x");
+        }
+        if (!kv->compacted_prefix_reclaim_live_kv(0)) {
+            llama_batch_free(batch);
+            return fail("failed to reclaim live KV after 8x fit");
+        }
+
+        const std::vector<float> logits_8x = decode_one_and_capture_logits(ctx, continuation, seed_tokens);
+        const float cos_8x = llama_kv_compact_cosine_similarity(baseline_logits, logits_8x);
+        std::printf("  8x logit_cosine_similarity=%.6f (threshold >= 0.85)\n", cos_8x);
+
+        if (cos_8x < 0.85f) {
+            llama_batch_free(batch);
+            return fail("8x continuation-logit cosine should meet the 0.85 threshold");
+        }
     }
 
     llama_batch_free(batch);
