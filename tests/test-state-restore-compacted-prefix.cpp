@@ -4,6 +4,7 @@
 #include "src/llama-context.h"
 #include "src/llama-io.h"
 #include "src/llama-kv-cache.h"
+#include "src/llama-kv-cache-iswa.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -148,7 +149,13 @@ int main(int argc, char ** argv) {
 
     auto * kv = dynamic_cast<llama_kv_cache *>(ctx->get_memory());
     if (kv == nullptr) {
-        return fail("test requires a standard llama_kv_cache memory backend");
+        auto * kv_iswa = dynamic_cast<llama_kv_cache_iswa *>(ctx->get_memory());
+        if (kv_iswa != nullptr) {
+            kv = kv_iswa->get_base();
+        }
+    }
+    if (kv == nullptr) {
+        return fail("test requires a llama_kv_cache or llama_kv_cache_iswa memory backend");
     }
 
     std::vector<llama_token> tokens(32, 1);

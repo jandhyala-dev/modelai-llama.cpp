@@ -5,6 +5,7 @@
 #include "src/llama-kv-compact-pipeline.h"
 #include "src/llama-kv-compact-solver.h"
 #include "src/llama-kv-cache.h"
+#include "src/llama-kv-cache-iswa.h"
 
 #include "ggml.h"
 
@@ -74,8 +75,15 @@ int main(int argc, char ** argv) {
     }
 
     auto * kv = dynamic_cast<llama_kv_cache *>(ctx->get_memory());
+    llama_kv_cache_iswa * kv_iswa = nullptr;
     if (kv == nullptr) {
-        return fail("test requires a standard llama_kv_cache memory backend");
+        kv_iswa = dynamic_cast<llama_kv_cache_iswa *>(ctx->get_memory());
+        if (kv_iswa != nullptr) {
+            kv = kv_iswa->get_base();
+        }
+    }
+    if (kv == nullptr) {
+        return fail("test requires a llama_kv_cache or llama_kv_cache_iswa memory backend");
     }
 
     constexpr int seed_tokens = 320;

@@ -1001,11 +1001,10 @@ llama_compacted_prefix_store * llama_kv_cache::get_compacted_prefix() {
 }
 
 bool llama_kv_cache::compacted_prefix_runtime_supported() const {
-    if (hparams.swa_type != LLAMA_SWA_TYPE_NONE || n_swa > 0 || swa_type != LLAMA_SWA_TYPE_NONE) {
-        return false;
-    }
-
-    if (llm_arch_is_hybrid(model.arch)) {
+    // Check instance-level SWA config, not model-level hparams.
+    // When used as kv_base inside llama_kv_cache_iswa, this instance has
+    // n_swa=0 and swa_type=NONE even though the model has SWA layers.
+    if (n_swa > 0 || swa_type != LLAMA_SWA_TYPE_NONE) {
         return false;
     }
 

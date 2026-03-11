@@ -70,6 +70,31 @@ public:
     llama_kv_cache * get_base() const;
     llama_kv_cache * get_swa () const;
 
+    // compacted prefix — delegates to kv_base (non-SWA layers only)
+    // SWA layers naturally discard old tokens via sliding window, so only
+    // the base (full-attention) layers benefit from compaction.
+
+    bool compacted_prefix_fit_from_live_kv(
+            llama_seq_id seq_id,
+            uint32_t target_tokens,
+            llama_pos live_suffix_pos0,
+            llama_kv_compact_pipeline_stats * stats = nullptr,
+            llama_pos p0 = 0,
+            uint32_t max_queries = 256,
+            int nnls_iters = 64,
+            float lambda = 1e-6f);
+
+    bool compacted_prefix_select_from_live_kv(
+            llama_seq_id seq_id,
+            uint32_t target_tokens,
+            llama_pos live_suffix_pos0,
+            llama_kv_compact_pipeline_stats * stats = nullptr,
+            llama_pos p0 = 0);
+
+    bool compacted_prefix_set_execution(llama_seq_id seq_id, bool enabled);
+    bool compacted_prefix_reclaim_live_kv(llama_seq_id seq_id);
+    uint32_t compacted_prefix_active_n_kv(llama_seq_id seq_id) const;
+
 private:
     const llama_hparams & hparams;
 
