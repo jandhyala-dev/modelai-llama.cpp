@@ -135,10 +135,17 @@ int main(int argc, char ** argv) {
     }
 
     const bool use_solver = std::getenv("USE_SOLVER") != nullptr;
+    const bool use_omp    = std::getenv("USE_OMP")    != nullptr;
 
     llama_kv_compact_pipeline_stats stats = {};
 
-    if (use_solver) {
+    if (use_omp) {
+        std::printf("USE_OMP=1: OMP selection + solver pipeline\n");
+        if (!kv->compacted_prefix_omp_from_live_kv(0, compacted_tokens, live_suffix_pos0, &stats)) {
+            llama_batch_free(batch);
+            return fail("failed to run OMP compacted prefix from live KV");
+        }
+    } else if (use_solver) {
         std::printf("USE_SOLVER=1: full solver pipeline (beta + V fitting)\n");
         if (!kv->compacted_prefix_fit_from_live_kv(0, compacted_tokens, live_suffix_pos0, &stats)) {
             llama_batch_free(batch);
@@ -200,7 +207,12 @@ int main(int argc, char ** argv) {
         }
 
         llama_kv_compact_pipeline_stats stats_4x = {};
-        if (use_solver) {
+        if (use_omp) {
+            if (!kv->compacted_prefix_omp_from_live_kv(0, target_4x, live_suffix_pos0, &stats_4x)) {
+                llama_batch_free(batch);
+                return fail("failed to run OMP compacted prefix at 4x");
+            }
+        } else if (use_solver) {
             if (!kv->compacted_prefix_fit_from_live_kv(0, target_4x, live_suffix_pos0, &stats_4x)) {
                 llama_batch_free(batch);
                 return fail("failed to fit compacted prefix at 4x");
@@ -242,7 +254,12 @@ int main(int argc, char ** argv) {
         }
 
         llama_kv_compact_pipeline_stats stats_8x = {};
-        if (use_solver) {
+        if (use_omp) {
+            if (!kv->compacted_prefix_omp_from_live_kv(0, target_8x, live_suffix_pos0, &stats_8x)) {
+                llama_batch_free(batch);
+                return fail("failed to run OMP compacted prefix at 8x");
+            }
+        } else if (use_solver) {
             if (!kv->compacted_prefix_fit_from_live_kv(0, target_8x, live_suffix_pos0, &stats_8x)) {
                 llama_batch_free(batch);
                 return fail("failed to fit compacted prefix at 8x");

@@ -12,8 +12,25 @@
 namespace {
 constexpr uint32_t LLAMA_COMPACTED_PREFIX_STATE_VERSION = 1;
 
-bool is_supported_compacted_type(ggml_type type) {
-    return type == GGML_TYPE_F16 || type == GGML_TYPE_BF16 || type == GGML_TYPE_F32;
+bool is_supported_compacted_type(ggml_type type, uint32_t head_dim_k, uint32_t head_dim_v) {
+    // Scalar types always work.
+    if (type == GGML_TYPE_F16 || type == GGML_TYPE_BF16 || type == GGML_TYPE_F32) {
+        return true;
+    }
+    // Quantized types work when head_dim is a multiple of the block size
+    // so that per-head data aligns on block boundaries.
+    const int64_t blk = ggml_blck_size(type);
+    if (blk <= 0) {
+        return false;
+    }
+    // Check both K and V head dims (V may be 0 for V-less architectures).
+    if (head_dim_k > 0 && (head_dim_k % blk) != 0) {
+        return false;
+    }
+    if (head_dim_v > 0 && (head_dim_v % blk) != 0) {
+        return false;
+    }
+    return true;
 }
 
 size_t compacted_tensor_bytes(ggml_type type, size_t n_elem_per_head, uint32_t n_head_kv) {
@@ -182,7 +199,8 @@ void io_read_floats(llama_io_read_i & io, std::vector<float> & data) {
 }
 
 void llama_compacted_prefix_store::layer_storage::configure(uint32_t n_tokens) {
-    if (!is_supported_compacted_type(layout.type_k) || !is_supported_compacted_type(layout.type_v)) {
+    if (!is_supported_compacted_type(layout.type_k, layout.n_embd_head_k, layout.n_embd_head_v) ||
+        !is_supported_compacted_type(layout.type_v, layout.n_embd_head_k, layout.n_embd_head_v)) {
         throw std::runtime_error(k_quantized_cache_error);
     }
 

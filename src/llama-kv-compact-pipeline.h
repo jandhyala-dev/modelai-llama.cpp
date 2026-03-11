@@ -36,3 +36,24 @@ bool llama_kv_compact_select_from_live_kv(
         llama_pos live_suffix_pos0,
         llama_kv_compact_pipeline_stats * stats = nullptr,
         llama_pos p0 = 0);
+
+struct llama_kv_compact_omp_opts;
+
+// OMP selection pipeline: uses Orthogonal Matching Pursuit (Algorithm 1,
+// arXiv:2602.16284 §3.2) per-head for greedy residual-based key selection,
+// then aggregates across heads via vote counting for a global selection set.
+// After global selection, per-head beta is refit via NNLS and V is fitted
+// via least-squares, identical to the full solver pipeline.
+//
+// This produces better selection quality than topk on aggregated attention
+// scores because OMP greedily minimizes the partition-function residual.
+bool llama_kv_compact_omp_from_live_kv(
+        llama_kv_cache & kv,
+        llama_seq_id seq_id,
+        uint32_t target_tokens,
+        llama_pos live_suffix_pos0,
+        llama_kv_compact_pipeline_stats * stats = nullptr,
+        llama_pos p0 = 0,
+        uint32_t max_queries = 256,
+        int nnls_iters = 64,
+        float lambda = 1e-6f);

@@ -404,6 +404,25 @@ public:
     ggml_tensor * get_kq_mask()     const { return self_kq_mask_cnv; }
     ggml_tensor * get_kq_mask_swa() const { return self_kq_mask_swa_cnv; }
 
+    bool has_compacted_prefix() const { return compacted_prefix_active; }
+    ggml_tensor * get_compacted_kq_mask() const { return compacted_kq_mask; }
+
+    // Compacted prefix layer tensors for base (non-SWA) layers.
+    using compacted_prefix_layer_input = llm_graph_input_attn_kv::compacted_prefix_layer_input;
+
+    compacted_prefix_layer_input * ensure_compacted_prefix_layer(
+            ggml_context * ctx,
+            int32_t il,
+            ggml_type type_k,
+            ggml_type type_v,
+            int64_t n_embd_head_k,
+            int64_t n_embd_head_v,
+            int64_t n_tokens,
+            int64_t n_head,
+            int64_t n_head_kv);
+
+    const compacted_prefix_layer_input * get_compacted_prefix_layer(int32_t il) const;
+
     ggml_tensor * self_k_idxs     = nullptr; // I64 [n_batch]
     ggml_tensor * self_v_idxs     = nullptr; // I64 [n_batch] or [n_batch*n_embd_v_gqa]
     ggml_tensor * self_k_idxs_swa = nullptr; // I64 [n_batch]
@@ -413,6 +432,13 @@ public:
     ggml_tensor * self_kq_mask_cnv     = nullptr; //     [n_kv, n_batch/n_stream, 1, n_stream]
     ggml_tensor * self_kq_mask_swa     = nullptr; // F32 [n_kv, n_batch/n_stream, 1, n_stream]
     ggml_tensor * self_kq_mask_swa_cnv = nullptr; //     [n_kv, n_batch/n_stream, 1, n_stream]
+
+    bool compacted_prefix_active = false;
+    bool compacted_prefix_is_zero_beta = false;
+    uint32_t compacted_prefix_n_tokens = 0;
+
+    ggml_tensor * compacted_kq_mask = nullptr;
+    std::vector<compacted_prefix_layer_input> compacted_prefix_layers;
 
     const llama_hparams hparams;
     const llama_cparams cparams;

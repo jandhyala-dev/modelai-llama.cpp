@@ -541,12 +541,29 @@ void llm_graph_input_attn_kv_iswa::set_input(const llama_ubatch * ubatch) {
     mctx->get_swa()->set_input_v_idxs(self_v_idxs_swa, ubatch);
 
     mctx->get_swa()->set_input_kq_mask(self_kq_mask_swa, ubatch, cparams.causal_attn);
+
+    if (compacted_prefix_active) {
+        GGML_ASSERT(compacted_kq_mask);
+        mctx->get_base()->set_input_compacted_prefix_mask(compacted_kq_mask, ubatch, cparams.causal_attn);
+
+        for (auto & layer : compacted_prefix_layers) {
+            mctx->get_base()->set_input_compacted_prefix_k(layer.k, layer.il);
+            mctx->get_base()->set_input_compacted_prefix_v(layer.v, layer.il);
+            if (layer.kq_b) {
+                mctx->get_base()->set_input_compacted_prefix_kq_b(layer.kq_b, layer.il);
+            }
+        }
+    }
 }
 
 bool llm_graph_input_attn_kv_iswa::can_reuse(const llm_graph_params & params) {
     const auto * mctx = static_cast<const llama_kv_cache_iswa_context *>(params.mctx);
 
     this->mctx = mctx;
+
+    if (compacted_prefix_active || mctx->get_base()->compacted_prefix_active()) {
+        return false;
+    }
 
     bool res = true;
 
@@ -560,6 +577,53 @@ bool llm_graph_input_attn_kv_iswa::can_reuse(const llm_graph_params & params) {
     res &= can_reuse_kq_mask(self_kq_mask_swa, mctx->get_swa(),  params.ubatch, params.cparams);
 
     return res;
+}
+
+llm_graph_input_attn_kv_iswa::compacted_prefix_layer_input * llm_graph_input_attn_kv_iswa::ensure_compacted_prefix_layer(
+        ggml_context * ctx,
+        int32_t il,
+        ggml_type type_k,
+        ggml_type type_v,
+        int64_t n_embd_head_k,
+        int64_t n_embd_head_v,
+        int64_t n_tokens,
+        int64_t n_head,
+        int64_t n_head_kv) {
+    for (auto & layer : compacted_prefix_layers) {
+        if (layer.il == il) {
+            return &layer;
+        }
+    }
+
+    ggml_tensor * kq_b_tensor = nullptr;
+    if (!compacted_prefix_is_zero_beta) {
+        kq_b_tensor = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, compacted_prefix_n_tokens, n_tokens, n_head, 1);
+    }
+
+    compacted_prefix_layers.push_back({
+        /* .il   = */ il,
+        /* .k    = */ ggml_new_tensor_4d(ctx, type_k, n_embd_head_k, n_head_kv, compacted_prefix_n_tokens, 1),
+        /* .v    = */ ggml_new_tensor_4d(ctx, type_v, n_embd_head_v, n_head_kv, compacted_prefix_n_tokens, 1),
+        /* .kq_b = */ kq_b_tensor,
+    });
+
+    auto & layer = compacted_prefix_layers.back();
+    ggml_set_input(layer.k);
+    ggml_set_input(layer.v);
+    if (layer.kq_b) {
+        ggml_set_input(layer.kq_b);
+    }
+
+    return &layer;
+}
+
+const llm_graph_input_attn_kv_iswa::compacted_prefix_layer_input * llm_graph_input_attn_kv_iswa::get_compacted_prefix_layer(int32_t il) const {
+    for (const auto & layer : compacted_prefix_layers) {
+        if (layer.il == il) {
+            return &layer;
+        }
+    }
+    return nullptr;
 }
 
 void llm_graph_input_attn_cross::set_input(const llama_ubatch * ubatch) {
@@ -2311,13 +2375,80 @@ ggml_tensor * llm_graph_context::build_attn(
         ggml_build_forward_expand(gf, mctx_cur->cpy_v(ctx0, v_cur, v_idxs, il));
     }
 
-    const auto & kq_mask = is_swa ? inp->get_kq_mask_swa() : inp->get_kq_mask();
+    ggml_tensor * kq_mask_combined = is_swa ? inp->get_kq_mask_swa() : inp->get_kq_mask();
 
     ggml_tensor * q = q_cur;
     ggml_tensor * k = mctx_cur->get_k(ctx0, il);
     ggml_tensor * v = mctx_cur->get_v(ctx0, il);
+    ggml_tensor * kq_b_combined = kq_b;
 
-    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, kq_scale, il);
+    // Compacted prefix: only for base (non-SWA) layers.
+    if (!is_swa && inp->has_compacted_prefix()) {
+        const bool zero_beta = inp->compacted_prefix_is_zero_beta;
+        if (!zero_beta) {
+            GGML_ASSERT(!cparams.flash_attn && "compacted-prefix execution with non-zero beta requires the non-flash attention path");
+        }
+
+        const int64_t live_n_kv = k->ne[2];
+
+        const auto * compacted = inp->ensure_compacted_prefix_layer(
+                ctx0,
+                il,
+                k->type,
+                v->type,
+                hparams.n_embd_head_k(il),
+                hparams.n_embd_head_v(il),
+                n_tokens,
+                hparams.n_head(il),
+                hparams.n_head_kv(il));
+
+        GGML_ASSERT(compacted != nullptr);
+
+        k = ggml_concat(ctx0, compacted->k, k, 2);
+
+        if (v->nb[1] > v->nb[2]) {
+            v = ggml_cont(ctx0, ggml_permute(ctx0, v, 2, 1, 0, 3));
+            cb(v, "v_live_nontrans", il);
+        }
+
+        v = ggml_concat(ctx0, compacted->v, v, 2);
+        kq_mask_combined = ggml_concat(ctx0, inp->get_compacted_kq_mask(), kq_mask_combined, 0);
+
+        if (zero_beta) {
+            // Zero-beta path: no kq_b needed, compatible with flash attention.
+        } else if (kq_b) {
+            GGML_ASSERT(kq_b->ne[1] == compacted->kq_b->ne[1] && "compacted-prefix kq_b concat does not support broadcast token dimensions");
+            GGML_ASSERT(kq_b->ne[2] == compacted->kq_b->ne[2] && "compacted-prefix kq_b concat requires matching head dimensions");
+            GGML_ASSERT(kq_b->ne[3] == compacted->kq_b->ne[3] && "compacted-prefix kq_b concat requires matching stream dimensions");
+            kq_b_combined = ggml_concat(ctx0, compacted->kq_b, kq_b, 0);
+        } else {
+            ggml_tensor * live_kq_b_shape = ggml_new_tensor_4d(
+                    ctx0,
+                    GGML_TYPE_F32,
+                    live_n_kv,
+                    compacted->kq_b->ne[1],
+                    compacted->kq_b->ne[2],
+                    compacted->kq_b->ne[3]);
+            ggml_tensor * zero_scalar_src = ggml_cont(
+                    ctx0,
+                    ggml_view_1d(ctx0, compacted->kq_b, 1, 0));
+            ggml_tensor * zero_scalar = ggml_scale(
+                    ctx0,
+                    zero_scalar_src,
+                    0.0f);
+            ggml_tensor * live_kq_b_zero = ggml_repeat(ctx0, zero_scalar, live_kq_b_shape);
+            kq_b_combined = ggml_concat(ctx0, compacted->kq_b, live_kq_b_zero, 0);
+        }
+
+        cb(k, "k_compacted_plus_live", il);
+        cb(v, "v_compacted_plus_live", il);
+        cb(kq_mask_combined, "kq_mask_compacted_plus_live", il);
+        if (kq_b_combined) {
+            cb(kq_b_combined, "kq_b_compacted_plus_live", il);
+        }
+    }
+
+    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b_combined, kq_mask_combined, sinks, v_mla, kq_scale, il);
     cb(cur, "kqv_out", il);
 
     if (wo) {
@@ -2406,8 +2537,35 @@ llm_graph_input_attn_kv_iswa * llm_graph_context::build_attn_inp_kv_iswa() const
         ggml_set_input(inp->self_kq_mask);
         ggml_set_name(inp->self_kq_mask, "self_kq_mask");
 
-        inp->self_kq_mask_cnv = cparams.flash_attn ? ggml_cast(ctx0, inp->self_kq_mask, GGML_TYPE_F16) : inp->self_kq_mask;
-        ggml_set_name(inp->self_kq_mask_cnv, "self_kq_mask_cnv");
+        if (mctx_cur->get_base()->compacted_prefix_active()) {
+            const auto n_stream = cparams.kv_unified ? 1 : ubatch.n_seqs_unq;
+            GGML_ASSERT(n_stream == 1 && "iSWA compacted-prefix execution currently supports a single attention stream");
+
+            const bool zero_beta = mctx_cur->get_base()->compacted_prefix_zero_beta();
+            if (!zero_beta) {
+                GGML_ASSERT(!cparams.flash_attn && "compacted-prefix execution with non-zero beta requires the non-flash attention path");
+            }
+
+            inp->compacted_prefix_active = true;
+            inp->compacted_prefix_is_zero_beta = zero_beta;
+            inp->compacted_prefix_n_tokens = mctx_cur->get_base()->compacted_prefix_n_tokens();
+
+            const ggml_type mask_type = (cparams.flash_attn && zero_beta) ? GGML_TYPE_F16 : GGML_TYPE_F32;
+            inp->compacted_kq_mask = ggml_new_tensor_4d(
+                    ctx0, mask_type,
+                    inp->compacted_prefix_n_tokens, ubatch.n_tokens / n_stream, 1, n_stream);
+            ggml_set_input(inp->compacted_kq_mask);
+
+            if (cparams.flash_attn && zero_beta) {
+                inp->self_kq_mask_cnv = ggml_cast(ctx0, inp->self_kq_mask, GGML_TYPE_F16);
+            } else {
+                inp->self_kq_mask_cnv = inp->self_kq_mask;
+            }
+            ggml_set_name(inp->self_kq_mask_cnv, "self_kq_mask_cnv");
+        } else {
+            inp->self_kq_mask_cnv = cparams.flash_attn ? ggml_cast(ctx0, inp->self_kq_mask, GGML_TYPE_F16) : inp->self_kq_mask;
+            ggml_set_name(inp->self_kq_mask_cnv, "self_kq_mask_cnv");
+        }
     }
 
     {
