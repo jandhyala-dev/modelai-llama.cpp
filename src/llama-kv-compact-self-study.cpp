@@ -106,6 +106,95 @@ static int32_t parse_layer_index(const char * name) {
     return (int32_t)val;
 }
 
+// ---------------------------------------------------------------------------
+// GQA regrouping + subsampling
+// ---------------------------------------------------------------------------
+
+bool llama_q_capture_regroup_for_kv_head(
+        const llama_q_capture_state & q_state,
+        int32_t   il,
+        uint32_t  h_kv,
+        uint32_t  n_head_kv,
+        llama_kv_compact_matrix & out) {
+
+    if (il < 0 || il >= q_state.n_layers) {
+        return false;
+    }
+
+    const auto & lq = q_state.layers[il];
+    if (lq.n_tokens == 0) {
+        return false;
+    }
+
+    const uint32_t n_head_q    = lq.n_head_q;
+    const uint32_t n_embd_head = lq.n_embd_head;
+    const uint32_t n_tokens    = lq.n_tokens;
+
+    // GQA repetition factor: how many Q heads map to each KV head
+    // For non-GQA models: n_rep == 1 (pass-through)
+    const uint32_t n_rep = n_head_q / n_head_kv;
+
+    // Q heads for this KV head: [h_kv * n_rep, (h_kv + 1) * n_rep)
+    const uint32_t q_head_start = h_kv * n_rep;
+    const uint32_t q_head_end   = q_head_start + n_rep;
+
+    if (q_head_end > n_head_q) {
+        LLAMA_LOG_WARN("q_capture regroup: q_head_end %u > n_head_q %u\n", q_head_end, n_head_q);
+        return false;
+    }
+
+    // Output: [n_rep * n_tokens, n_embd_head]
+    const uint32_t total_rows = n_rep * n_tokens;
+    out.resize(total_rows, n_embd_head);
+
+    // Capture data is token-major:
+    //   data[tok * (n_head_q * n_embd_head) + head * n_embd_head ... + n_embd_head]
+    //
+    // We iterate over each Q head in [q_head_start, q_head_end), and for each
+    // captured token, copy its n_embd_head floats into the output matrix.
+    const size_t head_stride = (size_t)n_embd_head;
+    const size_t tok_stride  = (size_t)n_head_q * n_embd_head;
+
+    uint32_t out_row = 0;
+    for (uint32_t qh = q_head_start; qh < q_head_end; qh++) {
+        for (uint32_t tok = 0; tok < n_tokens; tok++) {
+            const float * src = lq.data.data() + tok * tok_stride + qh * head_stride;
+            std::memcpy(out.row(out_row), src, n_embd_head * sizeof(float));
+            out_row++;
+        }
+    }
+
+    return true;
+}
+
+void llama_q_capture_subsample(
+        llama_kv_compact_matrix & mat,
+        uint32_t max_queries) {
+
+    if (mat.rows <= max_queries) {
+        return;  // no subsampling needed
+    }
+
+    // Uniform stride subsampling: pick every stride-th row
+    const uint32_t stride = mat.rows / max_queries;
+    const uint32_t cols   = mat.cols;
+
+    uint32_t dst_row = 0;
+    for (uint32_t src_row = 0; dst_row < max_queries; src_row += stride, dst_row++) {
+        if (dst_row != src_row) {
+            std::memcpy(mat.row(dst_row), mat.row(src_row), cols * sizeof(float));
+        }
+    }
+
+    // Shrink: update row count and trim data
+    mat.rows = max_queries;
+    mat.data.resize((size_t)max_queries * cols);
+}
+
+// ---------------------------------------------------------------------------
+// cb_eval callback
+// ---------------------------------------------------------------------------
+
 bool llama_q_capture_eval_callback(struct ggml_tensor * t, bool ask, void * user_data) {
     auto * state = static_cast<llama_q_capture_state *>(user_data);
 

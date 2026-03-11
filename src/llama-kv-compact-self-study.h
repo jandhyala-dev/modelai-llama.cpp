@@ -31,9 +31,10 @@ struct llama_kv_compact_self_study_stats {
 // Q-capture state (user_data for cb_eval callback)
 //
 // During autoregressive generation, the cb_eval callback writes post-RoPE Q
-// tensor data into this structure.  Data is laid out head-major per layer:
-//   layers[il].data = [head0_tok0..tokN, head1_tok0..tokN, ...]
-// where each element is n_embd_head floats.
+// tensor data into this structure.  Data is laid out token-major per layer:
+//   layers[il].data = [tok0_head0..headN, tok1_head0..headN, ...]
+// where each element is n_embd_head floats.  The regroup functions convert
+// this to per-KV-head matrices for the solver.
 struct llama_q_capture_state {
     bool    active   = false;
     int32_t n_layers = 0;
@@ -42,7 +43,7 @@ struct llama_q_capture_state {
         uint32_t n_embd_head = 0;
         uint32_t n_head_q    = 0;
         uint32_t n_tokens    = 0;   // tokens captured so far
-        std::vector<float> data;    // head-major: [head0_tok0..tokN, head1_tok0..tokN, ...]
+        std::vector<float> data;    // token-major: [tok0_head0..headN, tok1_head0..headN, ...]
     };
     std::vector<layer_q> layers;    // indexed by il
 
@@ -63,3 +64,30 @@ struct llama_q_capture_state {
 //
 // Must return true to continue graph computation, false to abort.
 bool llama_q_capture_eval_callback(struct ggml_tensor * t, bool ask, void * user_data);
+
+// ---------------------------------------------------------------------------
+// GQA regrouping + subsampling (slice 6b-3)
+// ---------------------------------------------------------------------------
+
+// Regroup captured Q vectors for a single KV head.
+//
+// From token-major capture data, extracts Q vectors for the n_rep Q heads
+// that map to KV head h_kv, producing a matrix of [n_rep * n_tokens, n_embd_head].
+//
+// For Qwen3-14B (n_head_q=40, n_head_kv=8, n_rep=5):
+//   256 tokens * 5 Q heads = 1280 rows of 128 floats.
+//
+// Returns false if layer has no captured data.
+bool llama_q_capture_regroup_for_kv_head(
+        const llama_q_capture_state & q_state,
+        int32_t   il,
+        uint32_t  h_kv,
+        uint32_t  n_head_kv,
+        llama_kv_compact_matrix & out);
+
+// Subsample a Q matrix to at most max_queries rows via uniform stride.
+// Operates in-place on the input matrix.
+// No-op if rows <= max_queries.
+void llama_q_capture_subsample(
+        llama_kv_compact_matrix & mat,
+        uint32_t max_queries);
