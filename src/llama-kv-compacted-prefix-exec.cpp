@@ -90,7 +90,10 @@ void llama_compacted_prefix_set_input_mask(
 
     const int64_t n_prefix = (int64_t) state.logical_positions.size();
     const int64_t n_stream = dst->ne[3];
-    const int64_t n_tps = ubatch.n_tokens / std::max<int64_t>(n_stream, 1);
+    if (n_stream <= 0 || (ubatch.n_tokens % n_stream) != 0) {
+        throw std::runtime_error("compacted-prefix mask: n_tokens must be divisible by n_stream");
+    }
+    const int64_t n_tps = ubatch.n_tokens / n_stream;
 
     require_dims(dst, n_prefix, n_tps, 1, n_stream, "mask");
 
@@ -177,8 +180,13 @@ void llama_compacted_prefix_set_input_beta(
 
     require_dims(dst, n_prefix, n_tps, n_head, n_stream, "beta");
 
-    if (layer.layout.n_head_kv == 0 || n_head % layer.layout.n_head_kv != 0) {
-        throw std::runtime_error("compacted-prefix beta expansion requires n_head to be divisible by n_head_kv");
+    if (layer.layout.n_head_kv == 0 || n_head < layer.layout.n_head_kv || n_head % layer.layout.n_head_kv != 0) {
+        throw std::runtime_error("compacted-prefix beta expansion requires n_head >= n_head_kv and divisible by n_head_kv");
+    }
+
+    const size_t expected_beta_size = size_t(layer.layout.n_head_kv) * layer.n_compacted_tokens;
+    if (layer.beta_data.size() < expected_beta_size) {
+        throw std::runtime_error("compacted-prefix beta_data is smaller than expected for the configured layout");
     }
 
     const uint32_t n_rep = n_head / layer.layout.n_head_kv;

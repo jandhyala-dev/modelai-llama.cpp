@@ -55,7 +55,7 @@ Given an original KV prefix of length `T`, the paper builds a compacted represen
 
 Modified attention becomes:
 
-`softmax(q @ C_k^T + beta) @ C_v`
+`softmax(q @ C_k^T / sqrt(d) + beta) @ C_v`
 
 Key algorithm facts:
 - approximate, not exact,
@@ -144,6 +144,20 @@ Near-term observability requirements:
   - model-backed regression coverage now proves the runtime-visible active range drops after reclaim,
   - a manual compacted-prefix perf harness reports before/after `active_n_kv` and decode tok/s for the same compacted execution slice,
   - on the current Apple Silicon debug smoke run with `stories15M-q4_0`, that harness reduced `active_n_kv` from `512` to `256` and improved continuation throughput from `244.1 tok/s` to `309.8 tok/s`; this is a branch validation result, not a general release claim,
+- PR-5b is the first solver-complete compaction milestone and is the only branch allowed to claim paper-aligned compression:
+  - the first query-extraction baseline uses RoPE-baked cache keys as surrogate queries, which is valid only because both solver sides remain in the same rotated space,
+  - query extraction is implemented using RoPE-baked cache keys as surrogate queries (`src/llama-kv-compact-query.cpp`),
+  - key selection is implemented with top-k baseline and OMP (`src/llama-kv-compact-select.cpp`),
+  - the first solver pass uses one shared selected-position schedule across the sequence because the current compacted-prefix store exposes a single logical-position array per sequence,
+  - NNLS beta fitting populates `beta_data` (`src/llama-kv-compact-solver.cpp`),
+  - least-squares V fitting populates `v_data` (`src/llama-kv-compact-solver.cpp`),
+  - the solver path is pure C++ dense fp32 math with no LAPACK dependency,
+  - minimal internal read-only KV accessors are added in `src/llama-kv-cache.*` (`compacted_prefix_copy_k_head_f32`, `copy_v_head_f32`, `layer_layout_for_solver`, `seq_positions`),
+  - compacted-prefix payloads are solver-populated from the original KV cache (`src/llama-kv-compact-pipeline.cpp`),
+  - quality is regression-tested on fixed tolerances (`tests/test-kv-compact-quality.cpp`): continuation-logit cosine >= 0.95 at 2x, >= 0.90 at 4x, >= 0.85 at 8x,
+  - a real ModelAI-like workload must prove Goal 1 and Goal 2 (`>= 1B` model, `>= 2048` real-text prefix, W2 or W3 workload, same-run quality gate satisfied),
+- with PR-5b, the compacted-prefix store is solver-populated from the original KV cache via the Attention Matching pipeline (query extraction, key selection with top-k and OMP, NNLS beta fitting, least-squares V fitting),
+- P5b implementation steps before the pipeline orchestration step are only unit-testable with synthetic matrices; branch closure still requires the model-backed path and benchmark proof,
 - narrow v0 compaction path on the supported matrix,
 - measured long-session improvements on ModelAI workloads,
 - measured repeated-turn follow-up improvements on at least one supported workload.

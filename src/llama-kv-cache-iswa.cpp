@@ -247,6 +247,44 @@ llama_kv_cache * llama_kv_cache_iswa::get_swa() const {
     return kv_swa.get();
 }
 
+// compacted prefix — delegate to kv_base
+
+bool llama_kv_cache_iswa::compacted_prefix_fit_from_live_kv(
+        llama_seq_id seq_id,
+        uint32_t target_tokens,
+        llama_pos live_suffix_pos0,
+        llama_kv_compact_pipeline_stats * stats,
+        llama_pos p0,
+        uint32_t max_queries,
+        int nnls_iters,
+        float lambda) {
+    return kv_base->compacted_prefix_fit_from_live_kv(
+            seq_id, target_tokens, live_suffix_pos0, stats,
+            p0, max_queries, nnls_iters, lambda);
+}
+
+bool llama_kv_cache_iswa::compacted_prefix_select_from_live_kv(
+        llama_seq_id seq_id,
+        uint32_t target_tokens,
+        llama_pos live_suffix_pos0,
+        llama_kv_compact_pipeline_stats * stats,
+        llama_pos p0) {
+    return kv_base->compacted_prefix_select_from_live_kv(
+            seq_id, target_tokens, live_suffix_pos0, stats, p0);
+}
+
+bool llama_kv_cache_iswa::compacted_prefix_set_execution(llama_seq_id seq_id, bool enabled) {
+    return kv_base->compacted_prefix_set_execution(seq_id, enabled);
+}
+
+bool llama_kv_cache_iswa::compacted_prefix_reclaim_live_kv(llama_seq_id seq_id) {
+    return kv_base->compacted_prefix_reclaim_live_kv(seq_id);
+}
+
+uint32_t llama_kv_cache_iswa::compacted_prefix_active_n_kv(llama_seq_id seq_id) const {
+    return kv_base->compacted_prefix_active_n_kv(seq_id);
+}
+
 //
 // llama_kv_cache_iswa_context
 //

@@ -2,7 +2,9 @@
 #include "common.h"
 #include "llama.h"
 #include "src/llama-context.h"
+#include "src/llama-kv-compact-pipeline.h"
 #include "src/llama-kv-cache.h"
+#include "src/llama-kv-cache-iswa.h"
 
 #include <cstdio>
 #include <string>
@@ -44,7 +46,13 @@ int main(int argc, char ** argv) {
 
     auto * kv = dynamic_cast<llama_kv_cache *>(ctx->get_memory());
     if (kv == nullptr) {
-        return fail("test requires a standard llama_kv_cache memory backend");
+        auto * kv_iswa = dynamic_cast<llama_kv_cache_iswa *>(ctx->get_memory());
+        if (kv_iswa != nullptr) {
+            kv = kv_iswa->get_base();
+        }
+    }
+    if (kv == nullptr) {
+        return fail("test requires a llama_kv_cache or llama_kv_cache_iswa memory backend");
     }
 
     constexpr int seed_tokens = 320;
@@ -65,14 +73,20 @@ int main(int argc, char ** argv) {
         return fail("expected active n_kv before reclaim to exceed the 256 floor");
     }
 
-    if (!kv->compacted_prefix_configure(0, seed_tokens, { 0, 64, 128, 192 }, 256)) {
+    llama_kv_compact_pipeline_stats stats = {};
+    if (!kv->compacted_prefix_fit_from_live_kv(0, 64, 256, &stats)) {
         llama_batch_free(batch);
-        return fail("failed to configure compacted prefix");
+        return fail("failed to fit compacted prefix from live KV");
     }
 
     if (!kv->compacted_prefix_set_execution(0, true) || !kv->compacted_prefix_execution_enabled(0)) {
         llama_batch_free(batch);
         return fail("failed to enable compacted-prefix execution");
+    }
+
+    if (stats.n_selected_tokens != 64 || stats.n_prefix_tokens != 256) {
+        llama_batch_free(batch);
+        return fail("unexpected compacted-prefix pipeline stats");
     }
 
     if (!kv->compacted_prefix_reclaim_live_kv(0)) {

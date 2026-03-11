@@ -241,6 +241,8 @@ llama_build_and_test(test-kv-compacted-prefix.cpp)
 target_include_directories(test-kv-compacted-prefix PRIVATE ${PROJECT_SOURCE_DIR})
 llama_build_and_test(test-kv-compacted-prefix-exec.cpp)
 target_include_directories(test-kv-compacted-prefix-exec PRIVATE ${PROJECT_SOURCE_DIR})
+llama_build_and_test(test-kv-compact-solver.cpp)
+target_include_directories(test-kv-compact-solver PRIVATE ${PROJECT_SOURCE_DIR})
 
 llama_build_and_test(test-model-load-cancel.cpp LABEL "model")
 llama_build_and_test(test-autorelease.cpp       LABEL "model")
@@ -258,6 +260,10 @@ set_tests_properties(test-state-restore-compacted-prefix PROPERTIES FIXTURES_REQ
 llama_build_and_test(test-kv-compacted-prefix-pack.cpp LABEL "model" ARGS -m "${MODEL_DEST}")
 target_include_directories(test-kv-compacted-prefix-pack PRIVATE ${PROJECT_SOURCE_DIR})
 set_tests_properties(test-kv-compacted-prefix-pack PROPERTIES FIXTURES_REQUIRED test-download-model)
+
+llama_build_and_test(test-kv-compact-quality.cpp LABEL "model" ARGS -m "${MODEL_DEST}")
+target_include_directories(test-kv-compact-quality PRIVATE ${PROJECT_SOURCE_DIR})
+set_tests_properties(test-kv-compact-quality PROPERTIES FIXTURES_REQUIRED test-download-model)
 
 llama_build(test-kv-compacted-prefix-perf.cpp get-model.cpp)
 target_include_directories(test-kv-compacted-prefix-perf PRIVATE ${PROJECT_SOURCE_DIR})

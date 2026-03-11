@@ -2,6 +2,7 @@
 
 #include "llama-impl.h"
 #include "llama-io.h"
+#include "llama-kv-compact-pipeline.h"
 #include "llama-model.h"
 #include "llama-context.h"
 
@@ -12,6 +13,25 @@
 #include <limits>
 #include <map>
 #include <stdexcept>
+
+namespace {
+
+bool is_scalar_solver_type(ggml_type type) {
+    return type == GGML_TYPE_F16 || type == GGML_TYPE_BF16 || type == GGML_TYPE_F32;
+}
+
+void type_to_float(const void * src, ggml_type type, float * dst, int64_t n) {
+    if (type == GGML_TYPE_F32) {
+        std::memcpy(dst, src, size_t(n) * sizeof(float));
+        return;
+    }
+
+    auto to_float = ggml_get_type_traits(type)->to_float;
+    GGML_ASSERT(to_float != nullptr);
+    to_float(src, dst, n);
+}
+
+} // namespace
 
 //
 // llama_kv_cache
@@ -687,6 +707,9 @@ void llama_kv_cache::compacted_prefix_pack_stream_tensors(
     }
 }
 
+// NOTE: compacted_prefix_reclaim_live_kv is not thread-safe.
+// All llama_kv_cache operations assume single-threaded access
+// (same contract as the base class).
 bool llama_kv_cache::compacted_prefix_reclaim_live_kv(llama_seq_id seq_id) {
     if (!compacted_prefix_runtime_supported() || seq_id < 0 || (size_t) seq_id >= seq_to_stream.size()) {
         return false;
@@ -750,6 +773,225 @@ bool llama_kv_cache::compacted_prefix_reclaim_live_kv(llama_seq_id seq_id) {
     return true;
 }
 
+bool llama_kv_cache::compacted_prefix_fit_from_live_kv(
+        llama_seq_id seq_id,
+        uint32_t target_tokens,
+        llama_pos live_suffix_pos0,
+        llama_kv_compact_pipeline_stats * stats,
+        llama_pos p0,
+        uint32_t max_queries,
+        int nnls_iters,
+        float lambda) {
+    return llama_kv_compact_fit_from_live_kv(*this, seq_id, target_tokens, live_suffix_pos0, stats, p0, max_queries, nnls_iters, lambda);
+}
+
+bool llama_kv_cache::compacted_prefix_select_from_live_kv(
+        llama_seq_id seq_id,
+        uint32_t target_tokens,
+        llama_pos live_suffix_pos0,
+        llama_kv_compact_pipeline_stats * stats,
+        llama_pos p0) {
+    return llama_kv_compact_select_from_live_kv(*this, seq_id, target_tokens, live_suffix_pos0, stats, p0);
+}
+
+bool llama_kv_cache::compacted_prefix_layer_layout_for_solver(int32_t il, llama_compacted_prefix_layer_layout & out) const {
+    const auto it = map_layer_ids.find(il);
+    if (it == map_layer_ids.end()) {
+        return false;
+    }
+
+    const auto & layouts = compacted_prefix.get_layouts();
+    const int32_t ikv = it->second;
+    if (ikv < 0 || size_t(ikv) >= layouts.size()) {
+        return false;
+    }
+
+    out = layouts[size_t(ikv)];
+    return true;
+}
+
+bool llama_kv_cache::compacted_prefix_seq_positions(
+        llama_seq_id seq_id, llama_pos p0, llama_pos p1, std::vector<llama_pos> & out) const {
+    out.clear();
+
+    if (seq_id < 0 || (size_t) seq_id >= seq_to_stream.size()) {
+        return false;
+    }
+
+    if (p0 < 0) {
+        p0 = 0;
+    }
+    if (p1 < 0) {
+        p1 = std::numeric_limits<llama_pos>::max();
+    }
+
+    const uint32_t strm = seq_to_stream[seq_id];
+    const auto & cells = v_cells[strm];
+
+    out.reserve(cells.get_used());
+    for (uint32_t idx = 0; idx < cells.used_max_p1(); ++idx) {
+        if (cells.is_empty(idx) || !cells.seq_has(idx, seq_id)) {
+            continue;
+        }
+        const llama_pos pos = cells.pos_get(idx);
+        if (pos >= p0 && pos < p1) {
+            out.push_back(pos);
+        }
+    }
+
+    std::sort(out.begin(), out.end());
+    out.erase(std::unique(out.begin(), out.end()), out.end());
+    return !out.empty();
+}
+
+bool llama_kv_cache::compacted_prefix_copy_k_head_f32(
+        int32_t il,
+        llama_seq_id seq_id,
+        uint32_t head_kv,
+        const std::vector<llama_pos> & positions,
+        std::vector<float> & out) const {
+    out.clear();
+
+    llama_compacted_prefix_layer_layout layout;
+    if (!compacted_prefix_layer_layout_for_solver(il, layout) || !is_scalar_solver_type(layout.type_k)) {
+        return false;
+    }
+
+    const auto it = map_layer_ids.find(il);
+    if (it == map_layer_ids.end() || head_kv >= layout.n_head_kv || seq_id < 0 || (size_t) seq_id >= seq_to_stream.size()) {
+        return false;
+    }
+
+    const uint32_t strm = seq_to_stream[seq_id];
+    const auto & cells = v_cells[strm];
+    const uint32_t n_embd_k_gqa = hparams.n_embd_k_gqa(il);
+    const uint32_t head_dim = layout.n_embd_head_k;
+    const size_t type_size = ggml_type_size(layout.type_k);
+    const size_t row_size = ggml_row_size(layout.type_k, n_embd_k_gqa);
+    const size_t head_offset = size_t(head_kv) * head_dim * type_size;
+
+    std::unordered_map<llama_pos, uint32_t> pos_to_idx;
+    for (uint32_t idx = 0; idx < cells.used_max_p1(); ++idx) {
+        if (!cells.is_empty(idx) && cells.seq_has(idx, seq_id)) {
+            pos_to_idx.emplace(cells.pos_get(idx), idx);
+        }
+    }
+
+    std::vector<uint8_t> row_bytes(row_size);
+    std::vector<float> row_f32(head_dim);
+    out.resize(size_t(positions.size()) * head_dim);
+
+    const auto & layer = layers[size_t(it->second)];
+    auto * k = layer.k_stream[strm];
+    if (k == nullptr) {
+        return false;
+    }
+
+    for (size_t i = 0; i < positions.size(); ++i) {
+        const auto pos_it = pos_to_idx.find(positions[i]);
+        if (pos_it == pos_to_idx.end()) {
+            return false;
+        }
+        ggml_backend_tensor_get(k, row_bytes.data(), size_t(pos_it->second) * row_size, row_size);
+        type_to_float(row_bytes.data() + head_offset, layout.type_k, row_f32.data(), head_dim);
+        std::copy(row_f32.begin(), row_f32.end(), out.begin() + ptrdiff_t(i * head_dim));
+    }
+
+    return true;
+}
+
+bool llama_kv_cache::compacted_prefix_copy_v_head_f32(
+        int32_t il,
+        llama_seq_id seq_id,
+        uint32_t head_kv,
+        const std::vector<llama_pos> & positions,
+        std::vector<float> & out) const {
+    out.clear();
+
+    llama_compacted_prefix_layer_layout layout;
+    if (!compacted_prefix_layer_layout_for_solver(il, layout) || !is_scalar_solver_type(layout.type_v)) {
+        return false;
+    }
+    if (layout.n_embd_head_v == 0) {
+        return true;
+    }
+
+    const auto it = map_layer_ids.find(il);
+    if (it == map_layer_ids.end() || head_kv >= layout.n_head_kv || seq_id < 0 || (size_t) seq_id >= seq_to_stream.size()) {
+        return false;
+    }
+
+    const uint32_t strm = seq_to_stream[seq_id];
+    const auto & cells = v_cells[strm];
+    const auto & layer = layers[size_t(it->second)];
+    auto * v = layer.v_stream[strm];
+    if (v == nullptr) {
+        return false;
+    }
+
+    std::unordered_map<llama_pos, uint32_t> pos_to_idx;
+    for (uint32_t idx = 0; idx < cells.used_max_p1(); ++idx) {
+        if (!cells.is_empty(idx) && cells.seq_has(idx, seq_id)) {
+            pos_to_idx.emplace(cells.pos_get(idx), idx);
+        }
+    }
+
+    const uint32_t head_dim = layout.n_embd_head_v;
+    const uint32_t n_embd_v_gqa = hparams.n_embd_v_gqa(il);
+    const size_t type_size = ggml_type_size(layout.type_v);
+    out.resize(size_t(positions.size()) * head_dim);
+
+    if (!v_trans) {
+        const size_t row_size = ggml_row_size(layout.type_v, n_embd_v_gqa);
+        const size_t head_offset = size_t(head_kv) * head_dim * type_size;
+        std::vector<uint8_t> row_bytes(row_size);
+        std::vector<float> row_f32(head_dim);
+
+        for (size_t i = 0; i < positions.size(); ++i) {
+            const auto pos_it = pos_to_idx.find(positions[i]);
+            if (pos_it == pos_to_idx.end()) {
+                return false;
+            }
+            ggml_backend_tensor_get(v, row_bytes.data(), size_t(pos_it->second) * row_size, row_size);
+            type_to_float(row_bytes.data() + head_offset, layout.type_v, row_f32.data(), head_dim);
+            std::copy(row_f32.begin(), row_f32.end(), out.begin() + ptrdiff_t(i * head_dim));
+        }
+        return true;
+    }
+
+    // Batch column extraction: read one full column per embedding dimension.
+    // Transposed V layout: v[cell_idx + (head_offset + j) * kv_size].
+    // O(head_dim) backend calls instead of O(positions * head_dim).
+    const uint32_t kv_size = get_size();
+    const uint32_t head_offset = head_kv * head_dim;
+    const size_t col_bytes = size_t(kv_size) * type_size;
+    std::vector<uint8_t> col_buf(col_bytes);
+    std::vector<float> col_f32(kv_size);
+
+    // Build cell index lookup for positions.
+    std::vector<uint32_t> cell_indices(positions.size());
+    for (size_t i = 0; i < positions.size(); ++i) {
+        const auto pos_it = pos_to_idx.find(positions[i]);
+        if (pos_it == pos_to_idx.end()) {
+            return false;
+        }
+        cell_indices[i] = pos_it->second;
+    }
+
+    auto to_float = ggml_get_type_traits(layout.type_v)->to_float;
+    for (uint32_t j = 0; j < head_dim; ++j) {
+        const size_t col_offset = size_t(head_offset + j) * kv_size * type_size;
+        ggml_backend_tensor_get(v, col_buf.data(), col_offset, col_bytes);
+        to_float(col_buf.data(), col_f32.data(), kv_size);
+
+        for (size_t i = 0; i < positions.size(); ++i) {
+            out[i * head_dim + j] = col_f32[cell_indices[i]];
+        }
+    }
+
+    return true;
+}
+
 const llama_compacted_prefix_store * llama_kv_cache::get_compacted_prefix() const {
     return &compacted_prefix;
 }
@@ -759,11 +1001,10 @@ llama_compacted_prefix_store * llama_kv_cache::get_compacted_prefix() {
 }
 
 bool llama_kv_cache::compacted_prefix_runtime_supported() const {
-    if (hparams.swa_type != LLAMA_SWA_TYPE_NONE || n_swa > 0 || swa_type != LLAMA_SWA_TYPE_NONE) {
-        return false;
-    }
-
-    if (llm_arch_is_hybrid(model.arch)) {
+    // Check instance-level SWA config, not model-level hparams.
+    // When used as kv_base inside llama_kv_cache_iswa, this instance has
+    // n_swa=0 and swa_type=NONE even though the model has SWA layers.
+    if (n_swa > 0 || swa_type != LLAMA_SWA_TYPE_NONE) {
         return false;
     }
 

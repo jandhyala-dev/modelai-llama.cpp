@@ -88,7 +88,8 @@ CI jobs that configure the engine must fetch `upstream-master` before the config
 | PR-2 memory architecture | build + `ctest` + state/layout tests |
 | PR-3 correctness | build + `ctest` + compacted-prefix execution/materialization fixtures + state regression |
 | PR-4 session/state | build + `ctest` + save/restore tests |
-| PR-5 performance | build + `ctest` + model-backed active-range regression + compacted-prefix perf harness output |
+| PR-5a runtime/perf slice | build + `ctest` + model-backed active-range regression + compacted-prefix perf harness output |
+| PR-5b solver pipeline | build + `ctest` + solver unit tests + quality tests + ModelAI-like benchmark proof + attached benchmark artifacts |
 | PR-6 coverage | build + `ctest` + backend-specific regression suite |
 
 ## Benchmark Regression Detection
@@ -122,6 +123,19 @@ CI jobs that configure the engine must fetch `upstream-master` before the config
 - performance regression > 10% on a key metric requires investigation before release
 - quality regression > 1% perplexity delta requires investigation before release
 - upstream merge into `modelai-main` requires at minimum a W2 smoke run once the benchmark harness exists
+
+### PR-5b closure thresholds
+
+`PR-5b` CI evidence is only sufficient if all of the following are true:
+1. model size is `>= 1B`
+2. real-text prefix is `>= 2048` tokens
+3. workload is `W2` or `W3`
+4. attention-output cosine similarity is `>= 0.95`
+5. continuation-logit cosine similarity is `>= 0.95`
+6. partition-sum relative error is emitted in the artifact set
+7. query-generation time and solver time are reported alongside tok/s and active `n_kv`
+
+Synthetic solver tests are required but not sufficient. The merge gate is only satisfied once the model-backed pipeline run exists.
 
 ## Failure Handling
 
@@ -165,3 +179,10 @@ For the current PR-5 slice, the minimum attached evidence is:
 1. model-backed `test-kv-compacted-prefix-pack`
 2. manual `test-kv-compacted-prefix-perf` output showing before/after `active_n_kv`
 3. matching before/after decode tok/s from the same compacted execution slice
+
+
+For `PR-5b`, CI evidence must include:
+1. solver-path unit-test output for the pure C++ fp32 fitting path
+2. solver-path quality regression output
+3. attached benchmark artifacts from a ModelAI-like workload (`>= 1B`, `>= 2048` real-text prefix, `W2` or `W3`)
+4. explicit reporting of attention-output cosine, continuation-logit cosine, partition-sum relative error, tok/s, active `n_kv`, `query_generation_time_ms`, and `solver_time_ms`

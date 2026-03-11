@@ -61,7 +61,8 @@ The plan assumes the following current `llama.cpp` realities:
 | PR-2 | `kv-compact-pr2-memory-arch` | Compacted-prefix memory architecture |
 | PR-3 | `kv-compact-pr3-correctness` | Non-flash correctness path |
 | PR-4 | `kv-compact-pr4-session-state` | Session and state integration |
-| PR-5 | `kv-compact-pr5-performance` | Real performance path |
+| PR-5a | `kv-compact-pr5-performance` | Runtime reclaim and perf slice |
+| PR-5b | `kv-compact-pr5b-solver-pipeline` | Solver-derived compaction pipeline |
 | PR-6 | `kv-compact-pr6-coverage` | Coverage expansion |
 
 ## PR-0: Docs Baseline And Governance
@@ -260,7 +261,7 @@ The following items are intentionally not part of this branch and must be addres
 - key selection policies (`topk`, OMP, or nonuniform schedules)
 - NNLS beta fitting
 - least-squares value fitting:
-  - primary: Householder QR
+  - primary: `lstsq`-equivalent dense fp32 least-squares
   - fallback: regularized Cholesky with `lambda=1e-6`
 - chat-template / BOS preservation policy
 - public runtime/server enablement
@@ -313,7 +314,7 @@ Make compacted state usable in real session lifecycles.
 - session continuation remains safe after restore
 - file-format changes are versioned so old state files fail cleanly instead of mis-parsing
 
-## PR-5: Real Performance Path
+## PR-5a: Runtime Reclaim And Perf Slice
 
 **Objective**
 
@@ -339,6 +340,112 @@ Important note:
 Measured progress on Goal 1 and/or Goal 2 on at least one supported workload, with:
 - a model-backed regression proving `active_n_kv` shrinks after reclaim, and
 - attached benchmark output from the manual compacted-prefix perf harness.
+
+## PR-5b: Solver-Derived Compaction Pipeline
+
+**Objective**
+
+Turn the compacted-prefix store from a manually populated container into a solver-derived representation of the original KV cache.
+
+**Scope**
+
+- real query extraction
+- real key selection (`top-k` first, OMP after the baseline is working)
+- real NNLS `beta` fitting
+- real least-squares `V` fitting
+- end-to-end pipeline that writes solver outputs into the existing compacted-prefix store
+- quality validation on fixed tolerances
+- benchmark proof on a real ModelAI-like workload
+
+**Correctness assumptions**
+
+- the first query-extraction path uses cache keys as surrogate queries
+- that baseline is valid only because live cached `K` tensors are already RoPE-applied, so the solver’s query and key sides remain in the same rotated space
+- any later pre-RoPE or self-study query source must apply matching RoPE and GQA regrouping before fitting
+
+**Solver dependency and precision policy**
+
+- no LAPACK dependency is allowed for `PR-5b`
+- the solver must be implemented as pure dense C++ because the matrix sizes are small enough for an internal fp32 path
+- query extraction must upcast runtime K/V data to fp32
+- all fitting math runs in fp32
+- fitted `C_k` and `C_v` are cast back to store dtype only when written into compacted storage
+- `beta` remains fp32 throughout
+
+Primary implementation files:
+- `src/llama-kv-compact-solver.h/.cpp`
+- `src/llama-kv-compact-select.h/.cpp`
+- `src/llama-kv-compact-query.h/.cpp`
+- `src/llama-kv-compact-pipeline.h/.cpp`
+- `tests/test-kv-compact-quality.cpp`
+
+Also impacted:
+- `src/CMakeLists.txt`
+- `tests/CMakeLists.txt`
+- `src/llama-kv-cache.h/.cpp`
+- `docs/modelai-kv-compaction-plan.md`
+- `docs/modelai-fork-summary.md`
+
+Required internal read-only accessors in `src/llama-kv-cache.h/.cpp`:
+- `compacted_prefix_copy_k_head_f32(...)`
+- `compacted_prefix_copy_v_head_f32(...)`
+- `compacted_prefix_layer_layout_for_solver(...)`
+- `compacted_prefix_seq_positions(...)`
+
+These accessors stay internal to `src/` and must not become part of the public `include/llama.h` API.
+
+Required solver-input behavior:
+- live `K` extraction is row-major but must be upcast to fp32
+- live `V` extraction must handle `v_trans` correctly and de-transpose to canonical token-major fp32 matrices before fitting
+- the first solver pass uses a single shared selected-position schedule across the sequence because the compacted-prefix store currently exposes one logical-position array per sequence; per-layer / per-KV-head fitting still happens on top of that shared schedule
+
+Minimum quality metrics and thresholds:
+- attention-output cosine similarity `>= 0.95`
+- continuation-logit cosine similarity `>= 0.95`
+- partition-sum relative error must be emitted
+
+Minimum benchmark workload for merge:
+- model size `>= 1B`
+- real-text prefix `>= 2048` tokens
+- workload `W2` or `W3`
+- quality thresholds satisfied on the same run
+
+Important note:
+- `PR-5a` proves that reducing runtime-visible active KV range can improve repeated-turn throughput,
+- `PR-5b` is the first branch allowed to claim paper-aligned KV compression because it computes compacted payloads from the original KV cache.
+- steps 1-3 of the `PR-5b` implementation order are only unit-testable with synthetic matrices until the pipeline orchestration step exists; merge confidence requires the model-backed path, not synthetic math tests alone
+
+**Quality gate**
+
+Minimum `PR-5b` quality metrics:
+- compacted-vs-full attention-output cosine similarity `>= 0.95`
+- compacted-vs-full continuation-logit cosine similarity `>= 0.95`
+- partition-sum relative error must be reported explicitly
+
+Minimum benchmark workload for merge:
+- model size `>= 1B`
+- real-text prefix `>= 2048` tokens
+- workload `W2` or `W3`
+- quality thresholds satisfied on the same run
+
+**Non-goals**
+
+- chat-template / BOS / uncompacted system-prefix policy changes remain out of scope for the first `PR-5b` pass
+- V-transpose layout optimizations remain out of scope; the first solver pass may de-transpose live `V` into canonical fp32 rows for fitting
+- OMP is not required for the first mergeable solver slice; top-k is sufficient for the initial end-to-end path as long as the quality and workload gates are met
+
+**Merge gate**
+
+All seven paper-aligned deliverables must be complete:
+1. query extraction
+2. key selection
+3. NNLS beta fitting
+4. least-squares V fitting
+5. solver-populated compacted payloads
+6. quality regression coverage
+7. benchmark proof on a real ModelAI workload
+
+A branch that lacks any of the above must not be labeled as final `P5` completion.
 
 ## PR-6: Coverage Expansion
 
