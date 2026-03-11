@@ -1,19 +1,12 @@
 #include "llama-kv-compact-select.h"
+#include "llama-kv-compact-math.h"
 
 #include <algorithm>
 #include <cmath>
 #include <limits>
 #include <numeric>
 
-namespace {
-float dot_row(const float * a, const float * b, uint32_t n) {
-    float v = 0.0f;
-    for (uint32_t i = 0; i < n; ++i) {
-        v += a[i] * b[i];
-    }
-    return v;
-}
-}
+using llama_kv_compact_math::dot_row;
 
 void llama_kv_compact_accumulate_attention_scores(
         const llama_kv_compact_matrix & queries,

@@ -1,4 +1,5 @@
 #include "llama-kv-compact-solver.h"
+#include "llama-kv-compact-math.h"
 
 #include <algorithm>
 #include <cmath>
@@ -7,13 +8,7 @@
 
 namespace {
 
-float dot_row(const float * a, const float * b, uint32_t n) {
-    float v = 0.0f;
-    for (uint32_t i = 0; i < n; ++i) {
-        v += a[i] * b[i];
-    }
-    return v;
-}
+using llama_kv_compact_math::dot_row;
 
 bool solve_spd_cholesky(
         std::vector<float> a,
