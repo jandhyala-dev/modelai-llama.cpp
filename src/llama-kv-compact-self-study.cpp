@@ -190,15 +190,20 @@ void llama_q_capture_subsample(
         return;  // no subsampling needed
     }
 
-    // Uniform stride subsampling: pick every stride-th row
-    const uint32_t stride = mat.rows / max_queries;
-    const uint32_t cols   = mat.cols;
+    // Float-stepping subsampling: uniformly sample max_queries rows.
+    // Integer stride degenerates to truncation when rows is between
+    // max_queries and 2*max_queries (e.g. Qwen3-14B: 1280/1024 = stride 1).
+    // Float step ensures all GQA head groups are represented proportionally.
+    const uint32_t cols = mat.cols;
+    const float step = (float)mat.rows / (float)max_queries;
 
     uint32_t dst_row = 0;
-    for (uint32_t src_row = 0; dst_row < max_queries; src_row += stride, dst_row++) {
+    for (uint32_t i = 0; i < max_queries; i++) {
+        const uint32_t src_row = (uint32_t)(i * step);
         if (dst_row != src_row) {
             std::memcpy(mat.row(dst_row), mat.row(src_row), cols * sizeof(float));
         }
+        dst_row++;
     }
 
     // Shrink: update row count and trim data
