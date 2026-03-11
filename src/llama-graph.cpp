@@ -437,7 +437,9 @@ void llm_graph_input_attn_kv::set_input(const llama_ubatch * ubatch) {
         for (auto & layer : compacted_prefix_layers) {
             mctx->set_input_compacted_prefix_k(layer.k, layer.il);
             mctx->set_input_compacted_prefix_v(layer.v, layer.il);
-            mctx->set_input_compacted_prefix_kq_b(layer.kq_b, layer.il);
+            if (layer.kq_b) {
+                mctx->set_input_compacted_prefix_kq_b(layer.kq_b, layer.il);
+            }
         }
     }
 }
@@ -477,17 +479,24 @@ llm_graph_input_attn_kv::compacted_prefix_layer_input * llm_graph_input_attn_kv:
         }
     }
 
+    ggml_tensor * kq_b_tensor = nullptr;
+    if (!compacted_prefix_is_zero_beta) {
+        kq_b_tensor = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, compacted_prefix_n_tokens, n_tokens, n_head, 1);
+    }
+
     compacted_prefix_layers.push_back({
         /* .il   = */ il,
         /* .k    = */ ggml_new_tensor_4d(ctx, type_k, n_embd_head_k, n_head_kv, compacted_prefix_n_tokens, 1),
         /* .v    = */ ggml_new_tensor_4d(ctx, type_v, n_embd_head_v, n_head_kv, compacted_prefix_n_tokens, 1),
-        /* .kq_b = */ ggml_new_tensor_4d(ctx, GGML_TYPE_F32, compacted_prefix_n_tokens, n_tokens, n_head, 1),
+        /* .kq_b = */ kq_b_tensor,
     });
 
     auto & layer = compacted_prefix_layers.back();
     ggml_set_input(layer.k);
     ggml_set_input(layer.v);
-    ggml_set_input(layer.kq_b);
+    if (layer.kq_b) {
+        ggml_set_input(layer.kq_b);
+    }
 
     return &layer;
 }
@@ -2014,17 +2023,28 @@ static std::unique_ptr<llm_graph_input_attn_kv> build_attn_inp_kv_impl(
         if (mctx_cur->compacted_prefix_active()) {
             const auto n_stream = cparams.kv_unified ? 1 : ubatch.n_seqs_unq;
             GGML_ASSERT(n_stream == 1 && "P3 compacted-prefix execution currently supports a single attention stream");
-            GGML_ASSERT(!cparams.flash_attn && "P3 compacted-prefix execution requires the non-flash attention path");
+
+            const bool zero_beta = mctx_cur->compacted_prefix_zero_beta();
+            if (!zero_beta) {
+                GGML_ASSERT(!cparams.flash_attn && "compacted-prefix execution with non-zero beta requires the non-flash attention path");
+            }
 
             inp->compacted_prefix_active = true;
+            inp->compacted_prefix_is_zero_beta = zero_beta;
             inp->compacted_prefix_n_tokens = mctx_cur->compacted_prefix_n_tokens();
+
+            const ggml_type mask_type = (cparams.flash_attn && zero_beta) ? GGML_TYPE_F16 : GGML_TYPE_F32;
             inp->compacted_kq_mask = ggml_new_tensor_4d(
-                    ctx0, GGML_TYPE_F32,
+                    ctx0, mask_type,
                     inp->compacted_prefix_n_tokens, ubatch.n_tokens / n_stream, 1, n_stream);
             ggml_set_input(inp->compacted_kq_mask);
 
-            // Compacted-prefix execution always uses the non-flash path in P3.
-            inp->self_kq_mask_cnv = inp->self_kq_mask;
+            if (cparams.flash_attn && zero_beta) {
+                // Zero-beta compacted prefix is compatible with flash attention.
+                inp->self_kq_mask_cnv = ggml_cast(ctx0, inp->self_kq_mask, GGML_TYPE_F16);
+            } else {
+                inp->self_kq_mask_cnv = inp->self_kq_mask;
+            }
         } else {
             inp->self_kq_mask_cnv = cparams.flash_attn ? ggml_cast(ctx0, inp->self_kq_mask, GGML_TYPE_F16) : inp->self_kq_mask;
         }
@@ -2082,7 +2102,10 @@ ggml_tensor * llm_graph_context::build_attn(
     ggml_tensor * kq_mask_combined = kq_mask;
 
     if (inp->has_compacted_prefix()) {
-        GGML_ASSERT(!cparams.flash_attn && "P3 compacted-prefix execution requires the non-flash attention path");
+        const bool zero_beta = inp->compacted_prefix_is_zero_beta;
+        if (!zero_beta) {
+            GGML_ASSERT(!cparams.flash_attn && "compacted-prefix execution with non-zero beta requires the non-flash attention path");
+        }
 
         const int64_t live_n_kv = k->ne[2];
 
@@ -2108,10 +2131,14 @@ ggml_tensor * llm_graph_context::build_attn(
 
         v = ggml_concat(ctx0, compacted->v, v, 2);
         kq_mask_combined = ggml_concat(ctx0, inp->get_compacted_kq_mask(), kq_mask, 0);
-        if (kq_b) {
-            GGML_ASSERT(kq_b->ne[1] == compacted->kq_b->ne[1] && "P3 compacted-prefix kq_b concat does not support broadcast token dimensions");
-            GGML_ASSERT(kq_b->ne[2] == compacted->kq_b->ne[2] && "P3 compacted-prefix kq_b concat requires matching head dimensions");
-            GGML_ASSERT(kq_b->ne[3] == compacted->kq_b->ne[3] && "P3 compacted-prefix kq_b concat requires matching stream dimensions");
+
+        if (zero_beta) {
+            // Zero-beta path: no kq_b needed, compatible with flash attention.
+            // kq_b_combined stays as the incoming kq_b (nullptr for most models).
+        } else if (kq_b) {
+            GGML_ASSERT(kq_b->ne[1] == compacted->kq_b->ne[1] && "compacted-prefix kq_b concat does not support broadcast token dimensions");
+            GGML_ASSERT(kq_b->ne[2] == compacted->kq_b->ne[2] && "compacted-prefix kq_b concat requires matching head dimensions");
+            GGML_ASSERT(kq_b->ne[3] == compacted->kq_b->ne[3] && "compacted-prefix kq_b concat requires matching stream dimensions");
             kq_b_combined = ggml_concat(ctx0, compacted->kq_b, kq_b, 0);
         } else {
             ggml_tensor * live_kq_b_shape = ggml_new_tensor_4d(
@@ -2135,7 +2162,9 @@ ggml_tensor * llm_graph_context::build_attn(
         cb(k, "k_compacted_plus_live", il);
         cb(v, "v_compacted_plus_live", il);
         cb(kq_mask_combined, "kq_mask_compacted_plus_live", il);
-        cb(kq_b_combined, "kq_b_compacted_plus_live", il);
+        if (kq_b_combined) {
+            cb(kq_b_combined, "kq_b_compacted_plus_live", il);
+        }
     }
 
     ggml_tensor * cur = build_attn_mha(q, k, v, kq_b_combined, kq_mask_combined, sinks, v_mla, kq_scale, il);

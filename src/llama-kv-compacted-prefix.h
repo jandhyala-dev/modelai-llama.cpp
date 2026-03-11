@@ -60,6 +60,10 @@ public:
         bool set_execution_enabled(bool enabled);
         bool is_execution_enabled() const;
 
+        // Returns true when all beta values across all layers are zero.
+        // This enables the flash-attention path since kq_b is unnecessary.
+        bool is_zero_beta() const;
+
     private:
         bool execution_enabled = false;
     };

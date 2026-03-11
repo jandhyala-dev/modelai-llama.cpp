@@ -64,7 +64,12 @@ int main(int argc, char ** argv) {
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_COMMON)) {
         return 1;
     }
-    params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_DISABLED;
+    if (std::getenv("USE_FLASH")) {
+        std::printf("USE_FLASH=1: enabling flash attention\n");
+        params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_ENABLED;
+    } else {
+        params.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_DISABLED;
+    }
 
     common_init();
     common_init_result_ptr llama_init = common_init_from_params(params);

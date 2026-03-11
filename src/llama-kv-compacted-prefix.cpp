@@ -282,6 +282,17 @@ bool llama_compacted_prefix_store::sequence_state::is_execution_enabled() const 
     return execution_enabled;
 }
 
+bool llama_compacted_prefix_store::sequence_state::is_zero_beta() const {
+    for (const auto & layer : layers) {
+        for (float b : layer.beta_data) {
+            if (b != 0.0f) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 llama_compacted_prefix_store::llama_compacted_prefix_store(std::vector<llama_compacted_prefix_layer_layout> layouts)
     : layouts(std::move(layouts)), seq_states(LLAMA_MAX_SEQ) {
 }

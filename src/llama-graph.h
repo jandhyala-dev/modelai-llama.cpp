@@ -332,6 +332,7 @@ public:
     ggml_tensor * self_kq_mask_cnv = nullptr; //     [n_kv, n_batch/n_stream, 1, n_stream]
 
     bool compacted_prefix_active = false;
+    bool compacted_prefix_is_zero_beta = false;
     uint32_t compacted_prefix_n_tokens = 0;
 
     ggml_tensor * compacted_kq_mask = nullptr; // F32 [n_prefix, n_batch/n_stream, 1, n_stream]

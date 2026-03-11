@@ -419,6 +419,7 @@ public:
     bool compacted_prefix_active() const;
     llama_seq_id compacted_prefix_seq_id() const;
     uint32_t compacted_prefix_n_tokens() const;
+    bool compacted_prefix_zero_beta() const;
 
     void set_input_compacted_prefix_mask(ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const;
     void set_input_compacted_prefix_k   (ggml_tensor * dst, int32_t il) const;

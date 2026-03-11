@@ -2876,6 +2876,10 @@ uint32_t llama_kv_cache_context::compacted_prefix_n_tokens() const {
     return compacted_exec.n_tokens;
 }
 
+bool llama_kv_cache_context::compacted_prefix_zero_beta() const {
+    return compacted_exec.zero_beta;
+}
+
 void llama_kv_cache_context::set_input_compacted_prefix_mask(ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const {
     kv->set_input_compacted_prefix_mask(dst, ubatch, causal_attn, compacted_exec.seq_id);
 }
