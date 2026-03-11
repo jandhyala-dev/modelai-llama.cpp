@@ -172,6 +172,8 @@ public:
     bool compacted_prefix_execution_enabled(llama_seq_id seq_id) const;
 
     size_t compacted_prefix_bytes(llama_seq_id seq_id = -1) const;
+    uint32_t compacted_prefix_active_n_kv(llama_seq_id seq_id) const;
+    bool compacted_prefix_reclaim_live_kv(llama_seq_id seq_id);
 
     const llama_compacted_prefix_store * get_compacted_prefix() const;
           llama_compacted_prefix_store * get_compacted_prefix();
@@ -234,6 +236,8 @@ public:
 
 private:
     bool compacted_prefix_runtime_supported() const;
+    bool compacted_prefix_stream_owned_by_seq(uint32_t strm, llama_seq_id seq_id, std::vector<uint32_t> & live_cell_idxs) const;
+    void compacted_prefix_pack_stream_tensors(uint32_t strm, const std::vector<uint32_t> & live_cell_idxs);
 
     const llama_model & model;
     const llama_hparams & hparams;

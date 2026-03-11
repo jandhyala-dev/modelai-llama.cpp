@@ -584,6 +584,172 @@ size_t llama_kv_cache::compacted_prefix_bytes(llama_seq_id seq_id) const {
     return compacted_prefix.seq_allocated_bytes(seq_id);
 }
 
+uint32_t llama_kv_cache::compacted_prefix_active_n_kv(llama_seq_id seq_id) const {
+    if (seq_id < 0 || (size_t) seq_id >= seq_to_stream.size()) {
+        return 0;
+    }
+
+    const uint32_t strm = seq_to_stream[seq_id];
+    const auto & cells = v_cells[strm];
+    if (cells.get_used() == 0) {
+        return 0;
+    }
+
+    slot_info sinfo = {};
+    sinfo.s0 = strm;
+    sinfo.s1 = strm;
+    sinfo.resize(1);
+    sinfo.strm[0] = strm;
+
+    return get_n_kv(sinfo);
+}
+
+bool llama_kv_cache::compacted_prefix_stream_owned_by_seq(
+        uint32_t strm, llama_seq_id seq_id, std::vector<uint32_t> & live_cell_idxs) const {
+    live_cell_idxs.clear();
+
+    if (strm >= v_cells.size()) {
+        return false;
+    }
+
+    const auto & cells = v_cells[strm];
+    const uint32_t used_max_p1 = cells.used_max_p1();
+
+    for (uint32_t idx = 0; idx < used_max_p1; ++idx) {
+        if (cells.is_empty(idx)) {
+            continue;
+        }
+
+        if (cells.seq_count(idx) != 1 || cells.seq_get(idx) != seq_id) {
+            return false;
+        }
+
+        live_cell_idxs.push_back(idx);
+    }
+
+    return true;
+}
+
+void llama_kv_cache::compacted_prefix_pack_stream_tensors(
+        uint32_t strm, const std::vector<uint32_t> & live_cell_idxs) {
+    const uint32_t n_live = live_cell_idxs.size();
+    const uint32_t kv_size = get_size();
+
+    for (const auto & layer : layers) {
+        auto * k = layer.k_stream[strm];
+        if (k) {
+            const size_t row_size = ggml_row_size(k->type, hparams.n_embd_k_gqa(layer.il));
+            std::vector<uint8_t> packed(size_t(n_live) * row_size);
+
+            for (uint32_t i = 0; i < n_live; ++i) {
+                ggml_backend_tensor_get(k, packed.data() + size_t(i) * row_size, size_t(live_cell_idxs[i]) * row_size, row_size);
+            }
+
+            if (!packed.empty()) {
+                ggml_backend_tensor_set(k, packed.data(), 0, packed.size());
+            }
+        }
+
+        auto * v = layer.v_stream[strm];
+        if (!v) {
+            continue;
+        }
+
+        if (!v_trans) {
+            const size_t row_size = ggml_row_size(v->type, hparams.n_embd_v_gqa(layer.il));
+            std::vector<uint8_t> packed(size_t(n_live) * row_size);
+
+            for (uint32_t i = 0; i < n_live; ++i) {
+                ggml_backend_tensor_get(v, packed.data() + size_t(i) * row_size, size_t(live_cell_idxs[i]) * row_size, row_size);
+            }
+
+            if (!packed.empty()) {
+                ggml_backend_tensor_set(v, packed.data(), 0, packed.size());
+            }
+            continue;
+        }
+
+        const uint32_t n_embd_v_gqa = hparams.n_embd_v_gqa(layer.il);
+        const size_t v_size_el = ggml_type_size(v->type);
+        std::vector<uint8_t> packed(size_t(n_live) * v_size_el);
+
+        for (uint32_t j = 0; j < n_embd_v_gqa; ++j) {
+            for (uint32_t i = 0; i < n_live; ++i) {
+                const size_t src_offset = (size_t(live_cell_idxs[i]) + size_t(j) * kv_size) * v_size_el;
+                ggml_backend_tensor_get(v, packed.data() + size_t(i) * v_size_el, src_offset, v_size_el);
+            }
+
+            if (!packed.empty()) {
+                const size_t dst_offset = size_t(j) * kv_size * v_size_el;
+                ggml_backend_tensor_set(v, packed.data(), dst_offset, packed.size());
+            }
+        }
+    }
+}
+
+bool llama_kv_cache::compacted_prefix_reclaim_live_kv(llama_seq_id seq_id) {
+    if (!compacted_prefix_runtime_supported() || seq_id < 0 || (size_t) seq_id >= seq_to_stream.size()) {
+        return false;
+    }
+
+    const auto * state = compacted_prefix.get_seq(seq_id);
+    if (state == nullptr || !state->enabled || state->live_suffix_pos0 < 0) {
+        return false;
+    }
+
+    const uint32_t strm = seq_to_stream[seq_id];
+    auto & cells = v_cells[strm];
+    if (cells.get_has_shift()) {
+        return false;
+    }
+
+    std::vector<uint32_t> used_idxs;
+    if (!compacted_prefix_stream_owned_by_seq(strm, seq_id, used_idxs)) {
+        return false;
+    }
+
+    std::vector<uint32_t> keep_idxs;
+    keep_idxs.reserve(used_idxs.size());
+    for (const uint32_t idx : used_idxs) {
+        if (cells.pos_get(idx) >= state->live_suffix_pos0) {
+            keep_idxs.push_back(idx);
+        }
+    }
+
+    const bool already_dense = [&]() {
+        if (keep_idxs.empty()) {
+            return cells.get_used() == 0;
+        }
+
+        if (keep_idxs.size() != cells.get_used()) {
+            return false;
+        }
+
+        for (uint32_t i = 0; i < keep_idxs.size(); ++i) {
+            if (keep_idxs[i] != i) {
+                return false;
+            }
+        }
+
+        return true;
+    }();
+
+    if (!already_dense) {
+        compacted_prefix_pack_stream_tensors(strm, keep_idxs);
+
+        llama_kv_cells packed;
+        packed.resize(cells.size());
+        if (!keep_idxs.empty()) {
+            packed.set(0, cells.cp(keep_idxs));
+        }
+
+        cells = std::move(packed);
+    }
+
+    v_heads[strm] = keep_idxs.size();
+    return true;
+}
+
 const llama_compacted_prefix_store * llama_kv_cache::get_compacted_prefix() const {
     return &compacted_prefix;
 }
