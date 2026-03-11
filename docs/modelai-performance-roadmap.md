@@ -317,6 +317,317 @@ Steps 1a/1b/1c and 2a/2b can proceed in parallel. Step 3 depends on both being c
 
 ---
 
+## Part 6: Product-Level Runtime Optimizations (ModelAI Excel)
+
+These optimizations target the **shipped product**: an Excel add-in running on consumer Windows laptops (NVIDIA/Intel/AMD GPUs) and Mac (Apple Silicon). They are ordered by user-perceived latency impact for workbook-centric repeated-prompt workloads.
+
+### Priority Order
+
+| # | Feature | User Impact | Effort | Target PR |
+|---|---------|-------------|--------|-----------|
+| P1 | Prefix caching / prompt reuse | **Critical** — same workbook queried repeatedly; eliminates redundant prefill | Medium | PR-8 |
+| P2 | KV-cache quantization | **High** — extends context window on 8-16GB consumer laptops | Medium | PR-7 |
+| P3 | Flash attention compatibility | **High** — reduces memory traffic in prefill (large workbook context) | High | PR-7 |
+| P4 | Batch / ubatch autotuning | **Medium** — optimal settings vary wildly across consumer hardware | Medium | PR-8 |
+| P5 | Thread / affinity / laptop scheduling | **Medium** — prevents thermal throttling on sustained workbook sessions | Low | PR-8 |
+| P6 | Backend capability matrix | **Foundation** — gates all other optimizations per-device | Medium | PR-7 |
+
+---
+
+### P1: Prefix Caching / Prompt Reuse
+
+**Why it's #1 for Excel:**
+Users repeatedly ask questions against the same workbook, same system prompt, same tool schema, same policy instructions. The prefill for this shared context dominates TTFT. Caching it eliminates the most expensive repeated operation.
+
+**Upstream support:**
+- `cache_prompt: true` is default in llama-server
+- `--cache-reuse N` controls minimum reuse chunk size
+- `-sps` (slot prompt similarity, default 0.10) controls prefix matching threshold
+- System prompt sharing across slots via `--system-prompt-file`
+
+**What to implement:**
+1. **Stable prefix hashing** — compute a hash from: system prompt + tool definitions + workbook schema (named ranges, tabs, column types) + fixed product instructions
+2. **KV cache persistence per workbook fingerprint** — use `--slot-save-path` or equivalent API to persist prefill state to disk
+3. **Delta-only appending** — on each user turn, only process: user question + changed workbook cells + result-specific context
+4. **Partial invalidation** — when workbook structure changes materially (new sheet, new named range), invalidate only the workbook portion of the prefix, not the system/tool portion
+5. **Interaction with compaction** — a compacted prefix is still valid for cache hits; new requests matching a compacted prefix reuse the compacted representation instead of re-compacting
+
+**Key risk:** Compacted KV entries are not token-aligned, so upstream's token-by-token prefix matching won't work. The fork needs hash-based matching against compacted prefixes.
+
+**Files to inspect/modify:**
+- `tools/server/server.cpp` — slot management, `cache_prompt` logic, prefix matching
+- `src/llama-context.cpp` — `llama_state_seq_save/load` for KV persistence
+- `src/llama-kv-cache.cpp` — `seq_pos_min/max`, defrag interaction with cached state
+
+**Upstream references:**
+- Prompt cache discussion: [Discussion #15709](https://github.com/ggml-org/llama.cpp/discussions/15709)
+- Server shared prefix caching: [Discussion #8947](https://github.com/ggml-org/llama.cpp/discussions/8947)
+- Multi-prefix caching: [Discussion #15530](https://github.com/ggml-org/llama.cpp/discussions/15530)
+- cache-reuse regression: [Issue #15082](https://github.com/ggml-org/llama.cpp/issues/15082)
+
+**Benchmark methodology:**
+- Repeated prompts on same workbook: measure TTFT on turn 2-10 vs turn 1
+- Target: TTFT < 100ms for cached prefix hits (vs seconds for cold prefill)
+- Long workbook context (2K-8K tokens system+workbook prefix)
+- Short follow-up prompts (50-200 tokens user query)
+
+---
+
+### P2: KV-Cache Quantization
+
+**Why it matters:**
+On retail laptops with 8-16GB RAM/VRAM, long-context decode is constrained by KV cache size. Quantization stacks multiplicatively with compaction (50x compaction x 4x quant = 200x).
+
+**Upstream support:**
+- llama.cpp has `--cache-type-k` and `--cache-type-v` flags for KV type selection
+- Supported types: `f16`, `f32`, `q8_0`, `q4_0`, `q4_1`, `iq4_nl`, `q5_0`, `q5_1`
+- **Caveat:** Vulkan KV quantization fails without Flash Attention enabled
+- Quantized V currently requires flash attention in upstream
+
+**What to implement:**
+1. **Runtime KV quantization policy** (not compile-time):
+   - Default: `K=q8_0, V=q8_0` (safe, 2x savings, < 0.05 perplexity impact)
+   - Aggressive: `K=q4_0, V=q4_0` (4x savings, ~0.2 perplexity impact)
+   - Gate lower-precision V by backend FA support
+2. **Compaction interaction:**
+   - Solver always works in fp32 internally
+   - Compacted payloads are written in the configured KV type via `from_float` conversion
+   - Ensure `compacted_prefix_copy_k_head_f32` / `copy_v_head_f32` correctly de-quantize when reading from quantized live cache
+3. **Per-backend gating:**
+   - Metal: q8_0 safe, q4_0 requires testing
+   - CUDA: q8_0 and q4_0 supported with FA
+   - Vulkan: q8_0 only with FA enabled ([Issue #9551](https://github.com/ggml-org/llama.cpp/issues/9551))
+   - CPU: all types supported but slower
+
+**Files to inspect/modify:**
+- `src/llama-kv-cache.cpp` — KV allocation, type selection, `ggml_row_size` calls
+- `src/llama-kv-cache.h` — type parameters passed to cache constructor
+- `src/llama-context.cpp` — `llama_context_params` KV type fields
+- `src/llama-kv-compact-pipeline.cpp` — `write_compacted_payload` already uses `from_float` conversion
+- `src/llama-kv-compacted-prefix-exec.cpp` — materialization helpers for quantized K/V
+
+**Upstream references:**
+- KV quantization issue: [Issue #6863](https://github.com/ggml-org/llama.cpp/issues/6863)
+- Vulkan KV quantization caveat: [Issue #9551](https://github.com/ggml-org/llama.cpp/issues/9551)
+- Backend ops matrix: [docs/ops.md](https://github.com/ggml-org/llama.cpp/blob/master/docs/ops.md)
+- KVSplit (K8V4): [github.com/dipampaul17/KVSplit](https://github.com/dipampaul17/KVSplit)
+
+**Benchmark methodology:**
+- Short decode (32 tokens), long decode (256 tokens), repeated workbook sessions
+- Quality: perplexity delta on spreadsheet reasoning tasks
+- Memory: peak RSS on 8GB MacBook Air and 16GB Windows laptop
+- Throughput: tok/s at various context lengths
+
+---
+
+### P3: Flash Attention Compatibility
+
+**Why it matters:**
+Flash attention reduces memory traffic in prefill, which dominates latency when the workbook context is large. Currently the fork's V0 support matrix explicitly disables FA because the compacted-prefix beta path requires additive `kq_b`, which FA doesn't support.
+
+**What to implement:**
+1. **Ensure compaction path does not create a second slow attention path** — when FA is enabled for the live KV, the compacted prefix should still be executable (either via a fused path or by selectively disabling FA only for the compacted-prefix slice)
+2. **Per-backend FA gating:**
+   - Metal: FA supported with block-skip optimization, but known regressions on Intel/AMD Macs
+   - CUDA: FA mature with NaN/overflow fixes (Jan 2026)
+   - Vulkan: FA required for KV quantization
+   - SYCL: basic FA kernel for Intel GPUs ([Issue #7141](https://github.com/ggml-org/llama.cpp/issues/7141))
+   - CPU: chunked FA implementation
+3. **Runtime modes:** `--flash-attn auto|on|off` — `auto` enables where backend supports it
+4. **FlashBias investigation:** [arXiv:2505.12044](https://arxiv.org/abs/2505.12044) enables additive bias in fused FA kernels, which would unblock the compacted-prefix beta path
+
+**Files to inspect/modify:**
+- `src/llama-graph.cpp` — attention graph construction, FA path selection
+- `src/llama-kv-compacted-prefix-exec.cpp` — beta materialization (currently requires non-FA path)
+- `src/llama-context.cpp` — `flash_attn` parameter handling
+- Backend-specific attention kernels in `ggml/src/`
+
+**Upstream references:**
+- FA for prompt processing: [Issue #3365](https://github.com/ggml-org/llama.cpp/issues/3365)
+- SYCL FA: [Issue #7141](https://github.com/ggml-org/llama.cpp/issues/7141)
+- FlashAttention repo: [github.com/Dao-AILab/flash-attention](https://github.com/Dao-AILab/flash-attention)
+- FlashBias paper: [arXiv:2505.12044](https://arxiv.org/abs/2505.12044)
+- CLI docs with `--flash-attn`: [tools/cli/README.md](https://github.com/ggml-org/llama.cpp/blob/master/tools/cli/README.md)
+
+---
+
+### P4: Batch / Ubatch Autotuning
+
+**Why it matters:**
+Upstream distinguishes logical `batch_size` (max tokens per `llama_decode`) from physical `ubatch_size` (computation batch). There is no single optimal value across MacBooks, office Windows laptops, gaming laptops, and Intel iGPU machines. For a consumer add-in, autotuning is essential.
+
+**What to implement:**
+1. **First-run benchmark grid** — on model load, benchmark a small grid:
+   - `batch_size`: [256, 512, 1024, 2048]
+   - `ubatch_size`: [128, 256, 512]
+   - `threads_batch`: [2, 4, physical_cores/2, physical_cores]
+2. **Persist best settings per tuple:** `(model_id, quant_type, backend, device_id)`
+3. **Separate tuning for prefill vs decode** — different optimal values
+4. **Re-tune triggers:** model change, backend change, major app version change
+5. **Sane defaults while tuning runs:**
+   - Apple Silicon: `batch=1024, ubatch=512, threads=4`
+   - NVIDIA GPU: `batch=2048, ubatch=512, threads=2`
+   - CPU fallback: `batch=512, ubatch=256, threads=physical_cores-1`
+
+**Files to inspect/modify:**
+- `tools/server/server.cpp` — `batch_size`, `ubatch_size` parameters
+- `src/llama-context.cpp` — batch splitting logic
+- `common/common.cpp` — CLI parameter parsing, default values
+
+**Upstream references:**
+- Batch vs ubatch discussion: [Discussion #6328](https://github.com/ggml-org/llama.cpp/discussions/6328)
+- Optimal parallel parameters: [Discussion #18308](https://github.com/ggml-org/llama.cpp/discussions/18308)
+- CLI docs: [tools/cli/README.md](https://github.com/ggml-org/llama.cpp/blob/master/tools/cli/README.md)
+
+---
+
+### P5: Thread / Affinity / Laptop Scheduling
+
+**Why it matters:**
+On laptops, thermal throttling and mixed-core designs (P-core/E-core on Intel, big/LITTLE conceptually on Apple) wreck naive "use all threads" strategies. Sustained workbook sessions can trigger throttling that degrades performance progressively.
+
+**What to implement:**
+1. **Separate decode vs prefill thread counts** — prefill can use more threads (CPU-bound), decode should use fewer (memory-bandwidth-bound)
+2. **Machine profiling on startup:**
+   - Physical core count (not hyperthreads)
+   - P-core vs E-core detection on Intel (if available via CPUID)
+   - Apple Silicon: efficiency vs performance core count
+3. **Persist per-device thread defaults**
+4. **"Laptop safe mode"** — backs off to 50-75% of physical cores for sustained runs to avoid thermal throttling
+5. **CPU affinity on platforms that support it** — pin decode threads to P-cores
+
+**Files to inspect/modify:**
+- `common/common.cpp` — `--threads`, `--threads-batch` parsing
+- `ggml/src/ggml-cpu/ggml-cpu.cpp` — thread pool, affinity
+- `src/llama-context.cpp` — thread count configuration
+
+**Upstream references:**
+- CLI thread/affinity controls: [tools/cli/README.md](https://github.com/ggml-org/llama.cpp/blob/master/tools/cli/README.md)
+- NUMA migration: `GGML_NUMA_MIGRATE` (June 2025)
+
+---
+
+### P6: Backend Capability Matrix
+
+**Why it matters:**
+The Excel product must ship on Metal (Mac), CUDA (NVIDIA Windows), Vulkan (AMD/Intel Windows), and CPU fallback. Not all optimizations are available everywhere. The fork needs a runtime layer that gates optimization policies per-device.
+
+**What to implement:**
+Build a `modelai_backend_caps` struct populated at model load:
+
+```cpp
+struct modelai_backend_caps {
+    bool supports_flash_attn;          // can this backend do FA?
+    bool supports_kv_quant_q8;         // safe for q8_0 KV?
+    bool supports_kv_quant_q4;         // safe for q4_0 KV?
+    bool supports_additive_kq_b;       // can FA handle beta bias?
+    bool compacted_prefix_fast_path;   // can compacted KV stay on FA?
+    uint64_t vram_bytes;               // available VRAM
+    uint64_t max_context_tokens;       // estimated max context for model
+    int recommended_n_gpu_layers;      // offload recommendation
+    int recommended_batch_size;
+    int recommended_ubatch_size;
+    int recommended_threads;
+    int recommended_threads_batch;
+};
+```
+
+Then make every optimization policy backend-aware:
+- KV quantization: gate q4_0 by `supports_kv_quant_q4`
+- Flash attention: gate by `supports_flash_attn`
+- Compacted prefix: fall back to non-FA when `supports_additive_kq_b == false`
+- Context length: clamp by `max_context_tokens`
+
+**Expected capability matrix:**
+
+| Backend | FA | KV q8_0 | KV q4_0 | Additive kq_b in FA | Notes |
+|---------|-------|---------|---------|---------------------|-------|
+| Metal | Yes | Yes | Test | No | Block-skip optimization; Intel/AMD Mac regressions |
+| CUDA | Yes | Yes | Yes (with FA) | No (upstream) | CUDA Graphs for 10-15% decode boost |
+| Vulkan | Yes | Yes (with FA only) | No | No | [Issue #9551](https://github.com/ggml-org/llama.cpp/issues/9551) |
+| SYCL | Partial | Unknown | No | No | [Issue #7141](https://github.com/ggml-org/llama.cpp/issues/7141) |
+| CPU | Chunked | Yes | Yes | Yes (non-FA path) | Slowest but most compatible |
+
+**Files to inspect:**
+- `ggml/src/` — per-backend feature detection
+- `src/llama-context.cpp` — backend selection, feature gating
+- Backend ops matrix: [docs/ops.md](https://github.com/ggml-org/llama.cpp/blob/master/docs/ops.md)
+
+---
+
+### Sane Runtime Defaults by Platform
+
+| Setting | Apple Silicon MacBook | Windows + NVIDIA GPU | Windows + Intel iGPU/CPU |
+|---------|----------------------|---------------------|--------------------------|
+| Backend | Metal | CUDA | Vulkan or CPU fallback |
+| Flash attention | On | On | Off (CPU) or On (Vulkan with FA) |
+| KV cache type K | q8_0 | q8_0 | f16 (safest) |
+| KV cache type V | f16 (no FA for compacted) | q8_0 (with FA) | f16 |
+| Batch size | 1024 | 2048 | 512 |
+| Ubatch size | 512 | 512 | 256 |
+| Threads (decode) | 4 | 2 | physical_cores - 1 |
+| Threads (prefill) | physical_cores | 2 | physical_cores - 1 |
+| GPU layers | All | All | 0 (CPU) or partial |
+| Compaction | Non-FA path | Non-FA path | Non-FA path |
+
+---
+
+### KV Compaction Interaction Risks
+
+These are upstream features or codepaths that the fork's KV compaction might accidentally break:
+
+| Risk | Description | Mitigation |
+|------|-------------|------------|
+| **Prefix cache mismatch** | Upstream prefix matching is token-by-token; compacted KV entries are not token-aligned | Implement hash-based matching for compacted prefixes |
+| **KV defrag corruption** | Upstream defrag moves cells; compacted-prefix logical positions may become stale | Clear compacted state after defrag, or exclude compacted-range cells from defrag |
+| **Quantized V + compaction** | Solver reads V via `to_float`; quantized V may lose precision that affects fitting | Always extract V as fp32 for solver; only store result in target type |
+| **Unified KV buffer** | `kv_unified=true` default changes memory layout assumptions | Test compaction with unified KV enabled |
+| **FA + beta** | Flash attention path cannot accept additive `kq_b` for compacted prefix | Non-FA fallback for compacted-prefix attention slice |
+| **SWA cache** | Sliding window evicts old tokens that may overlap with compacted prefix range | Restrict compaction to global-attention portion per paper Section 4.2 |
+| **State save/restore** | Compacted-prefix state is serialized inside KV state stream; version mismatch on upgrade | Version check in restore path (already implemented in P4) |
+
+---
+
+### Benchmark Methodology for Excel Workloads
+
+**Workload W1 — Repeated prompt, same workbook:**
+```
+1. Load model + prefill system prompt + workbook context (2K-8K tokens)
+2. User asks question (50-200 tokens)
+3. Generate answer (100-500 tokens)
+4. Repeat steps 2-3 ten times with different questions, same workbook
+Metric: TTFT on turns 2-10 (should be <100ms with prefix caching)
+Metric: Decode tok/s sustained over 10 turns
+```
+
+**Workload W2 — Long workbook context prefill:**
+```
+1. Load model
+2. Prefill: system prompt (500 tokens) + large workbook (4K-8K tokens)
+3. Generate short answer (50 tokens)
+Metric: Prefill time (should improve with FA)
+Metric: Peak memory (should improve with KV quantization)
+```
+
+**Workload W3 — Quality regression on spreadsheet reasoning:**
+```
+1. Fixed set of 20 workbook-reasoning questions with known correct answers
+2. Run with full KV, then with 2x/4x/8x compaction
+3. Run with f16 KV, then with q8_0/q4_0 KV
+Metric: Answer accuracy at each configuration
+Metric: Exact-match rate must not drop below baseline - 5%
+```
+
+**Workload W4 — Sustained session (thermal stress):**
+```
+1. Run W1 continuously for 30 minutes
+Metric: tok/s at minute 1 vs minute 30
+Metric: CPU/GPU temperature curve
+Pass: <20% throughput degradation over 30 minutes
+```
+
+---
+
 ## Curated Reference Lists
 
 ### KV Cache Compression Surveys and Awesome Lists

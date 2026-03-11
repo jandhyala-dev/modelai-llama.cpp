@@ -115,13 +115,14 @@ New files:
 Required contents:
 - top-k selection first
 - OMP added in the same module after top-k is working
-- per-layer / per-KV-head selected index output
+- first-pass shared selected-position schedule across the compacted sequence
+- per-layer / per-KV-head scoring is allowed to contribute to that shared schedule
 - direct mapping from selected positions into:
   - `compacted_prefix_configure()`
   - `layer_storage::k_data`
 
 Output targets:
-- compacted key positions
+- one shared compacted key position schedule for the sequence
 - compacted key payloads (`C_k`)
 
 ### 3. Query extraction
@@ -174,6 +175,7 @@ Output targets:
 Required solver-input behavior:
 - `K` and `V` must be copied out of the live cache through the new read-only accessors
 - transposed live `V` cache must be de-transposed to canonical token-major fp32 matrices before fitting
+- the first pass uses one shared selected-position schedule because the current compacted-prefix store exposes a single logical-position array per sequence; solver-populated `K/V/beta` payloads remain per-layer / per-KV-head on top of that shared schedule
 
 ### 5. Quality and benchmark validation
 
@@ -198,6 +200,7 @@ Required benchmark path:
   - follow-up decode tok/s
   - active `n_kv`
   - quality delta
+- automated model-backed regression may use the repo fixture model for deterministic coverage, but branch closure still requires a separate manual run on the real workload gate below
 - the minimum accepted “real ModelAI-like workload” for merge is:
   - model size `>= 1B` parameters
   - real-text prefix `>= 2048` tokens
@@ -228,6 +231,54 @@ It gets a solver-complete baseline running sooner because the math is self-conta
 Test strategy note:
 - steps 1-3 are allowed to land with synthetic/unit coverage while the pipeline is still being wired,
 - but the branch merge gate is not satisfied until step 4 and step 5 are complete with model-backed quality evidence.
+
+## Deliberate Scope Limits And Deferred Items
+
+### Chunked compaction (#10)
+
+The MIT paper uses chunked compaction for contexts >4K tokens to control solver memory and
+numerical precision. The first P5b pass does **not** implement chunking. The full prefix is
+processed as a single block. This is acceptable for the v0 target workloads (2K-8K token prefixes).
+
+Chunked compaction is deferred to a follow-on pass after P5b merges. The pipeline orchestrator
+(`llama-kv-compact-pipeline.cpp`) is structured so chunk boundaries can be added around the
+outer loop without changing the solver internals.
+
+### Ridge scaling strategy (#11)
+
+The solver uses a fixed ridge regularization parameter (`lambda = 1e-6f` initial) with
+automatic escalation: if Cholesky decomposition fails, lambda is multiplied by 10 up to 5
+attempts. This applies to both `fit_beta` and `fit_values`.
+
+This is a simple fixed-scaling strategy, not spectral or Frobenius normalization. The initial
+value was chosen to match the MIT reference implementation's defaults. Spectral scaling is a
+follow-on improvement for higher compression ratios or larger problem sizes.
+
+The escalation logic is implemented in:
+- `llama-kv-compact-solver.cpp:fit_beta` — retry with lambda × 10 on Cholesky failure
+- `llama-kv-compact-solver.cpp:fit_values` — same retry pattern
+
+### Top-k scoring method (#19)
+
+Key selection uses softmax-normalized attention scores accumulated additively across all
+layers and heads. The scoring function in `llama-kv-compact-select.cpp` computes:
+- per-query softmax over all prefix keys (with numerical stability via max subtraction)
+- per-key scores summed across queries
+- aggregated across layers and heads via addition (not max or RMS)
+
+This corresponds to total attention mass received by each key position across the full
+model. Top-k selects positions receiving the most aggregate attention.
+
+### q_norm handling (#20)
+
+The first query-extraction path uses RoPE-baked cache keys as surrogate queries
+(`llama-kv-compact-query.cpp`). No `q_norm` is applied because:
+1. Cache keys do not pass through `q_norm` in the original model forward pass.
+2. Both solver sides (queries and keys) are in the same post-RoPE space.
+3. Applying `q_norm` would introduce an asymmetry not present in the data.
+
+If a future query path captures real pre-attention `Q` tensors, it must apply `q_norm`
+if the model architecture uses it. This is documented here as a constraint for that path.
 
 ## Non-Goals For First P5b Pass
 

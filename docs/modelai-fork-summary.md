@@ -55,7 +55,7 @@ Given an original KV prefix of length `T`, the paper builds a compacted represen
 
 Modified attention becomes:
 
-`softmax(q @ C_k^T + beta) @ C_v`
+`softmax(q @ C_k^T / sqrt(d) + beta) @ C_v`
 
 Key algorithm facts:
 - approximate, not exact,
@@ -148,6 +148,7 @@ Near-term observability requirements:
   - the first query-extraction baseline uses RoPE-baked cache keys as surrogate queries, which is valid only because both solver sides remain in the same rotated space,
   - query extraction must be implemented from real runtime data,
   - key selection must be implemented (`top-k` baseline, OMP as follow-on),
+  - the first solver pass may use one shared selected-position schedule across the sequence because the current compacted-prefix store exposes a single logical-position array per sequence,
   - NNLS `beta` fitting must populate `beta_data`,
   - least-squares `V` fitting must populate `v_data`,
   - the solver path must remain pure C++ dense fp32 math with no LAPACK dependency,

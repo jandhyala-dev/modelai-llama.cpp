@@ -397,6 +397,7 @@ These accessors stay internal to `src/` and must not become part of the public `
 Required solver-input behavior:
 - live `K` extraction is row-major but must be upcast to fp32
 - live `V` extraction must handle `v_trans` correctly and de-transpose to canonical token-major fp32 matrices before fitting
+- the first solver pass uses a single shared selected-position schedule across the sequence because the compacted-prefix store currently exposes one logical-position array per sequence; per-layer / per-KV-head fitting still happens on top of that shared schedule
 
 Minimum quality metrics and thresholds:
 - attention-output cosine similarity `>= 0.95`
@@ -431,6 +432,7 @@ Minimum benchmark workload for merge:
 
 - chat-template / BOS / uncompacted system-prefix policy changes remain out of scope for the first `PR-5b` pass
 - V-transpose layout optimizations remain out of scope; the first solver pass may de-transpose live `V` into canonical fp32 rows for fitting
+- OMP is not required for the first mergeable solver slice; top-k is sufficient for the initial end-to-end path as long as the quality and workload gates are met
 
 **Merge gate**
 

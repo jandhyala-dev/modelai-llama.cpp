@@ -56,6 +56,7 @@ Examples:
 - `kv-compact-pr3-correctness`
 - `kv-compact-pr4-session-state`
 - `kv-compact-pr5-performance`
+- `kv-compact-pr5b-solver-pipeline`
 - `kv-compact-pr6-coverage`
 
 Rules:
