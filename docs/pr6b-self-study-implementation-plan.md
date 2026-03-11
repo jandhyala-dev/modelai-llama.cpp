@@ -19,7 +19,7 @@ This plan covers ALL remaining modelai-llama.cpp work to bring KV compaction and
 **Runtime Integration & Hardening (Parts 6-8):**
 6. **Compaction runtime integration** — capability reporting, server wiring, spec drift fixes
 7. **Server/runtime hardening** — structured output, tool-call safety, stability, prompt-cache, performance
-8. **Product optimization pipeline** — backend capability detection, autotuning, Excel-aware prefix caching
+8. **Product optimization pipeline** — backend capability detection, autotuning, prefix fingerprint caching
 
 ModelAI application-side changes (agent swarm flow, `/compact` endpoint, orchestrator logic) are tracked separately and will be confirmed after all modelai-llama.cpp work is complete.
 
@@ -42,6 +42,14 @@ This section documents how each condition from the adversarial reviews was resol
 ## Reviewer-1 Conditions (resolved in commit 3efe995b)
 
 All 20 findings from Reviewer-1's adversarial review were incorporated into the plan with exact code locations and specific fixes. See the individual workstream sections for details.
+
+## Deferred MAJOR Findings — Must Address During Implementation
+
+**[Reviewer-2 Minor Note]** Two MAJOR findings from the adversarial reviews were approved for deferral to implementation time, but must not be forgotten:
+
+1. **[Reviewer-2 #29] #11970 root cause (KV truncation):** The plan acknowledges the issue but defers root cause identification to the Workstream 7d audit. During implementation, the audit MUST document the specific root cause (likely prompt serialization instability across multi-turn `/v1/chat/completions`), add diagnostic logging for `n_past` drops, and verify the fix before the 7d merge gate.
+
+2. **[Reviewer-2 #33] Merge conflict ordering (Parts 6 vs 7):** Both parts modify `server-context.cpp`. The plan specifies Phase 3a/3b split and "Part 6 merges first." During implementation, the branch strategy MUST be: create Part 7 branches AFTER Part 6 merges, or rebase Part 7 on Part 6 before merge. Track conflicts proactively — do not discover them at merge time.
 
 ---
 
@@ -652,6 +660,8 @@ If a test fails its threshold:
 3. Continue running remaining tests (do not abort the suite)
 4. Aggregate results into a summary table with PASS/FAIL per test per compression ratio
 
+**[Reviewer-2 Minor Note]** The thresholds above are conservative initial estimates. After the first benchmark pass on real SEC filings with Qwen3-14B, expect to tighten thresholds based on actual performance. The self-study vs surrogate delta thresholds (>= 2pp at 5x) are calibrated to be achievable given the paper's results but should increase if self-study proves stronger than expected.
+
 ---
 
 # Part 5: Upstream-Ready Sanitization
@@ -1203,7 +1213,9 @@ ModelAI uses long sessions, repeated prompts, and save/restore. Generic prompt-c
        return prefill_from_scratch(input_tokens)
    ```
 
-   **Interaction with Part 8b (Excel-aware prefix caching):** The `prefix_fingerprint` API from Part 8b can be implemented ON TOP of this hash-based matching. The product computes a fingerprint (e.g., from workbook structure), the server uses it as an additional matching key alongside the token-hash. The two mechanisms are complementary: token-hash matches exact prompts, fingerprint matches semantically equivalent prompts.
+   **[Reviewer-2 Minor Note]** The Tier 2 hash matching iterates linearly over compacted entries. For expected scale (1-4 entries per slot), this is fine. If the compacted prefix cache grows significantly (e.g., many concurrent compacted sequences), replace linear scan with a hash table keyed on the first 8 bytes of SHA-256.
+
+   **Interaction with Part 8b (prefix fingerprint caching):** The `prefix_fingerprint` API from Part 8b can be implemented ON TOP of this hash-based matching. The product computes a fingerprint (e.g., from application-specific context structure), the server uses it as an additional matching key alongside the token-hash. The two mechanisms are complementary: token-hash matches exact prompts, fingerprint matches semantically equivalent prompts.
 
 ### Files
 - `tools/server/server-context.cpp` — prompt save/load (lines 225-248, 1138-1158, 2374-2441), checkpoint validation (lines 2549-2557), new hash-based matching
@@ -1390,7 +1402,7 @@ Current behavior is "use configured/default values" (`llama-context.cpp:156-159`
 ## 8d. Laptop-Aware Thread Scheduling
 
 ### Objective
-Prevent thermal throttling on sustained workbook sessions by adapting thread scheduling to consumer hardware.
+Prevent thermal throttling on sustained inference sessions by adapting thread scheduling to consumer hardware.
 
 ### Why It's Needed
 Current `cpu_params` (`common/common.h:69-76`) has affinity mask and priority, but no policy for:
@@ -1552,7 +1564,7 @@ The "last 3D Qcur-prefixed" disambiguation strategy works for all standard atten
 |------|-----------|--------|------------|
 | Autotuning first-run benchmark delays startup | Medium | Medium | Async benchmark with sane defaults; persist results |
 | Backend capability detection wrong on edge hardware | Medium | Medium | Conservative defaults; manual override knobs |
-| Excel prefix hashing breaks on workbook structure changes | Medium | High | Versioned hash schema; partial invalidation |
+| Prefix fingerprint invalidation on application context changes | Medium | High | Versioned hash schema; partial invalidation (product-side) |
 | P-core/E-core detection unreliable on older hardware | Low | Low | Fall back to uniform thread pool |
 
 ---
