@@ -144,6 +144,15 @@ Near-term observability requirements:
   - model-backed regression coverage now proves the runtime-visible active range drops after reclaim,
   - a manual compacted-prefix perf harness reports before/after `active_n_kv` and decode tok/s for the same compacted execution slice,
   - on the current Apple Silicon debug smoke run with `stories15M-q4_0`, that harness reduced `active_n_kv` from `512` to `256` and improved continuation throughput from `244.1 tok/s` to `309.8 tok/s`; this is a branch validation result, not a general release claim,
+- PR-5b is the first solver-complete compaction milestone and is the only branch allowed to claim paper-aligned compression:
+  - query extraction must be implemented from real runtime data,
+  - key selection must be implemented (`top-k` baseline, OMP as follow-on),
+  - NNLS `beta` fitting must populate `beta_data`,
+  - least-squares `V` fitting must populate `v_data`,
+  - compacted-prefix payloads must be solver-populated from the original KV cache,
+  - quality must be regression-tested on fixed tolerances,
+  - a real ModelAI-like workload must prove Goal 1 and Goal 2,
+- until PR-5b lands, the compacted-prefix store can be executed and reclaimed but its contents should still be treated as infrastructure-populated rather than mathematically derived by the full paper pipeline,
 - narrow v0 compaction path on the supported matrix,
 - measured long-session improvements on ModelAI workloads,
 - measured repeated-turn follow-up improvements on at least one supported workload.

@@ -61,7 +61,8 @@ The plan assumes the following current `llama.cpp` realities:
 | PR-2 | `kv-compact-pr2-memory-arch` | Compacted-prefix memory architecture |
 | PR-3 | `kv-compact-pr3-correctness` | Non-flash correctness path |
 | PR-4 | `kv-compact-pr4-session-state` | Session and state integration |
-| PR-5 | `kv-compact-pr5-performance` | Real performance path |
+| PR-5a | `kv-compact-pr5-performance` | Runtime reclaim and perf slice |
+| PR-5b | `kv-compact-pr5b-solver-pipeline` | Solver-derived compaction pipeline |
 | PR-6 | `kv-compact-pr6-coverage` | Coverage expansion |
 
 ## PR-0: Docs Baseline And Governance
@@ -313,7 +314,7 @@ Make compacted state usable in real session lifecycles.
 - session continuation remains safe after restore
 - file-format changes are versioned so old state files fail cleanly instead of mis-parsing
 
-## PR-5: Real Performance Path
+## PR-5a: Runtime Reclaim And Perf Slice
 
 **Objective**
 
@@ -339,6 +340,53 @@ Important note:
 Measured progress on Goal 1 and/or Goal 2 on at least one supported workload, with:
 - a model-backed regression proving `active_n_kv` shrinks after reclaim, and
 - attached benchmark output from the manual compacted-prefix perf harness.
+
+## PR-5b: Solver-Derived Compaction Pipeline
+
+**Objective**
+
+Turn the compacted-prefix store from a manually populated container into a solver-derived representation of the original KV cache.
+
+**Scope**
+
+- real query extraction
+- real key selection (`top-k` first, OMP after the baseline is working)
+- real NNLS `beta` fitting
+- real least-squares `V` fitting
+- end-to-end pipeline that writes solver outputs into the existing compacted-prefix store
+- quality validation on fixed tolerances
+- benchmark proof on a real ModelAI-like workload
+
+Primary implementation files:
+- `src/llama-kv-compact-solver.h/.cpp`
+- `src/llama-kv-compact-select.h/.cpp`
+- `src/llama-kv-compact-query.h/.cpp`
+- `src/llama-kv-compact-pipeline.h/.cpp`
+- `tests/test-kv-compact-quality.cpp`
+
+Also impacted:
+- `src/CMakeLists.txt`
+- `tests/CMakeLists.txt`
+- `src/llama-kv-cache.h/.cpp`
+- `docs/modelai-kv-compaction-plan.md`
+- `docs/modelai-fork-summary.md`
+
+Important note:
+- `PR-5a` proves that reducing runtime-visible active KV range can improve repeated-turn throughput,
+- `PR-5b` is the first branch allowed to claim paper-aligned KV compression because it computes compacted payloads from the original KV cache.
+
+**Merge gate**
+
+All seven paper-aligned deliverables must be complete:
+1. query extraction
+2. key selection
+3. NNLS beta fitting
+4. least-squares V fitting
+5. solver-populated compacted payloads
+6. quality regression coverage
+7. benchmark proof on a real ModelAI workload
+
+A branch that lacks any of the above must not be labeled as final `P5` completion.
 
 ## PR-6: Coverage Expansion
 
