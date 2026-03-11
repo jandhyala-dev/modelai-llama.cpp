@@ -1,4 +1,5 @@
 #include "llama-kv-compact-self-study.h"
+#include "llama-context.h"
 
 #include "llama-impl.h"
 
@@ -119,6 +120,98 @@ static int32_t parse_layer_index(const char * name) {
     }
 
     return (int32_t)val;
+}
+
+// ---------------------------------------------------------------------------
+// Autoregressive generation loop (slice 6b-4)
+// ---------------------------------------------------------------------------
+
+bool llama_kv_compact_self_study_generate(
+        struct llama_context * ctx,
+        llama_q_capture_state & q_state,
+        uint32_t n_generate,
+        llama_seq_id seq_id) {
+
+    const llama_model * model = llama_get_model(ctx);
+    const llama_vocab * vocab = llama_model_get_vocab(model);
+    const int32_t n_vocab     = llama_vocab_n_tokens(vocab);
+
+    // 1. KV capacity pre-check: current pos + n_generate must fit in n_ctx
+    llama_memory_t mem = llama_get_memory(ctx);
+    const llama_pos pos_max  = llama_memory_seq_pos_max(mem, seq_id);
+    const uint32_t  n_ctx    = llama_n_ctx(ctx);
+
+    if (pos_max < 0) {
+        LLAMA_LOG_WARN("self-study: no tokens in seq %d\n", seq_id);
+        return false;
+    }
+
+    // pos_max is inclusive, so used positions = pos_max + 1
+    if ((uint32_t)(pos_max + 1) + n_generate > n_ctx) {
+        LLAMA_LOG_WARN("self-study: insufficient KV capacity (%d used + %u needed > %u total)\n",
+                       pos_max + 1, n_generate, n_ctx);
+        return false;
+    }
+
+    // 2. Save existing cb_eval and install Q-capture callback
+    const auto & cparams = ctx->get_cparams();
+    auto prev_cb = cparams.cb_eval;
+    auto prev_ud = cparams.cb_eval_user_data;
+
+    q_state.active = true;
+    ctx->set_eval_callback(llama_q_capture_eval_callback, &q_state);
+
+    // 3. Seed token from last prefill logits (argmax)
+    float * logits = llama_get_logits_ith(ctx, -1);
+    if (!logits) {
+        LLAMA_LOG_ERROR("self-study: no logits available from prefill\n");
+        q_state.active = false;
+        ctx->set_eval_callback(prev_cb, prev_ud);
+        return false;
+    }
+
+    llama_token token = (llama_token)(std::max_element(logits, logits + n_vocab) - logits);
+
+    // 4. Autoregressive generation loop
+    uint32_t n_generated = 0;
+    for (uint32_t i = 0; i < n_generate; i++) {
+        llama_batch batch = llama_batch_get_one(&token, 1);
+
+        if (llama_decode(ctx, batch) != 0) {
+            LLAMA_LOG_ERROR("self-study: decode failed at step %u\n", i);
+            break;
+        }
+
+        // cb_eval fires during decode, capturing Q tensors.
+        // Commit this step's pending data before the next decode.
+        q_state.finalize_step();
+        n_generated++;
+
+        // Argmax for next token
+        logits = llama_get_logits_ith(ctx, -1);
+        if (!logits) {
+            LLAMA_LOG_ERROR("self-study: no logits at step %u\n", i);
+            break;
+        }
+        token = (llama_token)(std::max_element(logits, logits + n_vocab) - logits);
+
+        // Do NOT stop on EOS — continue for Q diversity (text is discarded)
+    }
+
+    // 5. Restore previous cb_eval
+    q_state.active = false;
+    ctx->set_eval_callback(prev_cb, prev_ud);
+
+    // 6. Remove generated tokens from memory
+    //    pos_max + 1 is the first generated position; remove [pos_max+1, pos_max+1+n_generated)
+    if (n_generated > 0) {
+        const llama_pos gen_start = pos_max + 1;
+        const llama_pos gen_end   = gen_start + (llama_pos)n_generated;
+        llama_memory_seq_rm(mem, seq_id, gen_start, gen_end);
+    }
+
+    LLAMA_LOG_INFO("self-study: captured Q from %u tokens (seq %d)\n", n_generated, seq_id);
+    return n_generated > 0;
 }
 
 // ---------------------------------------------------------------------------

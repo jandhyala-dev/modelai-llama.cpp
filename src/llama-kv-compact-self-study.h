@@ -1,6 +1,7 @@
 #pragma once
 
 #include "llama-kv-compact-solver.h"
+#include "llama.h"
 
 #include "ggml.h"
 
@@ -75,6 +76,37 @@ struct llama_q_capture_state {
 //
 // Must return true to continue graph computation, false to abort.
 bool llama_q_capture_eval_callback(struct ggml_tensor * t, bool ask, void * user_data);
+
+// ---------------------------------------------------------------------------
+// Autoregressive generation loop (slice 6b-4)
+// ---------------------------------------------------------------------------
+
+struct llama_context;
+
+// Generate n_generate continuation tokens from the current context state,
+// capturing post-RoPE Q tensors into q_state via cb_eval.
+//
+// Caller contract:
+//   - Context must have been prefilled (logits available from last decode)
+//   - q_state must be initialized via reset() before this call
+//   - KV cache must have room for n_generate additional tokens
+//
+// The function:
+//   1. Checks KV capacity (n_ctx - current_pos >= n_generate)
+//   2. Saves existing cb_eval, installs Q-capture callback
+//   3. Seeds first token from last prefill logits (argmax)
+//   4. Runs autoregressive loop: batch_get_one → decode → finalize_step → argmax
+//   5. Restores previous cb_eval
+//   6. Removes generated tokens from memory (llama_memory_seq_rm)
+//
+// EOS tokens are ignored — generation continues for Q diversity.
+// On decode failure, breaks with partial capture (still usable).
+// Returns true if at least one token was generated.
+bool llama_kv_compact_self_study_generate(
+        struct llama_context * ctx,
+        llama_q_capture_state & q_state,
+        uint32_t n_generate,
+        llama_seq_id seq_id);
 
 // ---------------------------------------------------------------------------
 // GQA regrouping + subsampling (slice 6b-3)
