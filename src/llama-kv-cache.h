@@ -14,6 +14,7 @@ struct llama_cparams;
 struct llama_hparams;
 struct llama_model;
 struct llama_context;
+struct llama_kv_compact_pipeline_stats;
 
 //
 // llama_kv_cache
@@ -174,6 +175,20 @@ public:
     size_t compacted_prefix_bytes(llama_seq_id seq_id = -1) const;
     uint32_t compacted_prefix_active_n_kv(llama_seq_id seq_id) const;
     bool compacted_prefix_reclaim_live_kv(llama_seq_id seq_id);
+    bool compacted_prefix_fit_from_live_kv(
+            llama_seq_id seq_id,
+            uint32_t target_tokens,
+            llama_pos live_suffix_pos0,
+            llama_kv_compact_pipeline_stats * stats = nullptr,
+            llama_pos p0 = 0,
+            uint32_t max_queries = 256,
+            int nnls_iters = 64,
+            float lambda = 1e-6f);
+
+    bool compacted_prefix_layer_layout_for_solver(int32_t il, llama_compacted_prefix_layer_layout & out) const;
+    bool compacted_prefix_seq_positions(llama_seq_id seq_id, llama_pos p0, llama_pos p1, std::vector<llama_pos> & out) const;
+    bool compacted_prefix_copy_k_head_f32(int32_t il, llama_seq_id seq_id, uint32_t head_kv, const std::vector<llama_pos> & positions, std::vector<float> & out) const;
+    bool compacted_prefix_copy_v_head_f32(int32_t il, llama_seq_id seq_id, uint32_t head_kv, const std::vector<llama_pos> & positions, std::vector<float> & out) const;
 
     const llama_compacted_prefix_store * get_compacted_prefix() const;
           llama_compacted_prefix_store * get_compacted_prefix();

@@ -98,6 +98,7 @@ public:
 
     sequence_state * get_seq(llama_seq_id seq_id);
     const sequence_state * get_seq(llama_seq_id seq_id) const;
+    const std::vector<llama_compacted_prefix_layer_layout> & get_layouts() const;
 
 private:
     static void normalize_range(llama_pos & p0, llama_pos & p1);

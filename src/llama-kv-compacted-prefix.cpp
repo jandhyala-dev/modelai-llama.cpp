@@ -16,7 +16,7 @@ bool is_supported_compacted_type(ggml_type type) {
     return type == GGML_TYPE_F16 || type == GGML_TYPE_BF16 || type == GGML_TYPE_F32;
 }
 
-size_t compacted_tensor_bytes(ggml_type type, uint32_t n_elem_per_head, uint32_t n_head_kv) {
+size_t compacted_tensor_bytes(ggml_type type, size_t n_elem_per_head, uint32_t n_head_kv) {
     return size_t(n_head_kv) * ggml_row_size(type, n_elem_per_head);
 }
 
@@ -188,8 +188,8 @@ void llama_compacted_prefix_store::layer_storage::configure(uint32_t n_tokens) {
 
     n_compacted_tokens = n_tokens;
 
-    const uint32_t k_elems = layout.n_embd_head_k * n_tokens;
-    const uint32_t v_elems = layout.n_embd_head_v * n_tokens;
+    const size_t k_elems = size_t(layout.n_embd_head_k) * n_tokens;
+    const size_t v_elems = size_t(layout.n_embd_head_v) * n_tokens;
 
     k_data.resize(compacted_tensor_bytes(layout.type_k, k_elems, layout.n_head_kv));
     beta_data.resize(size_t(layout.n_head_kv) * n_tokens);
@@ -301,6 +301,9 @@ bool llama_compacted_prefix_store::configure_seq(
     }
     if (live_suffix_pos0 < -1) {
         throw std::runtime_error("compacted-prefix live_suffix_pos0 must be >= -1");
+    }
+    if (logical_positions.size() > logical_token_count) {
+        throw std::runtime_error("compacted-prefix logical_positions.size() must not exceed logical_token_count");
     }
 
     auto & state = seq(seq_id);
@@ -490,17 +493,27 @@ void llama_compacted_prefix_store::seq_div(llama_seq_id seq_id, llama_pos p0, ll
         return;
     }
 
-    for (auto & pos : state.logical_positions) {
+    // Compute divided positions into a temporary to validate uniqueness before mutating state.
+    std::vector<llama_pos> new_positions = state.logical_positions;
+    for (auto & pos : new_positions) {
         if (pos_in(pos, p0, p1)) {
             pos /= d;
         }
     }
 
-    if (state.live_suffix_pos0 >= 0 && pos_in(state.live_suffix_pos0, p0, p1)) {
-        state.live_suffix_pos0 /= d;
+    llama_pos new_suffix_pos0 = state.live_suffix_pos0;
+    if (new_suffix_pos0 >= 0 && pos_in(new_suffix_pos0, p0, p1)) {
+        new_suffix_pos0 /= d;
     }
 
-    validate_positions(state);
+    // Validate the proposed state before committing.
+    sequence_state proposed = state;
+    proposed.logical_positions = new_positions;
+    proposed.live_suffix_pos0 = new_suffix_pos0;
+    validate_positions(proposed);
+
+    state.logical_positions = std::move(new_positions);
+    state.live_suffix_pos0 = new_suffix_pos0;
 }
 
 llama_pos llama_compacted_prefix_store::seq_pos_min(llama_seq_id seq_id) const {
@@ -746,6 +759,10 @@ const llama_compacted_prefix_store::sequence_state * llama_compacted_prefix_stor
         return nullptr;
     }
     return &seq(seq_id);
+}
+
+const std::vector<llama_compacted_prefix_layer_layout> & llama_compacted_prefix_store::get_layouts() const {
+    return layouts;
 }
 
 void llama_compacted_prefix_store::normalize_range(llama_pos & p0, llama_pos & p1) {
