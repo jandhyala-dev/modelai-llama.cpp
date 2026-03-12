@@ -24,7 +24,9 @@ NGL="${2:-99}"
 BUILD_DIR="${BUILD_DIR:-build}"
 ARTIFACT_BASE="${ARTIFACT_BASE:-bench-results}"
 QUALITY_EVAL="${QUALITY_EVAL:-0}"
+LONGHEALTH_EVAL="${LONGHEALTH_EVAL:-0}"
 SELF_STUDY="${SELF_STUDY:-0}"
+SEC_TEXT_DIR="${SEC_TEXT_DIR:-}"
 
 BIN="${BUILD_DIR}/bin/test-kv-compact-longctx"
 
@@ -69,7 +71,9 @@ ENV_TXT="${RUN_DIR}/env.txt"
     echo "arch: $(uname -m)"
     echo "hostname: $(hostname 2>/dev/null || echo unknown)"
     echo "quality_eval: $QUALITY_EVAL"
+    echo "longhealth_eval: $LONGHEALTH_EVAL"
     echo "self_study: $SELF_STUDY"
+    echo "sec_text_dir: ${SEC_TEXT_DIR:-none}"
 } > "$ENV_TXT"
 
 echo "=== KV Compaction Long-Context Benchmark ==="
@@ -98,37 +102,102 @@ N_PASS=0
 N_FAIL=0
 N_CRASH=0
 N_SKIP=0
+N_TIMEOUT=0
+
+# Per-run timeout in seconds. Default 600s (10 min). Override with RUN_TIMEOUT env var.
+RUN_TIMEOUT="${RUN_TIMEOUT:-600}"
 
 run_one() {
     local pipeline="$1"
     local ctx="$2"
     local ratio="$3"
     local quality_flag="$4"
+    local longhealth_flag="$5"
 
-    echo "--- $pipeline | ctx=$ctx | ratio=${ratio}x ---"
+    local start_ts=$(date +%s)
+    echo "--- $pipeline | ctx=$ctx | ratio=${ratio}x (timeout=${RUN_TIMEOUT}s) ---"
 
+    # Run test with watchdog timeout. Use a PID file to track the actual binary.
+    local tmp_out=$(mktemp)
+    local pid_file=$(mktemp)
+
+    # Launch in background, capture stdout, stderr to log.
     PIPELINE="$pipeline" RATIO="$ratio" RUN_ID="$RUN_ID" \
         ARTIFACT="$RESULTS_CSV" QUALITY_EVAL="$quality_flag" \
-        QUALITY_DATA="tests/data/quality-validation.jsonl" \
-        "$BIN" -m "$MODEL" -ngl "$NGL" -c "$ctx" 2>>"$STDERR_LOG" \
-        | tee -a "$STDOUT_LOG" || {
-            local rc=$?
-            if [ $rc -eq 139 ] || [ $rc -eq 137 ] || [ $rc -eq 134 ]; then
-                echo "  CRASH (signal $rc)"
-                N_CRASH=$((N_CRASH + 1))
-            else
-                echo "  FAIL (exit $rc — threshold miss or error)"
-                N_FAIL=$((N_FAIL + 1))
-            fi
-            return 0  # don't abort the script
-        }
-    N_PASS=$((N_PASS + 1))
+        QUALITY_DATA="tests/data/quality-validation-full.jsonl" \
+        QUALITY_LIMIT="${QUALITY_LIMIT:-100}" \
+        LONGHEALTH_EVAL="$longhealth_flag" \
+        LONGHEALTH_DATA="tests/data/longhealth-benchmark-v5.json" \
+        LONGHEALTH_LIMIT="${LONGHEALTH_LIMIT:-50}" \
+        SEC_TEXT_DIR="${SEC_TEXT_DIR}" \
+        "$BIN" -m "$MODEL" -ngl "$NGL" -c "$ctx" \
+        > "$tmp_out" 2>>"$STDERR_LOG" &
+    local bin_pid=$!
+    echo "$bin_pid" > "$pid_file"
+
+    # Watchdog: kill if exceeds timeout.
+    {
+        sleep "$RUN_TIMEOUT" 2>/dev/null || true
+        if kill -0 "$bin_pid" 2>/dev/null; then
+            echo "  TIMEOUT after ${RUN_TIMEOUT}s — killing pid $bin_pid"
+            kill "$bin_pid" 2>/dev/null || true
+            sleep 2
+            kill -9 "$bin_pid" 2>/dev/null || true
+        fi
+    } &
+    local watchdog_pid=$!
+
+    # Wait for the test process (|| true to prevent set -e abort).
+    wait "$bin_pid" 2>/dev/null || true
+    local rc=$?
+
+    # Kill the watchdog (|| true to prevent set -e abort on already-dead process).
+    kill "$watchdog_pid" 2>/dev/null || true
+    wait "$watchdog_pid" 2>/dev/null || true
+
+    # Display and log captured stdout.
+    if [ -s "$tmp_out" ]; then
+        cat "$tmp_out" | tee -a "$STDOUT_LOG"
+    fi
+    rm -f "$tmp_out" "$pid_file"
+
+    local end_ts=$(date +%s)
+    local elapsed=$(( end_ts - start_ts ))
+
+    if [ $rc -eq 137 ] || [ $rc -eq 143 ]; then
+        if [ $elapsed -ge $((RUN_TIMEOUT - 5)) ]; then
+            echo "  TIMEOUT ($pipeline ctx=$ctx ratio=${ratio}x after ${elapsed}s)"
+            N_TIMEOUT=$((N_TIMEOUT + 1))
+        else
+            echo "  CRASH (signal $rc after ${elapsed}s)"
+            N_CRASH=$((N_CRASH + 1))
+        fi
+    elif [ $rc -eq 139 ] || [ $rc -eq 134 ]; then
+        echo "  CRASH (signal $rc after ${elapsed}s)"
+        N_CRASH=$((N_CRASH + 1))
+    elif [ $rc -ne 0 ]; then
+        echo "  FAIL (exit $rc after ${elapsed}s — threshold miss or error)"
+        N_FAIL=$((N_FAIL + 1))
+    else
+        echo "  PASS (${elapsed}s)"
+        N_PASS=$((N_PASS + 1))
+    fi
     echo ""
 }
 
 # Run baseline for each context size (no ratio variation).
 for CTX in $CONTEXTS; do
-    run_one "baseline" "$CTX" "1" "$QUALITY_EVAL"
+    # QuALITY: only at contexts <= 8K (articles fit).
+    local_quality_bl="0"
+    if [ "$QUALITY_EVAL" = "1" ] && [ "$CTX" -le 8192 ]; then
+        local_quality_bl="1"
+    fi
+    # LongHealth: only at contexts >= 32K (patient records are ~10K tokens each, need 60K+).
+    local_lh_bl="0"
+    if [ "$LONGHEALTH_EVAL" = "1" ] && [ "$CTX" -ge 32768 ]; then
+        local_lh_bl="1"
+    fi
+    run_one "baseline" "$CTX" "1" "$local_quality_bl" "$local_lh_bl"
 done
 
 # Run compacted pipelines for each context x ratio.
@@ -140,8 +209,13 @@ for PIPELINE in $PIPELINES; do
         if [ "$QUALITY_EVAL" = "1" ] && [ "$CTX" -le 8192 ]; then
             local_quality="1"
         fi
+        # LongHealth eval only at >= 32K (patient records need ~60K tokens).
+        local_lh="0"
+        if [ "$LONGHEALTH_EVAL" = "1" ] && [ "$CTX" -ge 32768 ]; then
+            local_lh="1"
+        fi
         for RATIO in $RATIOS; do
-            run_one "$PIPELINE" "$CTX" "$RATIO" "$local_quality"
+            run_one "$PIPELINE" "$CTX" "$RATIO" "$local_quality" "$local_lh"
         done
     done
 done
@@ -179,15 +253,16 @@ cat > "${RUN_DIR}/manifest.json" <<MANIFEST
 MANIFEST
 
 # Summary.
-TOTAL=$((N_PASS + N_FAIL + N_CRASH))
+TOTAL=$((N_PASS + N_FAIL + N_CRASH + N_TIMEOUT))
 echo ""
 echo "=== Summary ==="
 echo "model:   $MODEL_NAME"
 echo "run_id:  $RUN_ID"
 echo "total:   $TOTAL runs"
-echo "  pass:  $N_PASS"
-echo "  fail:  $N_FAIL (threshold miss)"
-echo "  crash: $N_CRASH"
+echo "  pass:    $N_PASS"
+echo "  fail:    $N_FAIL (threshold miss)"
+echo "  crash:   $N_CRASH"
+echo "  timeout: $N_TIMEOUT (>${RUN_TIMEOUT}s)"
 echo ""
 
 # Display results table if available.

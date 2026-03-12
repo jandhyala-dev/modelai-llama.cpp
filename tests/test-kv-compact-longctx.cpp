@@ -1,8 +1,9 @@
 // Long-context benchmark for KV cache compaction (6b-15 / 6b-15b).
 //
 // Measures compaction quality and decode throughput across context lengths
-// (4K-32K) to find the throughput crossover point.  Supports QuALITY MC
-// evaluation for paper-aligned accuracy measurement.
+// (4K-128K+) to find the throughput crossover point.  Supports QuALITY MC
+// evaluation (2,086 questions) and LongHealth MC evaluation (400 questions,
+// 60K-token patient records) for paper-aligned accuracy measurement.
 //
 // Pipelines: baseline, select, solver, omp, self_study (6b-15b)
 //
@@ -10,9 +11,17 @@
 //   # Single pipeline run:
 //   PIPELINE=select RATIO=8 ./test-kv-compact-longctx -m model.gguf -c 16384
 //
-//   # QuALITY MC evaluation:
+//   # QuALITY MC evaluation (full 2,086 questions):
 //   PIPELINE=select RATIO=4 QUALITY_EVAL=1 \
 //       ./test-kv-compact-longctx -m model.gguf -c 8192
+//
+//   # LongHealth MC evaluation (400 questions, 5-option):
+//   PIPELINE=select RATIO=4 LONGHEALTH_EVAL=1 \
+//       ./test-kv-compact-longctx -m model.gguf -c 65536
+//
+//   # Real SEC filing prefill:
+//   SEC_TEXT_DIR=tests/data/sec-10k-benchmark PIPELINE=select RATIO=4 \
+//       ./test-kv-compact-longctx -m model.gguf -c 32768
 //
 //   # Write CSV artifact:
 //   ARTIFACT=results.csv PIPELINE=baseline \
@@ -145,6 +154,80 @@ static std::vector<quality_entry> load_quality_data(const std::string & path) {
 }
 
 // ---------------------------------------------------------------------------
+// LongHealth MC entry (5-option: A-E)
+// ---------------------------------------------------------------------------
+
+struct longhealth_entry {
+    std::string patient_text;  // concatenated patient medical records
+    std::string question;
+    std::vector<std::string> options;  // 5 options (A-E)
+    int answer;  // 0-4 index of correct answer
+    std::string patient_id;
+};
+
+static std::vector<longhealth_entry> load_longhealth_data(const std::string & path) {
+    std::vector<longhealth_entry> entries;
+    std::ifstream ifs(path);
+    if (!ifs.is_open()) return entries;
+
+    std::string content((std::istreambuf_iterator<char>(ifs)),
+                         std::istreambuf_iterator<char>());
+    nlohmann::json root;
+    try {
+        root = nlohmann::json::parse(content);
+    } catch (...) {
+        return entries;
+    }
+
+    // Format: {"patient_01": {"texts": {"text_0": "...", ...}, "questions": [...]}, ...}
+    for (auto it = root.begin(); it != root.end(); ++it) {
+        const std::string & patient_id = it.key();
+        const auto & patient = it.value();
+
+        // Concatenate all patient texts.
+        std::string patient_text;
+        if (patient.contains("texts")) {
+            const auto & texts = patient["texts"];
+            for (auto tit = texts.begin(); tit != texts.end(); ++tit) {
+                if (!patient_text.empty()) patient_text += "\n\n";
+                patient_text += tit.value().get<std::string>();
+            }
+        }
+        if (patient_text.empty()) continue;
+
+        // Parse questions.
+        if (!patient.contains("questions")) continue;
+        for (const auto & q : patient["questions"]) {
+            longhealth_entry e;
+            e.patient_id = patient_id;
+            e.patient_text = patient_text;
+            e.question = q.value("question", "");
+            if (e.question.empty()) continue;
+
+            // 5 answer options.
+            const char * answer_keys[] = {"answer_a", "answer_b", "answer_c", "answer_d", "answer_e"};
+            for (int i = 0; i < 5; ++i) {
+                e.options.push_back(q.value(answer_keys[i], ""));
+            }
+
+            // Map "correct" field to answer index.
+            std::string correct_text = q.value("correct", "");
+            e.answer = -1;
+            for (int i = 0; i < 5; ++i) {
+                if (e.options[i] == correct_text) {
+                    e.answer = i;
+                    break;
+                }
+            }
+            if (e.answer < 0) continue;  // skip if correct answer not found
+
+            entries.push_back(std::move(e));
+        }
+    }
+    return entries;
+}
+
+// ---------------------------------------------------------------------------
 // Decode burst — returns elapsed ms, or -1 on error
 // ---------------------------------------------------------------------------
 
@@ -228,6 +311,109 @@ static bool run_compaction(llama_kv_cache * kv, llama_context * ctx,
 }
 
 // ---------------------------------------------------------------------------
+// LongHealth MC scoring — single-forward-pass logit comparison (5-option)
+// ---------------------------------------------------------------------------
+
+struct longhealth_score {
+    int correct;
+    int total;
+};
+
+static longhealth_score run_longhealth_eval(
+        llama_context * ctx, llama_model * model, llama_kv_cache * kv,
+        const std::vector<longhealth_entry> & entries,
+        const std::string & pipeline_name,
+        int compression_ratio, int n_ctx,
+        bool do_compact) {
+
+    const llama_vocab * vocab = llama_model_get_vocab(model);
+    const uint32_t n_vocab = llama_vocab_n_tokens(vocab);
+
+    // Look up 5 answer token IDs: try space-prefixed first, then bare.
+    llama_token tok_answers[5];
+    const char * labels_sp[] = {" A", " B", " C", " D", " E"};
+    const char * labels_bare[] = {"A", "B", "C", "D", "E"};
+    for (int i = 0; i < 5; ++i) {
+        auto toks = common_tokenize(ctx, labels_sp[i], false, false);
+        if (toks.size() == 1) {
+            tok_answers[i] = toks[0];
+        } else {
+            toks = common_tokenize(ctx, labels_bare[i], false, false);
+            tok_answers[i] = toks.empty() ? -1 : toks[0];
+        }
+    }
+
+    int correct = 0;
+    int total = 0;
+
+    for (const auto & entry : entries) {
+        // Build prompt: patient text + question + 5 options + "Answer:"
+        std::string prompt_str = entry.patient_text + "\n\nQuestion: " + entry.question + "\n\n";
+        for (int i = 0; i < 5; ++i) {
+            char label = 'A' + i;
+            prompt_str += label;
+            prompt_str += ") ";
+            prompt_str += entry.options[i];
+            prompt_str += "\n";
+        }
+        prompt_str += "\nAnswer:";
+
+        auto prompt_tokens = common_tokenize(ctx, prompt_str, true, false);
+
+        // Skip if prompt doesn't fit in context.
+        if ((int) prompt_tokens.size() >= n_ctx - 1) {
+            continue;
+        }
+
+        // Clear KV and prefill.
+        llama_memory_clear(ctx->get_memory(), true);
+
+        const double pm = prefill_tokens(ctx, prompt_tokens);
+        if (pm < 0) continue;
+
+        const int prefix_len = (int) prompt_tokens.size();
+
+        // Optionally compact.
+        if (do_compact && pipeline_name != "baseline") {
+            const int live_suffix_pos0 = (int)(prefix_len * 0.8);
+            const int target = live_suffix_pos0 / compression_ratio;
+            if (target < 1) continue;
+
+            llama_kv_compact_pipeline_stats stats = {};
+            double ss_gen_ms = 0.0;
+            if (!run_compaction(kv, ctx, pipeline_name, target, live_suffix_pos0, &stats, &ss_gen_ms)) {
+                continue;
+            }
+            if (!kv->compacted_prefix_set_execution(0, true)) continue;
+            if (!kv->compacted_prefix_reclaim_live_kv(0)) continue;
+        }
+
+        // Extract logits at the last position (-1 = last output token).
+        const float * logits = llama_get_logits_ith(ctx, -1);
+        if (!logits) continue;
+
+        // Score: argmax over 5 answer tokens.
+        int best_idx = 0;
+        float best_logit = -1e30f;
+        for (int i = 0; i < 5; ++i) {
+            if (tok_answers[i] < 0 || tok_answers[i] >= (llama_token) n_vocab) continue;
+            float l = logits[tok_answers[i]];
+            if (l > best_logit) {
+                best_logit = l;
+                best_idx = i;
+            }
+        }
+
+        if (best_idx == entry.answer) {
+            ++correct;
+        }
+        ++total;
+    }
+
+    return {correct, total};
+}
+
+// ---------------------------------------------------------------------------
 // CSV result row
 // ---------------------------------------------------------------------------
 
@@ -280,6 +466,12 @@ struct longctx_result {
     std::string quality_accuracy;
     std::string quality_baseline_accuracy;
 
+    // longhealth
+    std::string longhealth_correct;
+    std::string longhealth_total;
+    std::string longhealth_accuracy;
+    std::string longhealth_baseline_accuracy;
+
     // threshold
     std::string threshold_name;
     float       threshold_value;
@@ -304,6 +496,7 @@ static void write_csv_header(FILE * f) {
         "throughput_delta_pct,active_n_kv,allocated_kv_bytes,reclaimed_kv_bytes,"
         "logit_cosine,task_metric_name,task_metric_value,"
         "quality_correct,quality_total,quality_accuracy,quality_baseline_accuracy,"
+        "longhealth_correct,longhealth_total,longhealth_accuracy,longhealth_baseline_accuracy,"
         "threshold_name,threshold_value,pass,fallback_used,fallback_reason,"
         "crash,error_text,artifact_path\n");
 }
@@ -319,6 +512,7 @@ static void write_csv_row(FILE * f, const longctx_result & r) {
         "%.4f,%u,%s,%s,"                      // throughput_delta_pct..reclaimed_kv_bytes
         "%.6f,%s,%s,"                         // logit_cosine..task_metric_value
         "%s,%s,%s,%s,"                        // quality_correct..quality_baseline_accuracy
+        "%s,%s,%s,%s,"                        // longhealth_correct..longhealth_baseline_accuracy
         "%s,%.4f,%s,%s,%s,"                   // threshold_name..fallback_reason
         "%s,%s,%s\n",                         // crash..artifact_path
         r.schema_version, r.run_id.c_str(),
@@ -339,6 +533,8 @@ static void write_csv_row(FILE * f, const longctx_result & r) {
         r.task_metric_name.c_str(), r.task_metric_value.c_str(),
         r.quality_correct.c_str(), r.quality_total.c_str(),
         r.quality_accuracy.c_str(), r.quality_baseline_accuracy.c_str(),
+        r.longhealth_correct.c_str(), r.longhealth_total.c_str(),
+        r.longhealth_accuracy.c_str(), r.longhealth_baseline_accuracy.c_str(),
         r.threshold_name.c_str(), r.threshold_value,
         r.pass ? "true" : "false",
         r.fallback_used ? "true" : "false", r.fallback_reason.c_str(),
@@ -347,11 +543,93 @@ static void write_csv_row(FILE * f, const longctx_result & r) {
 }
 
 // ---------------------------------------------------------------------------
-// Build text prompt (SEC-filing style, same pattern as 6b-13)
+// Load text from file (for real SEC filing prefills)
+// ---------------------------------------------------------------------------
+
+static std::string load_text_file(const std::string & path) {
+    FILE * f = std::fopen(path.c_str(), "rb");
+    if (!f) return "";
+    std::fseek(f, 0, SEEK_END);
+    const long sz = std::ftell(f);
+    std::fseek(f, 0, SEEK_SET);
+    std::string text(sz, '\0');
+    std::fread(&text[0], 1, sz, f);
+    std::fclose(f);
+    return text;
+}
+
+// Pick the best-fit SEC filing from SEC_TEXT_DIR for the given token count.
+// Scans *.txt files and picks the one whose size (chars/4) is closest to
+// and >= min_tokens.  Falls back to the largest file if none is big enough.
+static std::string pick_sec_filing(const std::string & dir, size_t min_tokens) {
+    std::string best_path;
+    long best_size = 0;
+    std::string largest_path;
+    long largest_size = 0;
+
+    // Simple directory scan via popen (portable enough for test code).
+    std::string cmd = "ls -1 " + dir + "/*.txt 2>/dev/null";
+    FILE * p = popen(cmd.c_str(), "r");
+    if (!p) return "";
+    char buf[1024];
+    while (std::fgets(buf, sizeof(buf), p)) {
+        std::string path(buf);
+        while (!path.empty() && (path.back() == '\n' || path.back() == '\r'))
+            path.pop_back();
+        FILE * f = std::fopen(path.c_str(), "rb");
+        if (!f) continue;
+        std::fseek(f, 0, SEEK_END);
+        long sz = std::ftell(f);
+        std::fclose(f);
+        if (sz > largest_size) { largest_size = sz; largest_path = path; }
+        long approx_tokens = sz / 4;
+        if (approx_tokens >= (long)min_tokens) {
+            if (best_path.empty() || sz < best_size) {
+                best_size = sz;
+                best_path = path;
+            }
+        }
+    }
+    pclose(p);
+    return best_path.empty() ? largest_path : best_path;
+}
+
+// ---------------------------------------------------------------------------
+// Build text prompt — uses real SEC filing if SEC_TEXT_DIR is set,
+// otherwise falls back to synthetic repeated paragraph.
 // ---------------------------------------------------------------------------
 
 static std::vector<llama_token> build_real_text_prompt(llama_context * ctx,
                                                        size_t min_tokens) {
+    // Try real SEC filing text first.
+    const char * sec_dir = std::getenv("SEC_TEXT_DIR");
+    if (sec_dir && sec_dir[0]) {
+        std::string path = pick_sec_filing(sec_dir, min_tokens);
+        if (!path.empty()) {
+            std::string text = load_text_file(path);
+            if (!text.empty()) {
+                std::vector<llama_token> tokens = common_tokenize(ctx, text, true, false);
+                if (tokens.size() >= min_tokens) {
+                    LLAMA_LOG_INFO("prefill: using SEC filing %s (%zu tokens)\n",
+                                   path.c_str(), tokens.size());
+                    tokens.resize(min_tokens);
+                    return tokens;
+                }
+                // Filing too short — pad with repetition of its own text.
+                LLAMA_LOG_INFO("prefill: SEC filing %s has %zu tokens, padding to %zu\n",
+                               path.c_str(), tokens.size(), min_tokens);
+                std::vector<llama_token> padded;
+                padded.reserve(min_tokens);
+                while (padded.size() < min_tokens) {
+                    padded.insert(padded.end(), tokens.begin(), tokens.end());
+                }
+                padded.resize(min_tokens);
+                return padded;
+            }
+        }
+    }
+
+    // Fallback: synthetic repeated paragraph.
     const std::string para =
         "The quarterly letter reviewed liquidity, capital allocation, recurring revenue, customer retention, and operating leverage. "
         "Management discussed cash flow discipline, pricing pressure, inventory turns, software adoption, and regional demand. "
@@ -448,8 +726,8 @@ static quality_score run_quality_eval(
             if (!kv->compacted_prefix_reclaim_live_kv(0)) continue;
         }
 
-        // Extract logits at the last position.
-        const float * logits = llama_get_logits_ith(ctx, 0);
+        // Extract logits at the last position (-1 = last output token).
+        const float * logits = llama_get_logits_ith(ctx, -1);
         if (!logits) continue;
 
         // Score: argmax over answer tokens.
@@ -529,10 +807,27 @@ int main(int argc, char ** argv) {
     const char * env_quality  = std::getenv("QUALITY_EVAL");
     const bool   do_quality   = env_quality && std::atoi(env_quality) > 0;
 
-    // Quality data path (relative to repo root or absolute).
+    // Quality data path — default to full 2,086-question dataset.
     const char * env_quality_path = std::getenv("QUALITY_DATA");
     const std::string quality_path = env_quality_path
-        ? env_quality_path : "tests/data/quality-validation.jsonl";
+        ? env_quality_path : "tests/data/quality-validation-full.jsonl";
+
+    // Max questions per eval pass (0 = unlimited). Default 100 for inline
+    // benchmarks — full 2,086 takes ~45 min per run on an 8B model.
+    // Set QUALITY_LIMIT=0 for exhaustive evaluation.
+    const char * env_quality_limit = std::getenv("QUALITY_LIMIT");
+    const int quality_limit = env_quality_limit ? std::atoi(env_quality_limit) : 100;
+
+    // LongHealth evaluation (5-option MC, 60K-token patient records).
+    const char * env_longhealth = std::getenv("LONGHEALTH_EVAL");
+    const bool do_longhealth = env_longhealth && std::atoi(env_longhealth) > 0;
+    const char * env_longhealth_path = std::getenv("LONGHEALTH_DATA");
+    const std::string longhealth_path = env_longhealth_path
+        ? env_longhealth_path : "tests/data/longhealth-benchmark-v5.json";
+
+    // Max LongHealth questions per eval (0 = unlimited). Default 50.
+    const char * env_lh_limit = std::getenv("LONGHEALTH_LIMIT");
+    const int longhealth_limit = env_lh_limit ? std::atoi(env_lh_limit) : 50;
 
     const int n_ctx = (int) llama_n_ctx(ctx);
     const int continuation_tokens = 16;
@@ -589,8 +884,21 @@ int main(int argc, char ** argv) {
     const char * wid = workload_id_from_params(n_params);
     const char * wname = workload_name_from_id(wid);
 
-    // Dataset: quality-validation for QuALITY eval, synthetic-sec otherwise.
-    const std::string dataset_id = do_quality ? "quality-validation" : "synthetic-sec";
+    // Dataset identification.
+    const char * env_sec_dir = std::getenv("SEC_TEXT_DIR");
+    const bool use_real_sec = env_sec_dir && env_sec_dir[0];
+    std::string dataset_id;
+    if (do_quality && do_longhealth) {
+        dataset_id = "quality+longhealth";
+    } else if (do_quality) {
+        dataset_id = "quality-validation";
+    } else if (do_longhealth) {
+        dataset_id = "longhealth";
+    } else if (use_real_sec) {
+        dataset_id = "sec-10k-filings";
+    } else {
+        dataset_id = "synthetic-sec";
+    }
 
     // Run ID.
     std::string run_id = "local";
@@ -632,7 +940,12 @@ int main(int argc, char ** argv) {
                 prefix_tokens, compactable_tokens, live_suffix_tokens);
     std::printf("workload:   %s (%s)\n", wid, wname);
     if (do_quality) {
-        std::printf("quality:    QuALITY MC eval enabled (%s)\n", quality_path.c_str());
+        std::printf("quality:    QuALITY MC eval enabled (%s, limit=%d)\n",
+                    quality_path.c_str(), quality_limit);
+    }
+    if (do_longhealth) {
+        std::printf("longhealth: LongHealth MC eval enabled (%s, limit=%d)\n",
+                    longhealth_path.c_str(), longhealth_limit);
     }
     std::printf("\n");
 
@@ -707,6 +1020,9 @@ int main(int argc, char ** argv) {
         // QuALITY baseline accuracy.
         if (do_quality) {
             auto entries = load_quality_data(quality_path);
+            if (quality_limit > 0 && (int) entries.size() > quality_limit) {
+                entries.resize(quality_limit);
+            }
             if (!entries.empty()) {
                 auto score = run_quality_eval(ctx, model, kv, entries,
                                              "baseline", 1, n_ctx, false);
@@ -724,6 +1040,36 @@ int main(int argc, char ** argv) {
                     result.task_metric_value = buf;
                     std::printf("QuALITY baseline: %d/%d = %.1f%%\n",
                                 score.correct, score.total, acc * 100.0f);
+                }
+            }
+        }
+
+        // LongHealth baseline accuracy (60K-token patient records, 5-option MC).
+        if (do_longhealth) {
+            auto lh_entries = load_longhealth_data(longhealth_path);
+            if (longhealth_limit > 0 && (int) lh_entries.size() > longhealth_limit) {
+                lh_entries.resize(longhealth_limit);
+            }
+            if (!lh_entries.empty()) {
+                auto lh_score = run_longhealth_eval(ctx, model, kv, lh_entries,
+                                                     "baseline", 1, n_ctx, false);
+                char buf[32];
+                std::snprintf(buf, sizeof(buf), "%d", lh_score.correct);
+                result.longhealth_correct = buf;
+                std::snprintf(buf, sizeof(buf), "%d", lh_score.total);
+                result.longhealth_total = buf;
+                if (lh_score.total > 0) {
+                    float acc = (float) lh_score.correct / lh_score.total;
+                    std::snprintf(buf, sizeof(buf), "%.4f", acc);
+                    result.longhealth_accuracy = buf;
+                    result.longhealth_baseline_accuracy = buf;
+                    // If no quality eval, use longhealth as task metric.
+                    if (!do_quality) {
+                        result.task_metric_name = "longhealth_accuracy";
+                        result.task_metric_value = buf;
+                    }
+                    std::printf("LongHealth baseline: %d/%d = %.1f%%\n",
+                                lh_score.correct, lh_score.total, acc * 100.0f);
                 }
             }
         }
@@ -895,6 +1241,9 @@ int main(int argc, char ** argv) {
         // QuALITY MC evaluation (compacted).
         if (do_quality) {
             auto entries = load_quality_data(quality_path);
+            if (quality_limit > 0 && (int) entries.size() > quality_limit) {
+                entries.resize(quality_limit);
+            }
             if (!entries.empty()) {
                 // Compacted accuracy.
                 auto score_c = run_quality_eval(ctx, model, kv, entries,
@@ -923,6 +1272,46 @@ int main(int argc, char ** argv) {
                     result.quality_baseline_accuracy = buf;
                     std::printf("QuALITY baseline:  %d/%d = %.1f%%\n",
                                 score_b.correct, score_b.total, acc_b * 100.0f);
+                }
+            }
+        }
+
+        // LongHealth MC evaluation (compacted, 5-option, 60K-token patient records).
+        if (do_longhealth) {
+            auto lh_entries = load_longhealth_data(longhealth_path);
+            if (longhealth_limit > 0 && (int) lh_entries.size() > longhealth_limit) {
+                lh_entries.resize(longhealth_limit);
+            }
+            if (!lh_entries.empty()) {
+                // Compacted accuracy.
+                auto lh_score_c = run_longhealth_eval(ctx, model, kv, lh_entries,
+                                                       pipeline, ratio, n_ctx, true);
+                // Baseline accuracy (for comparison).
+                auto lh_score_b = run_longhealth_eval(ctx, model, kv, lh_entries,
+                                                       "baseline", 1, n_ctx, false);
+
+                char buf[32];
+                std::snprintf(buf, sizeof(buf), "%d", lh_score_c.correct);
+                result.longhealth_correct = buf;
+                std::snprintf(buf, sizeof(buf), "%d", lh_score_c.total);
+                result.longhealth_total = buf;
+                if (lh_score_c.total > 0) {
+                    float acc_c = (float) lh_score_c.correct / lh_score_c.total;
+                    std::snprintf(buf, sizeof(buf), "%.4f", acc_c);
+                    result.longhealth_accuracy = buf;
+                    if (!do_quality) {
+                        result.task_metric_name = "longhealth_accuracy";
+                        result.task_metric_value = buf;
+                    }
+                    std::printf("LongHealth compacted: %d/%d = %.1f%%\n",
+                                lh_score_c.correct, lh_score_c.total, acc_c * 100.0f);
+                }
+                if (lh_score_b.total > 0) {
+                    float acc_b = (float) lh_score_b.correct / lh_score_b.total;
+                    std::snprintf(buf, sizeof(buf), "%.4f", acc_b);
+                    result.longhealth_baseline_accuracy = buf;
+                    std::printf("LongHealth baseline:  %d/%d = %.1f%%\n",
+                                lh_score_b.correct, lh_score_b.total, acc_b * 100.0f);
                 }
             }
         }
