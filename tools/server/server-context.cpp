@@ -14,6 +14,8 @@
 #include "src/llama-context.h"
 #include "src/llama-kv-cache.h"
 #include "src/llama-kv-cache-iswa.h"
+#include "src/llama-kv-compact-pipeline.h"
+#include "src/llama-kv-compact-self-study.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -79,7 +81,7 @@ static const llama_kv_cache * get_kv_cache_base(llama_context * ctx) {
     return nullptr;
 }
 
-static json build_modelai_server_capabilities(const common_params & params, const server_context_meta & meta, bool is_router_server) {
+static json build_modelai_server_capabilities(const common_params & params, const server_context_meta & meta, bool is_router_server, bool compaction_enabled = false, bool compaction_flash_overridden = false) {
     const bool supports_embeddings = meta.pooling_type != LLAMA_POOLING_TYPE_NONE;
     const bool supports_reranking  = meta.pooling_type == LLAMA_POOLING_TYPE_RANK;
     const bool supports_tools = params.use_jinja && chat_template_cap(meta.chat_template_caps, "supports_tools");
@@ -130,10 +132,11 @@ static json build_modelai_server_capabilities(const common_params & params, cons
             { "slots_endpoint",    params.endpoint_slots },
         } },
         { "compacted_prefix", {
-            { "available",            meta.compaction_supported },
-            { "enabled",              false },
-            { "requires_non_flash",   true },
-            { "last_fallback_reason", meta.compaction_supported ? "" : "model_unsupported" },
+            { "available",                meta.compaction_supported },
+            { "enabled",                  compaction_enabled },
+            { "zero_beta_flash_compatible", true },
+            { "flash_attn_overridden",    compaction_flash_overridden },
+            { "last_fallback_reason",     meta.compaction_supported ? "" : "model_unsupported" },
         } },
     };
 }
@@ -166,12 +169,12 @@ static json build_modelai_runtime_summary_from_metrics(const server_task_result_
             { "sequence_state_bytes_total", metrics.sequence_state_bytes_total },
         } },
         { "compaction", {
-            { "available",             metrics.compaction_available },
-            { "enabled",               metrics.compaction_enabled },
-            { "method",                metrics.compaction_method },
-            { "last_fallback_reason",  metrics.compaction_available
-                                           ? (metrics.compaction_enabled ? "" : "not_configured")
-                                           : "model_unsupported" },
+            { "available",               metrics.compaction_available },
+            { "enabled",                 metrics.compaction_enabled },
+            { "method",                  metrics.compaction_method },
+            { "last_fallback_reason",    metrics.compaction_available
+                                             ? (metrics.compaction_enabled ? "" : "not_configured")
+                                             : "model_unsupported" },
         } },
     };
 }
@@ -2124,6 +2127,123 @@ private:
                     res->id = task.id;
                     queue_results.send(std::move(res));
                 } break;
+            case SERVER_TASK_TYPE_COMPACT:
+                {
+                    const auto & cp = task.compact_params;
+                    const int id_slot = cp.id_slot;
+
+                    // Validate slot
+                    server_slot * slot = get_slot_by_id(id_slot);
+                    if (slot == nullptr) {
+                        send_error(task, "Invalid slot ID", ERROR_TYPE_INVALID_REQUEST);
+                        break;
+                    }
+                    if (slot->is_processing()) {
+                        SRV_DBG("requested slot is unavailable, defer compact task, id_task = %d\n", task.id);
+                        queue_tasks.defer(std::move(task));
+                        break;
+                    }
+
+                    // Get KV cache
+                    auto * kv = const_cast<llama_kv_cache *>(get_kv_cache_base(ctx));
+                    if (kv == nullptr) {
+                        send_error(task, "No KV cache available", ERROR_TYPE_SERVER);
+                        break;
+                    }
+                    if (!kv->supports_compaction()) {
+                        send_error(task, "Compaction not supported for this model/backend configuration", ERROR_TYPE_NOT_SUPPORTED);
+                        break;
+                    }
+
+                    // Validate method
+                    const std::string & method = cp.method;
+                    if (method != "select" && method != "solver" && method != "omp" && method != "self_study") {
+                        send_error(task, "Invalid compaction method. Supported: select, solver, omp, self_study", ERROR_TYPE_INVALID_REQUEST);
+                        break;
+                    }
+
+                    // Compute target_tokens and live_suffix_pos0 from slot state
+                    const llama_seq_id seq_id = slot->id;
+                    const uint32_t prompt_tokens = slot->prompt.tokens.size();
+                    if (prompt_tokens == 0) {
+                        send_error(task, "Slot has no prompt tokens to compact", ERROR_TYPE_INVALID_REQUEST);
+                        break;
+                    }
+
+                    const uint32_t live_suffix = std::min((uint32_t) cp.live_suffix_tokens, prompt_tokens);
+                    const uint32_t compactable = prompt_tokens - live_suffix;
+                    const llama_pos live_suffix_pos0 = (llama_pos) compactable;
+
+                    uint32_t target_tokens;
+                    if (cp.target_tokens > 0) {
+                        target_tokens = (uint32_t) cp.target_tokens;
+                    } else {
+                        target_tokens = std::max(1u, (uint32_t)(compactable / cp.ratio));
+                    }
+                    if (target_tokens >= compactable) {
+                        send_error(task, "Target tokens must be less than compactable tokens", ERROR_TYPE_INVALID_REQUEST);
+                        break;
+                    }
+
+                    // Capture active_n_kv before compaction
+                    auto * mem = llama_get_memory(ctx);
+                    const llama_pos pos_max_before = mem ? llama_memory_seq_pos_max(mem, seq_id) : -1;
+                    const uint32_t n_kv_before = pos_max_before >= 0 ? (uint32_t)(pos_max_before + 1) : prompt_tokens;
+
+                    // Run compaction
+                    const int64_t t_start = ggml_time_us();
+                    bool ok = false;
+
+                    if (method == "select") {
+                        llama_kv_compact_pipeline_stats stats;
+                        ok = kv->compacted_prefix_select_from_live_kv(seq_id, target_tokens, live_suffix_pos0, &stats, cp.p0);
+                    } else if (method == "solver") {
+                        llama_kv_compact_pipeline_stats stats;
+                        ok = kv->compacted_prefix_fit_from_live_kv(seq_id, target_tokens, live_suffix_pos0, &stats, cp.p0, cp.max_queries, cp.nnls_iters, cp.lambda);
+                    } else if (method == "omp") {
+                        llama_kv_compact_pipeline_stats stats;
+                        ok = kv->compacted_prefix_omp_from_live_kv(seq_id, target_tokens, live_suffix_pos0, &stats, cp.p0, cp.max_queries, cp.nnls_iters, cp.lambda);
+                    } else if (method == "self_study") {
+                        llama_kv_compact_self_study_config ss_config;
+                        ss_config.n_generate              = cp.n_generate;
+                        ss_config.max_queries_per_kv_head = cp.max_queries_per_kv_head;
+                        ss_config.nnls_iters              = cp.nnls_iters;
+                        ss_config.lambda                  = cp.lambda;
+                        llama_kv_compact_self_study_stats ss_stats;
+                        ok = kv->compacted_prefix_self_study_from_live_kv(ctx, seq_id, target_tokens, live_suffix_pos0, ss_config, &ss_stats, cp.p0);
+                    }
+
+                    if (!ok) {
+                        send_error(task, "Compaction failed — check server logs for details", ERROR_TYPE_SERVER);
+                        break;
+                    }
+
+                    // Enable execution and optionally reclaim live KV
+                    kv->compacted_prefix_set_execution(seq_id, true);
+
+                    bool reclaimed = false;
+                    if (cp.reclaim) {
+                        reclaimed = kv->compacted_prefix_reclaim_live_kv(seq_id);
+                    }
+
+                    const int64_t t_end = ggml_time_us();
+                    const double t_compact_ms = (t_end - t_start) / 1000.0;
+                    const llama_pos pos_max_after = mem ? llama_memory_seq_pos_max(mem, seq_id) : -1;
+                    const uint32_t n_kv_after = pos_max_after >= 0 ? (uint32_t)(pos_max_after + 1) : 0;
+
+                    auto res = std::make_unique<server_task_result_compact>();
+                    res->id                = task.id;
+                    res->id_slot           = id_slot;
+                    res->method            = method;
+                    res->compacted_tokens  = target_tokens;
+                    res->original_tokens   = compactable;
+                    res->compression_ratio = compactable > 0 ? (double) compactable / target_tokens : 0.0;
+                    res->compaction_time_ms = t_compact_ms;
+                    res->active_n_kv_before = n_kv_before;
+                    res->active_n_kv_after  = n_kv_after;
+                    res->reclaimed          = reclaimed;
+                    queue_results.send(std::move(res));
+                } break;
         }
     }
 
@@ -3679,6 +3799,8 @@ void server_routes::init_routes() {
         const bool is_sleeping = queue_tasks.is_sleeping();
         const bool is_router_server = params.model.path.empty();
         json modelai_runtime = build_modelai_runtime_summary_from_metrics(server_task_result_metrics{}, is_sleeping);
+        bool live_compaction_enabled = false;
+        bool live_compaction_flash_overridden = false;
 
         if (!is_sleeping) {
             server_task task(SERVER_TASK_TYPE_METRICS);
@@ -3699,6 +3821,8 @@ void server_routes::init_routes() {
             auto * res_task = dynamic_cast<server_task_result_metrics *>(result.get());
             GGML_ASSERT(res_task != nullptr);
             modelai_runtime = build_modelai_runtime_summary_from_metrics(*res_task, is_sleeping);
+            live_compaction_enabled          = res_task->compaction_enabled;
+            live_compaction_flash_overridden = res_task->compaction_forces_non_flash;
         }
 
         json props = {
@@ -3723,7 +3847,7 @@ void server_routes::init_routes() {
             { "is_sleeping",                 is_sleeping },
             { "modelai", {
                 { "contract",     build_modelai_contract(is_router_server) },
-                { "capabilities", build_modelai_server_capabilities(params, *meta, is_router_server) },
+                { "capabilities", build_modelai_server_capabilities(params, *meta, is_router_server, live_compaction_enabled, live_compaction_flash_overridden) },
                 { "runtime",      std::move(modelai_runtime) },
             } },
         };
@@ -4245,6 +4369,53 @@ void server_routes::init_routes() {
         }
 
         GGML_ASSERT(dynamic_cast<server_task_result_apply_lora*>(result.get()) != nullptr);
+        res->ok(result->to_json());
+        return res;
+    };
+
+    // POST /compact — trigger KV cache compaction on a slot
+    this->post_compact = [this](const server_http_req & req) {
+        auto res = create_response();
+
+        json data;
+        try {
+            data = json::parse(req.body);
+        } catch (const std::exception &) {
+            res->error(format_error_response("Invalid JSON body", ERROR_TYPE_INVALID_REQUEST));
+            return res;
+        }
+
+        server_task task(SERVER_TASK_TYPE_COMPACT);
+        task.id = res->rd.get_new_id();
+
+        auto & cp = task.compact_params;
+        cp.id_slot             = json_value(data, "id_slot",             0);
+        cp.method              = json_value(data, "method",              std::string("select"));
+        cp.target_tokens       = json_value(data, "target_tokens",       -1);
+        cp.ratio               = json_value(data, "ratio",               2.0f);
+        cp.live_suffix_tokens  = json_value(data, "live_suffix_tokens",  0);
+        cp.p0                  = json_value(data, "p0",                  (llama_pos) 0);
+        cp.max_queries         = json_value(data, "max_queries",         (uint32_t) 256);
+        cp.nnls_iters          = json_value(data, "nnls_iters",          64);
+        cp.lambda              = json_value(data, "lambda",              1e-6f);
+        cp.n_generate          = json_value(data, "n_generate",          (uint32_t) 256);
+        cp.max_queries_per_kv_head = json_value(data, "max_queries_per_kv_head", (uint32_t) 1024);
+        cp.reclaim             = json_value(data, "reclaim",             true);
+
+        res->rd.post_task(std::move(task));
+
+        auto result = res->rd.next(req.should_stop);
+        if (!result) {
+            GGML_ASSERT(req.should_stop());
+            return res;
+        }
+
+        if (result->is_error()) {
+            res->error(result->to_json());
+            return res;
+        }
+
+        GGML_ASSERT(dynamic_cast<server_task_result_compact*>(result.get()) != nullptr);
         res->ok(result->to_json());
         return res;
     };
