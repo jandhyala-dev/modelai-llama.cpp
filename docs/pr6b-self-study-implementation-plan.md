@@ -1036,6 +1036,9 @@ Full CSV column contract: see `MODELAI_LLAMA_CPP_LONGCTX_CSV_WRITER_CONTRACT.md`
 | `allocated_kv_bytes` / `reclaimed_kv_bytes` | Emit concrete values when available, otherwise empty string `\"\"` |
 | `quality_*` fields | Computed by the benchmark runner from QuALITY MC scoring when enabled, otherwise empty string `\"\"` |
 | `fallback_*` fields | Populated from the engine return path; explicit `false` / empty string when no fallback occurred |
+| `baseline_decode_tok_s` | Self-measured by the benchmark runner within the same test invocation, before compaction is applied |
+| `compacted_decode_tok_s` | Self-measured by the benchmark runner after compaction, using the same continuation burst length |
+| `throughput_delta_pct` | Computed by the runner: `((compacted_decode_tok_s - baseline_decode_tok_s) / baseline_decode_tok_s) * 100` |
 | `error_text` | Explicit engine/runtime failure text; empty string on success |
 
 ---
