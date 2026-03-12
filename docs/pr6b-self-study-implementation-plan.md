@@ -918,6 +918,9 @@ the artifact contract defined here.
 | DeepSeek-R1-Distill-Qwen-14B | 14B | Dense, GQA | standard | Reasoning variant |
 | Gemma-3-12B-IT | 12B | iSWA (mixed) | iSWA base | Tests iSWA compaction path |
 
+**Support note:** only **base-cache compaction** on iSWA layouts is active in
+this matrix. SWA-layer compaction remains unsupported in V0.
+
 **Blocked models (cannot test):**
 - Vision (Qwen3-VL) — M-RoPE guard, no fix planned
 - Qwen3.5-35B-A3B — hybrid recurrent, needs `llama_memory_hybrid`
@@ -947,9 +950,17 @@ the artifact contract defined here.
 - `self_study` — **deferred**; API exists (`llama-kv-cache.h:204`,
   `compacted_prefix_self_study_from_live_kv`) but is not wired into the
   workload test dispatch or pipeline dispatcher. Requires `llama_context *`
-  parameter threading. Will be added in a follow-on slice after 6b-15.
+  parameter threading. Will be implemented as **6b-15b** in the same phase
+  immediately after the baseline/select/solver benchmark contract is stable.
 
-**Total active data points:** 6 models × 4 contexts × 3 ratios = 72 minimum
+**Total active data points (minimum before W1 OMP smoke rows):**
+- baseline rows: `6 models × 4 contexts = 24`
+- select rows: `6 models × 4 contexts × 3 ratios = 72`
+- solver rows: `6 models × 4 contexts × 3 ratios = 72`
+- **total active minimum = 168 rows**
+
+`72` is the minimum for a **single compacted pipeline**. The full active
+campaign includes baseline + select + solver. OMP W1 smoke rows are additional.
 
 ---
 
@@ -1006,6 +1017,27 @@ evaluation is not run for this row (e.g., synthetic text prefill at 16K-32K).
 
 Full CSV column contract: see `MODELAI_LLAMA_CPP_LONGCTX_CSV_WRITER_CONTRACT.md`
 
+**Column source mapping (engine-side contract):**
+
+| Column | Source rule |
+|--------|-------------|
+| `workload_id` | Static workload registry in `test-kv-compact-longctx.cpp` (`W1`, `W2`, `W3`) |
+| `workload_name` | Static workload registry display name keyed by `workload_id` |
+| `dataset_id` | Static workload registry dataset key (`quality-validation`, `synthetic-sec`, `quality-concat`, etc.) |
+| `model_params_b` | Static model registry keyed by `model_name` |
+| `flash_mode` | Runtime mode emitted by the engine: `off`, `on`, or `forced_off_by_beta` |
+| `threshold_name` | Deterministic threshold table key (`<workload_id>:<metric>:<ratio>`) |
+| `threshold_value` | Threshold table value resolved from `threshold_name` |
+| `artifact_path` | Row-local path under `bench-results/<run_id>/...` |
+| `compactable_tokens` | `prefix_tokens - live_suffix_tokens` |
+| `live_suffix_tokens` | Explicit runner configuration for the preserved live suffix |
+| `prefill_ms` / `prefill_tok_s` | Measured from the baseline or compacted prefill step in the benchmark runner |
+| `first_token_ms` | Time from decode start to first emitted continuation token |
+| `allocated_kv_bytes` / `reclaimed_kv_bytes` | Emit concrete values when available, otherwise empty string `\"\"` |
+| `quality_*` fields | Computed by the benchmark runner from QuALITY MC scoring when enabled, otherwise empty string `\"\"` |
+| `fallback_*` fields | Populated from the engine return path; explicit `false` / empty string when no fallback occurred |
+| `error_text` | Explicit engine/runtime failure text; empty string on success |
+
 ---
 
 #### D. QuALITY Multiple-Choice Evaluation Protocol (Paper-Aligned)
@@ -1014,7 +1046,8 @@ The MIT paper (arXiv:2602.16284, Table 2) evaluates compaction quality on the
 QuALITY benchmark by measuring multiple-choice answer accuracy.
 
 **Data format:** Each entry in `quality-validation.jsonl` contains:
-- `article` (string) — full article text (2.7K-8.5K tokens)
+- `article` (string) — full article text (approximately 2.7K-8.5K tokens,
+  tokenizer-dependent)
 - `question` (string) — a comprehension question
 - `options` (array of 4 strings) — answer choices
 - `answer` (int, 0-3) — index of the correct option
@@ -1073,7 +1106,8 @@ Paper reference baselines (Llama-3-8B-Instruct, Table 2):
 
 **Data sources:**
 - QuALITY validation articles (`tests/data/quality-validation.jsonl`, 115
-  articles, 2.7K-8.5K tokens) for 4K-8K natural-text prefill
+  articles, approximately 2.7K-8.5K tokens depending on tokenizer) for 4K-8K
+  natural-text prefill
 - Concatenated QuALITY articles or synthetic SEC-filing text for 16K-32K tests
   (QuALITY MC evaluation runs only on single-article prefills where the
   question is meaningful)
@@ -1183,6 +1217,32 @@ ModelAI implementation details are specified in a separate plan
 - `docs/pr6b-self-study-implementation-plan.md` — Results table (post-run)
 
 **Effort:** 2-3 days
+
+### 5b-1. Self-Study Benchmark Extension (6b-15b)
+
+**Problem:** `6b-15` intentionally stabilizes the benchmark contract with
+`baseline`, `select`, and `solver` first. The benchmark harness does not yet
+dispatch `self_study`, so the strongest query path is not represented in the
+active matrix.
+
+**Goal:** Promote `self_study` from deferred to active once the long-context
+runner can execute it and emit rows in the same artifact contract.
+
+**Deliverables:**
+1. Wire `self_study` into `tests/test-kv-compact-longctx.cpp`
+2. Wire `self_study` into `scripts/bench-kv-compact-longctx.sh`
+3. Update `manifest.json` and CSV contracts so `self_study` is an active
+   pipeline, not a deferred note
+4. Run the same `W1/W2/W3` closure gates for `self_study`
+5. Record `self_study` rows in the same `bench-results/<run_id>/results.csv`
+   schema as `baseline`, `select`, and `solver`
+
+**Dependencies:** `6b-15` contract and artifact layout must be stable first.
+
+**Non-goals:** No new admin-console/Supabase work; this remains engine-side
+artifact generation only.
+
+**Effort:** 1-2 days
 
 ### 5c. Public API Decision (deferred, no slice)
 
@@ -2007,10 +2067,11 @@ Current `cpu_params` (`common/common.h:69-76`) has affinity mask and priority, b
 | **6b-13** | 4 | Production workload tests | tests/test-kv-compact-workload.cpp, scripts/ | Medium | 2-3 days |
 | **6b-14** | 5a | Fix duplicate OMP opts struct | llama-kv-compact-pipeline.h | None | 15 min |
 | **6b-15** | 5b | Long-context benchmark (throughput crossover) | tests/test-kv-compact-longctx.cpp, scripts/ | Medium | 2-3 days |
+| **6b-15b** | 5b-1 | Self-study benchmark extension | tests/test-kv-compact-longctx.cpp, scripts/ | Medium | 1-2 days |
 | **6b-16** | 5c | Upstream algorithm + integration docs | docs/ | None | 1-2 days |
 | **6b-17** | 5d | Test hardening (negative cases) | tests/ | None | 0.5 day |
 
-**Phase 1 Total: ~16-21 days**
+**Phase 1 Total: ~17-23 days**
 
 ## Phase 2: Compaction Runtime Integration (Part 6)
 
