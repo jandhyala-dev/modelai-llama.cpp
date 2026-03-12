@@ -71,7 +71,8 @@ struct llama_q_capture_state {
 
 // cb_eval callback function for Q-capture.
 //
-// Ask phase (ask=true):  returns true for 3D+ tensors whose name starts with "Qcur"
+// Ask phase (ask=true):  returns true for all tensors whose name starts with "Qcur"
+//   (dimension filtering deferred to append_from_tensor in the receive phase)
 // Receive phase (ask=false): copies GPU-synced tensor data into the capture state
 //
 // Must return true to continue graph computation, false to abort.

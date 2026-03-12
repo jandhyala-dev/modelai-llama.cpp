@@ -243,6 +243,8 @@ llama_build_and_test(test-kv-compacted-prefix-exec.cpp)
 target_include_directories(test-kv-compacted-prefix-exec PRIVATE ${PROJECT_SOURCE_DIR})
 llama_build_and_test(test-kv-compact-solver.cpp)
 target_include_directories(test-kv-compact-solver PRIVATE ${PROJECT_SOURCE_DIR})
+llama_build_and_test(test-kv-compact-self-study.cpp)
+target_include_directories(test-kv-compact-self-study PRIVATE ${PROJECT_SOURCE_DIR})
 
 llama_build_and_test(test-model-load-cancel.cpp LABEL "model")
 llama_build_and_test(test-autorelease.cpp       LABEL "model")

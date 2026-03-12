@@ -339,8 +339,12 @@ bool llama_q_capture_eval_callback(struct ggml_tensor * t, bool ask, void * user
     }
 
     if (ask) {
-        // Ask phase: accept 3D+ tensors with Qcur prefix
-        return ggml_n_dims(t) >= 3;
+        // Ask phase: accept all Qcur-prefixed tensors.
+        // ggml_n_dims(t) >= 3 does NOT work for single-token decode because
+        // ne[2]=1 makes ggml report 2D even for post-RoPE [n_embd_head, n_head_q, 1].
+        // The receive phase (append_from_tensor) validates dimensions and rejects
+        // pre-reshape 2D projections where ne[0]=n_embd, ne[1]=n_tokens.
+        return true;
     }
 
     // Receive phase: copy tensor data into capture state
