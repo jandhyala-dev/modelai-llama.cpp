@@ -944,6 +944,36 @@ requirement for production observability.
   2.7K-8.5K tokens) for 4K-8K natural-text prefill
 - Concatenated QuALITY articles or synthetic SEC-filing text for 16K-32K tests
 
+**QuALITY multiple-choice evaluation (paper-aligned):**
+
+The MIT paper (arXiv:2602.16284, Table 2) evaluates compaction quality on the
+QuALITY benchmark by measuring multiple-choice answer accuracy — not just logit
+cosine.  Each article in `quality-validation.jsonl` includes a `question`,
+`options` (4 choices), `answer` (correct index), and `hard` flag.
+
+The benchmark must run both evaluation modes:
+1. **Logit cosine** — fast, per-token metric (same as 6b-13 workload test)
+2. **QuALITY answer accuracy** — generate the model's answer to the
+   multiple-choice question after compaction, compare to ground truth.
+   This is the paper's primary quality metric.
+
+Paper reference baselines (Llama-3-8B-Instruct, Table 2):
+- 2x compression: ~71.5% accuracy
+- 5x compression: ~70% accuracy
+- 10x compression: ~67% accuracy
+- Full context (no compaction): ~73% accuracy
+
+The benchmark reports both metrics per cell.  QuALITY accuracy is the
+closure-proof metric — it directly measures whether the model can still
+comprehend the article after compaction, not just whether the logit distribution
+is preserved.
+
+Additional Supabase columns for QuALITY results:
+- `quality_correct` — number of questions answered correctly (compacted)
+- `quality_total` — number of questions evaluated
+- `quality_accuracy` — correct / total
+- `quality_baseline_accuracy` — accuracy without compaction (same article)
+
 ---
 
 #### B. C++ Test Binary
@@ -954,9 +984,16 @@ New file: `tests/test-kv-compact-longctx.cpp`
 - Prefills to target context (QuALITY article text or synthetic SEC-filing text
   via `build_real_text_prompt()`, reused from 6b-13 workload test)
 - Runs compaction at specified ratio, measures all metrics above
-- Outputs one CSV row per run for aggregation
+- **QuALITY evaluation mode** (`QUALITY_EVAL=1`): after compaction, appends the
+  question + options as a prompt suffix, generates one token, checks if the
+  predicted answer index matches ground truth.  Runs baseline (no compaction)
+  comparison on the same article.
+- Outputs one CSV row per run for aggregation (includes both logit cosine and
+  QuALITY accuracy columns)
 - Reuses `llama_kv_compact_cosine_similarity()` and `decode_burst()` patterns
   from `test-kv-compact-workload.cpp`
+- Loads QuALITY articles from `tests/data/quality-validation.jsonl` (JSON
+  parsing via nlohmann/json, already available in llama.cpp common/)
 - Build-only in CMake (no auto-run — requires model files)
 
 ---
@@ -1027,6 +1064,14 @@ create table kv_compaction_results (
           then ((compacted_tok_s - baseline_tok_s) / baseline_tok_s) * 100
           else 0 end) stored,
   active_n_kv           int not null,
+  -- QuALITY multiple-choice evaluation (paper-aligned, nullable when not run)
+  quality_correct       int,
+  quality_total         int,
+  quality_accuracy      real generated always as
+    (case when quality_total > 0
+          then quality_correct::real / quality_total
+          else null end) stored,
+  quality_baseline_accuracy real,            -- full-context accuracy (same articles)
   created_at            timestamptz not null default now()
 );
 
@@ -1074,6 +1119,8 @@ Add: **KV Compaction** as a fifth tab.
 3. **Quality matrix**:
    - Same grid layout
    - Cells: logit cosine at each ratio (color-coded by threshold pass/fail)
+   - Second row per model: QuALITY answer accuracy (%) vs baseline accuracy
+     (paper-aligned metric from arXiv:2602.16284 Table 2)
 
 4. **Run history**:
    - List of recent `kv_compaction_runs` with date, branch, commit, status
