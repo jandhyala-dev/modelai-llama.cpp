@@ -1960,9 +1960,10 @@ private:
                     {
                         const auto * kv = get_kv_cache_base(ctx);
                         if (kv) {
-                            res->compaction_available = kv->supports_compaction();
-                            res->compaction_enabled   = kv->has_compacted_prefix();
-                            res->compaction_method    = kv->compacted_prefix_method();
+                            res->compaction_available        = kv->supports_compaction();
+                            res->compaction_enabled          = kv->has_compacted_prefix();
+                            res->compaction_method           = kv->compacted_prefix_method();
+                            res->compaction_forces_non_flash = kv->compacted_prefix_forces_non_flash();
                         }
                     }
 
@@ -3799,7 +3800,8 @@ void server_routes::init_routes() {
         const bool is_sleeping = queue_tasks.is_sleeping();
         const bool is_router_server = params.model.path.empty();
         json modelai_runtime = build_modelai_runtime_summary_from_metrics(server_task_result_metrics{}, is_sleeping);
-        bool live_compaction_enabled = false;
+        bool live_compaction_enabled          = false;
+        bool live_compaction_flash_overridden = false;
 
         if (!is_sleeping) {
             server_task task(SERVER_TASK_TYPE_METRICS);
@@ -3820,7 +3822,8 @@ void server_routes::init_routes() {
             auto * res_task = dynamic_cast<server_task_result_metrics *>(result.get());
             GGML_ASSERT(res_task != nullptr);
             modelai_runtime = build_modelai_runtime_summary_from_metrics(*res_task, is_sleeping);
-            live_compaction_enabled = res_task->compaction_enabled;
+            live_compaction_enabled          = res_task->compaction_enabled;
+            live_compaction_flash_overridden = res_task->compaction_forces_non_flash;
         }
 
         json props = {
@@ -3845,7 +3848,7 @@ void server_routes::init_routes() {
             { "is_sleeping",                 is_sleeping },
             { "modelai", {
                 { "contract",     build_modelai_contract(is_router_server) },
-                { "capabilities", build_modelai_server_capabilities(params, *meta, is_router_server, live_compaction_enabled) },
+                { "capabilities", build_modelai_server_capabilities(params, *meta, is_router_server, live_compaction_enabled, live_compaction_flash_overridden) },
                 { "runtime",      std::move(modelai_runtime) },
             } },
         };

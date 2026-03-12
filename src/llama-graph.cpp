@@ -2171,8 +2171,11 @@ ggml_tensor * llm_graph_context::build_attn(
 
     if (inp->has_compacted_prefix()) {
         const bool zero_beta = inp->compacted_prefix_is_zero_beta;
-        if (!zero_beta) {
-            GGML_ASSERT(!cparams.flash_attn && "compacted-prefix execution with non-zero beta requires the non-flash attention path");
+        if (!zero_beta && cparams.flash_attn) {
+            // Non-zero beta makes kq_b non-null, which disables flash attention
+            // in build_attn_mha (line: use_flash_attn = cparams.flash_attn && kq_b == nullptr).
+            // This is a correct and safe fallback — log for observability.
+            LLAMA_LOG_INFO("%s: flash_attn overridden for layer %d (non-zero compacted beta)\n", __func__, il);
         }
 
         const int64_t live_n_kv = k->ne[2];

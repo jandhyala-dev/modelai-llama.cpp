@@ -1059,6 +1059,16 @@ const std::string & llama_kv_cache::compacted_prefix_method() const {
     return compacted_prefix_last_method;
 }
 
+bool llama_kv_cache::compacted_prefix_forces_non_flash() const {
+    // Non-zero-beta methods require the non-flash attention path.
+    // "select" uses zero beta and is flash-compatible.
+    if (!has_compacted_prefix()) {
+        return false;
+    }
+    const auto & m = compacted_prefix_last_method;
+    return m == "solver" || m == "omp" || m == "self_study";
+}
+
 bool llama_kv_cache::compacted_prefix_runtime_supported() const {
     // Check instance-level SWA config, not model-level hparams.
     // When used as kv_base inside llama_kv_cache_iswa, this instance has

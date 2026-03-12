@@ -218,10 +218,11 @@ public:
     const llama_compacted_prefix_store * get_compacted_prefix() const;
           llama_compacted_prefix_store * get_compacted_prefix();
 
-    // Compaction capability and state queries (6b-18)
+    // Compaction capability and state queries (6b-18, 6b-19)
     bool supports_compaction() const;
     bool has_compacted_prefix() const;
     const std::string & compacted_prefix_method() const;
+    bool compacted_prefix_forces_non_flash() const;
 
     //
     // graph_build API

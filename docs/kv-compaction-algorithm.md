@@ -121,9 +121,9 @@ The current execution paths support two regimes:
 - Zero beta (`select` pipeline): flash attention compatible and fastest.
 - Non-zero beta (`fit`, `omp`, `self-study`): requires additive `kq_b`, so the runtime must use the non-flash attention path.
 
-This is a guardrail, not a graceful fallback. If a compacted non-zero-beta path is forced through flash attention, the runtime asserts because the current graph cannot represent additive beta inside the flash kernel.
+When flash attention is requested but non-zero beta is active, the graph construction automatically falls back to the non-flash path for affected layers. This override is logged at INFO level and surfaced in the `/props` runtime summary as `compaction.flash_attn_overridden`.
 
-A future FlashBias-style kernel, or equivalent upstream graph change, would remove this restriction.
+A future FlashBias-style kernel, or equivalent upstream graph change, would remove this restriction and allow flash attention with non-zero beta.
 
 ## Current Limits
 
