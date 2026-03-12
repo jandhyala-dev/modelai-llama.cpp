@@ -2093,8 +2093,8 @@ static std::unique_ptr<llm_graph_input_attn_kv> build_attn_inp_kv_impl(
             GGML_ASSERT(n_stream == 1 && "P3 compacted-prefix execution currently supports a single attention stream");
 
             const bool zero_beta = mctx_cur->compacted_prefix_zero_beta();
-            if (!zero_beta) {
-                GGML_ASSERT(!cparams.flash_attn && "compacted-prefix execution with non-zero beta requires the non-flash attention path");
+            if (!zero_beta && cparams.flash_attn) {
+                LLAMA_LOG_WARN("%s: flash_attn overridden — non-zero compacted beta forces standard attention path\n", __func__);
             }
 
             inp->compacted_prefix_active = true;
@@ -2171,12 +2171,9 @@ ggml_tensor * llm_graph_context::build_attn(
 
     if (inp->has_compacted_prefix()) {
         const bool zero_beta = inp->compacted_prefix_is_zero_beta;
-        if (!zero_beta && cparams.flash_attn) {
-            // Non-zero beta makes kq_b non-null, which disables flash attention
-            // in build_attn_mha (line: use_flash_attn = cparams.flash_attn && kq_b == nullptr).
-            // This is a correct and safe fallback — log for observability.
-            LLAMA_LOG_INFO("%s: flash_attn overridden for layer %d (non-zero compacted beta)\n", __func__, il);
-        }
+        // Note: if !zero_beta && cparams.flash_attn, build_attn_mha will
+        // correctly disable flash (kq_b != nullptr). The override is logged
+        // once per decode in build_inp_attn_kv, not per layer here.
 
         const int64_t live_n_kv = k->ne[2];
 
@@ -2392,9 +2389,8 @@ ggml_tensor * llm_graph_context::build_attn(
     // Compacted prefix: only for base (non-SWA) layers.
     if (!is_swa && inp->has_compacted_prefix()) {
         const bool zero_beta = inp->compacted_prefix_is_zero_beta;
-        if (!zero_beta) {
-            GGML_ASSERT(!cparams.flash_attn && "compacted-prefix execution with non-zero beta requires the non-flash attention path");
-        }
+        // Note: if !zero_beta && cparams.flash_attn, build_attn_mha will
+        // correctly disable flash (kq_b != nullptr). Logged in build_inp_attn_kv_iswa.
 
         const int64_t live_n_kv = k->ne[2];
 
@@ -2552,8 +2548,8 @@ llm_graph_input_attn_kv_iswa * llm_graph_context::build_attn_inp_kv_iswa() const
             GGML_ASSERT(n_stream == 1 && "iSWA compacted-prefix execution currently supports a single attention stream");
 
             const bool zero_beta = mctx_cur->get_base()->compacted_prefix_zero_beta();
-            if (!zero_beta) {
-                GGML_ASSERT(!cparams.flash_attn && "compacted-prefix execution with non-zero beta requires the non-flash attention path");
+            if (!zero_beta && cparams.flash_attn) {
+                LLAMA_LOG_WARN("%s: flash_attn overridden — non-zero compacted beta forces standard attention path (iSWA)\n", __func__);
             }
 
             inp->compacted_prefix_active = true;

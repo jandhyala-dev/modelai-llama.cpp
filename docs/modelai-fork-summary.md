@@ -191,7 +191,7 @@ The matrix below describes the intended v0 execution-path scope for the fork as 
 | SWA / split-memory compaction | Unsupported | `compacted_prefix_runtime_supported()` rejects SWA caches (`n_swa > 0`) |
 | Hybrid recurrent + attention compaction | Unsupported | Requires `llama_memory_hybrid` (Mamba layers have no KV) |
 | M-RoPE edge cases | Unsupported | `compacted_prefix_runtime_supported()` rejects multi-position models (`n_pos_per_embd() > 1`) |
-| Public/server compacted-prefix enablement | Unsupported | Server `/props` hardcodes `available=false`; will be wired in 6b-18 |
+| Public/server compacted-prefix enablement | Supported | `/props` reports live compaction state via KV cache queries (6b-18, 6b-19) |
 | Public API guarantees | Unsupported | Internal-only; no stable public API contract yet |
 
 ## Runtime Strategy

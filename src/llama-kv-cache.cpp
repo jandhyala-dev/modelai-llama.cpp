@@ -785,7 +785,7 @@ bool llama_kv_cache::compacted_prefix_fit_from_live_kv(
         int nnls_iters,
         float lambda) {
     const bool ok = llama_kv_compact_fit_from_live_kv(*this, seq_id, target_tokens, live_suffix_pos0, stats, p0, max_queries, nnls_iters, lambda);
-    if (ok) { compacted_prefix_last_method = "solver"; }
+    if (ok) { compacted_prefix_last_method = "fit"; }
     return ok;
 }
 
@@ -823,7 +823,7 @@ bool llama_kv_cache::compacted_prefix_self_study_from_live_kv(
         llama_kv_compact_self_study_stats * stats,
         llama_pos p0) {
     const bool ok = llama_kv_compact_self_study_from_live_kv(ctx, *this, seq_id, target_tokens, live_suffix_pos0, config, stats, p0);
-    if (ok) { compacted_prefix_last_method = "self_study"; }
+    if (ok) { compacted_prefix_last_method = "self-study"; }
     return ok;
 }
 
@@ -1066,7 +1066,7 @@ bool llama_kv_cache::compacted_prefix_forces_non_flash() const {
         return false;
     }
     const auto & m = compacted_prefix_last_method;
-    return m == "solver" || m == "omp" || m == "self_study";
+    return m == "fit" || m == "omp" || m == "self-study";
 }
 
 bool llama_kv_cache::compacted_prefix_runtime_supported() const {
