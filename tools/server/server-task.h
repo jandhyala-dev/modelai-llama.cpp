@@ -523,6 +523,11 @@ struct server_task_result_metrics : server_task_result {
     uint64_t active_n_kv_max            = 0;
     uint64_t sequence_state_bytes_total = 0;
 
+    // compaction state (queried from KV cache at metrics collection time)
+    bool compaction_available = false;
+    bool compaction_enabled   = false;
+    std::string compaction_method = "none";
+
     // while we can also use std::vector<server_slot> this requires copying the slot object which can be quite messy
     // therefore, we use json to temporarily store the slot.to_json() result
     json slots_data = json::array();

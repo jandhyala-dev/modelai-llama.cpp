@@ -218,6 +218,11 @@ public:
     const llama_compacted_prefix_store * get_compacted_prefix() const;
           llama_compacted_prefix_store * get_compacted_prefix();
 
+    // Compaction capability and state queries (6b-18)
+    bool supports_compaction() const;
+    bool has_compacted_prefix() const;
+    const std::string & compacted_prefix_method() const;
+
     //
     // graph_build API
     //
@@ -275,6 +280,8 @@ public:
     void set_input_compacted_prefix_kq_b(ggml_tensor * dst, int32_t il, llama_seq_id seq_id) const;
 
 private:
+    std::string compacted_prefix_last_method = "none";
+
     bool compacted_prefix_runtime_supported() const;
     bool compacted_prefix_stream_owned_by_seq(uint32_t strm, llama_seq_id seq_id, std::vector<uint32_t> & live_cell_idxs) const;
     void compacted_prefix_pack_stream_tensors(uint32_t strm, const std::vector<uint32_t> & live_cell_idxs);

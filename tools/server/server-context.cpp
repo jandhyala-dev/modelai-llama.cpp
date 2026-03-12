@@ -12,6 +12,8 @@
 #include "mtmd.h"
 #include "mtmd-helper.h"
 #include "src/llama-context.h"
+#include "src/llama-kv-cache.h"
+#include "src/llama-kv-cache-iswa.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -54,6 +56,27 @@ static double tokens_per_second(uint64_t n_tokens, uint64_t t_ms) {
     return (n_tokens > 0 && t_ms > 0)
         ? 1.e3 / t_ms * n_tokens
         : 0.0;
+}
+
+// Get the base llama_kv_cache from a context (handles both plain and iSWA layouts).
+// Returns nullptr if the context has no KV cache or uses an unsupported memory type.
+static const llama_kv_cache * get_kv_cache_base(llama_context * ctx) {
+    if (!ctx) {
+        return nullptr;
+    }
+    auto * mem = ctx->get_memory();
+    if (!mem) {
+        return nullptr;
+    }
+    auto * kv = dynamic_cast<llama_kv_cache *>(mem);
+    if (kv) {
+        return kv;
+    }
+    auto * kv_iswa = dynamic_cast<llama_kv_cache_iswa *>(mem);
+    if (kv_iswa) {
+        return kv_iswa->get_base();
+    }
+    return nullptr;
 }
 
 static json build_modelai_server_capabilities(const common_params & params, const server_context_meta & meta, bool is_router_server) {
@@ -107,10 +130,10 @@ static json build_modelai_server_capabilities(const common_params & params, cons
             { "slots_endpoint",    params.endpoint_slots },
         } },
         { "compacted_prefix", {
-            { "available",            false },
+            { "available",            meta.compaction_supported },
             { "enabled",              false },
             { "requires_non_flash",   true },
-            { "last_fallback_reason", "feature_unavailable" },
+            { "last_fallback_reason", meta.compaction_supported ? "" : "model_unsupported" },
         } },
     };
 }
@@ -143,11 +166,12 @@ static json build_modelai_runtime_summary_from_metrics(const server_task_result_
             { "sequence_state_bytes_total", metrics.sequence_state_bytes_total },
         } },
         { "compaction", {
-            { "available",             false },
-            { "enabled",               false },
-            { "query_generation_time_ms", nullptr },
-            { "solver_time_ms",          nullptr },
-            { "last_fallback_reason",    "feature_unavailable" },
+            { "available",             metrics.compaction_available },
+            { "enabled",               metrics.compaction_enabled },
+            { "method",                metrics.compaction_method },
+            { "last_fallback_reason",  metrics.compaction_available
+                                           ? (metrics.compaction_enabled ? "" : "not_configured")
+                                           : "model_unsupported" },
         } },
     };
 }
@@ -1929,6 +1953,16 @@ private:
                         res->sequence_state_bytes_total += seq_state_bytes;
                     }
 
+                    // compaction state from KV cache
+                    {
+                        const auto * kv = get_kv_cache_base(ctx);
+                        if (kv) {
+                            res->compaction_available = kv->supports_compaction();
+                            res->compaction_enabled   = kv->has_compacted_prefix();
+                            res->compaction_method    = kv->compacted_prefix_method();
+                        }
+                    }
+
                     if (task.metrics_reset_bucket) {
                         metrics.reset_bucket();
                     }
@@ -3117,6 +3151,11 @@ server_context_meta server_context::get_meta() const {
         /* model_n_embd_inp       */ llama_model_n_embd(impl->model),
         /* model_n_params         */ llama_model_n_params(impl->model),
         /* model_size             */ llama_model_size(impl->model),
+
+        /* compaction_supported   */ [&]() {
+            const auto * kv = get_kv_cache_base(impl->ctx);
+            return kv != nullptr && kv->supports_compaction();
+        }(),
     };
 }
 
@@ -3512,11 +3551,11 @@ void server_routes::init_routes() {
             },{
                     {"name",  "modelai_compacted_prefix_available"},
                     {"help",  "Whether the compacted-prefix path is available."},
-                    {"value",  0}
+                    {"value",  res_task->compaction_available ? 1 : 0}
             },{
                     {"name",  "modelai_compacted_prefix_enabled"},
                     {"help",  "Whether the compacted-prefix path is enabled."},
-                    {"value",  0}
+                    {"value",  res_task->compaction_enabled ? 1 : 0}
             }}}
         };
 

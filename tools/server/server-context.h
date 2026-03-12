@@ -46,6 +46,9 @@ struct server_context_meta {
     int32_t model_n_embd_inp;
     uint64_t model_n_params;
     uint64_t model_size;
+
+    // compaction capability (set at load time via KV cache query)
+    bool compaction_supported = false;
 };
 
 struct server_context {
