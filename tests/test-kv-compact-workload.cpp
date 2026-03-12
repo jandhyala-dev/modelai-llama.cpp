@@ -50,11 +50,12 @@ std::vector<llama_token> build_real_text_prompt(llama_context * ctx, size_t min_
         "Revenue from cloud services grew twenty-three percent year-over-year, driven by enterprise migration and expanded API usage across financial services clients. "
         "Operating expenses as a percentage of revenue declined by one hundred and forty basis points, reflecting disciplined headcount management and infrastructure efficiency gains. ";
 
-    std::string text;
+    // Tokenize the paragraph once, then repeat tokens to reach min_tokens.
+    const std::vector<llama_token> para_tokens = common_tokenize(ctx, para, true, false);
     std::vector<llama_token> tokens;
+    tokens.reserve(min_tokens);
     while (tokens.size() < min_tokens) {
-        text += para;
-        tokens = common_tokenize(ctx, text, true, false);
+        tokens.insert(tokens.end(), para_tokens.begin(), para_tokens.end());
     }
     tokens.resize(min_tokens);
     return tokens;
@@ -203,13 +204,18 @@ int main(int argc, char ** argv) {
         return fail("n_ctx too small for meaningful workload test (need prefix >= 64, compactable >= 8)");
     }
 
-    // Detect backend.
+    // Detect backend for CSV artifact reporting.
     std::string backend_name = "cpu";
 #ifdef GGML_USE_METAL
     backend_name = "metal";
-#endif
-#ifdef GGML_USE_CUDA
+#elif defined(GGML_USE_CUDA)
     backend_name = "cuda";
+#elif defined(GGML_USE_VULKAN)
+    backend_name = "vulkan";
+#elif defined(GGML_USE_SYCL)
+    backend_name = "sycl";
+#elif defined(GGML_USE_HIP)
+    backend_name = "hip";
 #endif
 
     // Model identifier from file path.
@@ -365,7 +371,10 @@ int main(int argc, char ** argv) {
             llama_batch_free(batch);
         }
 
-        // Compacted decode tok/s.
+        // Compacted decode tok/s.  Starts at seed_tokens + 1 because the
+        // logit-comparison token above consumed position seed_tokens.  Baseline
+        // burst starts at seed_tokens (no prior logit decode).  The 1-token
+        // difference in KV occupancy is negligible for a 16-token burst.
         const double burst_ms = decode_burst(ctx, continuation_tokens, seed_tokens + 1);
         double compacted_tok_s = 0.0;
         if (burst_ms > 0) {

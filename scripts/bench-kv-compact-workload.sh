@@ -46,6 +46,10 @@ echo "n_ctx:    $N_CTX"
 echo "output:   $COMBINED_CSV"
 echo ""
 
+SINGLE_CSV=""
+cleanup() { [ -n "$SINGLE_CSV" ] && rm -f "$SINGLE_CSV"; }
+trap cleanup EXIT INT TERM
+
 FIRST=1
 for PIPELINE in select solver omp; do
     echo "--- Pipeline: $PIPELINE ---"
