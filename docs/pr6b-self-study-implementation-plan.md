@@ -923,14 +923,58 @@ the artifact contract defined here.
 - Qwen3.5-35B-A3B — hybrid recurrent, needs `llama_memory_hybrid`
 - bge-m3 — embedding model (no generation)
 
+**Feasibility matrix (Apple M2 Pro, 32GB unified memory):**
+
+| Model | 4K | 8K | 16K | 32K |
+|-------|----|----|-----|-----|
+| Qwen3-30B-A3B (19GB weights) | active | active | active | stretch (~22GB total) |
+| Qwen3-14B (8.6GB weights) | active | active | active | active (~14GB total) |
+| Qwen3-8B (4.9GB weights) | active | active | active | active (~10GB total) |
+| Qwen2.5-14B (8.4GB weights) | active | active | active | active (~14GB total) |
+| DeepSeek-R1-14B (8.4GB weights) | active | active | active | active (~14GB total) |
+| Gemma-3-12B (7.6GB weights) | active | active | active | stretch (~16GB total) |
+
+- **active** = must produce a valid row
+- **stretch** = attempt, emit row with `error_text` if OOM
+
 **Context sizes:** 4096, 8192, 16384, 32768
 **Compression ratios:** 2x, 4x, 8x
-**Pipelines:** baseline, select (primary), solver, omp (smoke only)
-**Total data points:** 6 models × 4 contexts × 3 ratios = 72 minimum
+**Pipelines:**
+- `baseline` — no compaction, full-context decode (reference measurement)
+- `select` — primary compaction pipeline
+- `solver` — NNLS beta + V fitting
+- `omp` — smoke only (W1); known infeasible at production scale
+- `self_study` — **deferred**; API exists (`llama-kv-cache.h:204`,
+  `compacted_prefix_self_study_from_live_kv`) but is not wired into the
+  workload test dispatch or pipeline dispatcher. Requires `llama_context *`
+  parameter threading. Will be added in a follow-on slice after 6b-15.
+
+**Total active data points:** 6 models × 4 contexts × 3 ratios = 72 minimum
 
 ---
 
-#### B. Required Metrics Per CSV Row
+#### B. Pipeline Definitions
+
+**`baseline`:** Run prefill + decode burst at full context with NO compaction.
+Emit a CSV row with `pipeline=baseline`, `compression_ratio=1`,
+`compacted_tokens=0`, all compaction/solver/query time fields = `0`,
+`throughput_delta_pct=0`. This row provides the reference decode tok/s for
+computing throughput delta in compacted rows.
+
+**`select`:** Top-k position selection (earliest positions by aggregate
+attention score). Zero beta weights. Calls
+`compacted_prefix_select_from_live_kv()`.
+
+**`solver`:** NNLS beta fitting + least-squares V fitting with surrogate
+cache-key queries. Calls `compacted_prefix_fit_from_live_kv()`.
+
+**`omp`:** Orthogonal Matching Pursuit selection + solver fitting. Calls
+`compacted_prefix_omp_from_live_kv()`. Known infeasible at production scale
+(>23 min for 2x on 14B). Run only in W1 smoke tests.
+
+---
+
+#### C. Required Metrics Per CSV Row
 
 **Identity:** `schema_version`, `run_id`, `workload_id`, `workload_name`,
 `dataset_id`, `model_name`, `model_params_b`, `architecture`, `quantization`,
@@ -941,13 +985,21 @@ the artifact contract defined here.
 `baseline_decode_tok_s`, `compacted_decode_tok_s`, `throughput_delta_pct`
 
 **KV / memory:** `prefix_tokens`, `compactable_tokens`, `live_suffix_tokens`,
-`compacted_tokens`, `continuation_tokens`, `active_n_kv`,
-`allocated_kv_bytes`, `reclaimed_kv_bytes`
+`compacted_tokens`, `continuation_tokens`, `active_n_kv`
+
+**KV byte metrics (nullable — emit `""` when unavailable):**
+`allocated_kv_bytes`, `reclaimed_kv_bytes` — No `llama_kv_cache` API currently
+exposes byte-level allocation metrics. These columns are reserved for future
+use. Emit empty string `""` until a byte-reporting API is added. Downstream
+ingestion must treat empty values as null.
 
 **Quality / safety:** `logit_cosine`, `task_metric_name`, `task_metric_value`,
 `quality_correct`, `quality_total`, `quality_accuracy`,
 `quality_baseline_accuracy`, `threshold_name`, `threshold_value`, `pass`,
 `fallback_used`, `fallback_reason`, `crash`, `error_text`, `artifact_path`
+
+**Nullable quality columns:** `quality_*` columns are empty when QuALITY
+evaluation is not run for this row (e.g., synthetic text prefill at 16K-32K).
 
 **Throughput formula:**
 `throughput_delta_pct = ((compacted_decode_tok_s - baseline_decode_tok_s) / baseline_decode_tok_s) * 100`
@@ -956,18 +1008,62 @@ Full CSV column contract: see `MODELAI_LLAMA_CPP_LONGCTX_CSV_WRITER_CONTRACT.md`
 
 ---
 
-#### C. QuALITY Multiple-Choice Evaluation (Paper-Aligned)
+#### D. QuALITY Multiple-Choice Evaluation Protocol (Paper-Aligned)
 
 The MIT paper (arXiv:2602.16284, Table 2) evaluates compaction quality on the
-QuALITY benchmark by measuring multiple-choice answer accuracy — not just logit
-cosine.  Each article in `quality-validation.jsonl` includes a `question`,
-`options` (4 choices), `answer` (correct index), and `hard` flag.
+QuALITY benchmark by measuring multiple-choice answer accuracy.
 
-The benchmark runs both evaluation modes:
-1. **Logit cosine** — fast, per-token metric (same as 6b-13 workload test)
-2. **QuALITY answer accuracy** — after compaction, append question + options as
-   prompt suffix, generate one token, check predicted answer index vs ground
-   truth.  Run baseline (no compaction) comparison on the same article.
+**Data format:** Each entry in `quality-validation.jsonl` contains:
+- `article` (string) — full article text (2.7K-8.5K tokens)
+- `question` (string) — a comprehension question
+- `options` (array of 4 strings) — answer choices
+- `answer` (int, 0-3) — index of the correct option
+- `hard` (bool) — whether this is a "hard" question
+
+**Prompt template (verbatim):**
+
+```
+{article}
+
+Question: {question}
+
+A) {options[0]}
+B) {options[1]}
+C) {options[2]}
+D) {options[3]}
+
+Answer:
+```
+
+No chat template is applied. The prompt is raw text. The article is prefilled
+as the context; the question + options are appended as a suffix after compaction.
+
+**Scoring method:** Logit comparison over exactly 4 answer tokens.
+1. After decoding the prompt (ending with `"Answer:"`), extract logits at the
+   last position.
+2. Look up token IDs for `" A"`, `" B"`, `" C"`, `" D"` (space-prefixed
+   single letters) in the model vocabulary. If a model's tokenizer does not
+   produce single-token results for these strings, fall back to `"A"`, `"B"`,
+   `"C"`, `"D"` (no space).
+3. The predicted answer is `argmax(logits[tok_A], logits[tok_B], logits[tok_C],
+   logits[tok_D])`.
+4. Map argmax index: 0→A, 1→B, 2→C, 3→D.
+5. Compare to `answer` field: correct if `argmax_index == answer`.
+
+**No generation is performed.** This is a single forward pass after the prompt,
+reading logits at the final position. This avoids tokenizer-dependent generation
+artifacts and is deterministic.
+
+**Baseline comparison:** Run the same prompt at full context (no compaction)
+using identical scoring. This produces `quality_baseline_accuracy`.
+
+**CSV encoding:**
+- `quality_correct`: count of questions answered correctly (compacted)
+- `quality_total`: count of questions evaluated
+- `quality_accuracy`: `quality_correct / quality_total` (emitted by engine)
+- `quality_baseline_accuracy`: accuracy without compaction (same articles)
+- `task_metric_name`: `"quality_accuracy"` for QuALITY rows
+- `task_metric_value`: same as `quality_accuracy`
 
 Paper reference baselines (Llama-3-8B-Instruct, Table 2):
 - 2x compression: ~71.5% accuracy
@@ -975,17 +1071,16 @@ Paper reference baselines (Llama-3-8B-Instruct, Table 2):
 - 10x compression: ~67% accuracy
 - Full context (no compaction): ~73% accuracy
 
-QuALITY accuracy is the closure-proof metric — it directly measures whether the
-model can still comprehend the article after compaction.
-
 **Data sources:**
 - QuALITY validation articles (`tests/data/quality-validation.jsonl`, 115
   articles, 2.7K-8.5K tokens) for 4K-8K natural-text prefill
 - Concatenated QuALITY articles or synthetic SEC-filing text for 16K-32K tests
+  (QuALITY MC evaluation runs only on single-article prefills where the
+  question is meaningful)
 
 ---
 
-#### D. Artifact Structure
+#### E. Artifact Structure
 
 Each benchmark campaign emits one self-describing directory:
 
@@ -1005,25 +1100,26 @@ Full manifest contract: see `MODELAI_LLAMA_CPP_BENCHMARK_SPEC.md`
 
 ---
 
-#### E. C++ Test Binary
+#### F. C++ Test Binary
 
 New file: `tests/test-kv-compact-longctx.cpp`
 - Accepts model path, context size, pipeline, compression ratio via CLI/env
-- Prefills to target context (QuALITY article or synthetic SEC-filing text)
-- Runs compaction, measures all metrics from section B
-- QuALITY evaluation mode (`QUALITY_EVAL=1`): append question + options,
-  generate answer token, compare to ground truth
+- `pipeline=baseline`: prefill + decode only, no compaction, emit reference row
+- `pipeline=select|solver|omp`: prefill, compact, measure delta vs baseline
+- QuALITY evaluation mode (`QUALITY_EVAL=1`): after prefill/compaction, append
+  question+options suffix, score via logit comparison (section D protocol)
 - Emits one CSV row per run following the stable column contract
 - Loads QuALITY articles from `tests/data/quality-validation.jsonl`
 - Build-only in CMake (no auto-run — requires model files)
 
 ---
 
-#### F. Benchmark Driver Script
+#### G. Benchmark Driver Script
 
 New file: `scripts/bench-kv-compact-longctx.sh`
-- Iterates: models × context sizes × ratios × pipelines
-- Skips combinations that exceed available memory (32GB M2 Pro constraint)
+- Iterates: models × context sizes × ratios × pipelines (baseline + select +
+  solver; omp only for W1)
+- Skips stretch cells that OOM; emits row with `crash=true`, `error_text`
 - Emits `manifest.json` + `results.csv` into `bench-results/<run_id>/`
 - Captures stdout/stderr logs and env snapshot
 - Summary table at end with crossover annotation per model
@@ -1032,7 +1128,29 @@ New file: `scripts/bench-kv-compact-longctx.sh`
 
 ---
 
-#### G. Expected Outcomes
+#### H. Definition of Done — Closure Gate
+
+6b-15 is complete only when ALL of the following are true:
+
+1. `test-kv-compact-longctx.cpp` builds and runs
+2. `bench-kv-compact-longctx.sh` produces a valid run directory with
+   `manifest.json` + `results.csv`
+3. Every run emits CSV rows in the documented stable column contract
+4. **At least one W2 or W3 row satisfies ALL of:**
+   - Real model >= 1B parameters
+   - Real long-context input (n_ctx >= 4096)
+   - `pass=true` (quality threshold met)
+   - `crash=false`
+   - Throughput delta recorded (may be negative — the benchmark's purpose is
+     to find the crossover, not to assert it exists)
+5. Baseline rows exist for each (model, n_ctx) combination
+6. Artifact outputs are self-describing enough for downstream ingestion
+7. Unsupported rows are explicit, not silent skips
+8. No required downstream field depends on scraping stdout
+
+---
+
+#### I. Expected Outcomes
 
 **Throughput crossover hypothesis:** 8K-16K for dense 14B models, possibly
 lower for 30B MoE (larger KV per layer reduces memory bandwidth headroom).
@@ -1043,11 +1161,11 @@ designed to require full-context comprehension — this is a stress test.
 
 ---
 
-#### H. Handoff to ModelAI
+#### J. Handoff to ModelAI
 
 ModelAI will later:
 1. Parse `manifest.json` and validate `schema_version`
-2. Ingest `results.csv` into Supabase (`kv_compaction_runs` + `kv_compaction_results`)
+2. Ingest `results.csv` into Supabase
 3. Expose admin API routes for stats, runs, crossover, regressions
 4. Render KV Compaction tab on admin benchmarks page
 
@@ -1057,7 +1175,7 @@ ModelAI implementation details are specified in a separate plan
 
 ---
 
-#### I. Files
+#### K. Files
 
 - `tests/test-kv-compact-longctx.cpp` — Long-context benchmark test
 - `scripts/bench-kv-compact-longctx.sh` — Multi-model benchmark driver
