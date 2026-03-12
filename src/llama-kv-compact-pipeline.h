@@ -37,8 +37,6 @@ bool llama_kv_compact_select_from_live_kv(
         llama_kv_compact_pipeline_stats * stats = nullptr,
         llama_pos p0 = 0);
 
-struct llama_kv_compact_omp_opts;
-
 // OMP selection pipeline: uses Orthogonal Matching Pursuit (Algorithm 1,
 // arXiv:2602.16284 §3.2) per-head for greedy residual-based key selection,
 // then aggregates across heads via vote counting for a global selection set.
@@ -57,3 +55,7 @@ bool llama_kv_compact_omp_from_live_kv(
         uint32_t max_queries = 256,
         int nnls_iters = 64,
         float lambda = 1e-6f);
+
+// Self-study pipeline is declared in llama-kv-compact-self-study.h
+// (llama_kv_compact_self_study_from_live_kv) — requires llama_context
+// for Q-capture generation via cb_eval.

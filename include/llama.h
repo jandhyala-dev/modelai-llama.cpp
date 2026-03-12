@@ -970,6 +970,14 @@ extern "C" {
     // Set abort callback
     LLAMA_API void llama_set_abort_callback(struct llama_context * ctx, ggml_abort_callback abort_callback, void * abort_callback_data);
 
+    // Set eval callback — called for each resulting node during graph compute
+    // The callback can inspect intermediate tensors (e.g., for Q-capture during self-study)
+    // Setting callback to NULL disables the callback
+    LLAMA_API void llama_set_eval_callback(
+            struct llama_context * ctx,
+            ggml_backend_sched_eval_callback callback,
+            void * user_data);
+
     // Wait until all computations are finished
     // This is automatically done when using one of the functions below to obtain the computation results
     // and is not necessary to call it explicitly in most cases

@@ -2086,11 +2086,15 @@ static std::unique_ptr<llm_graph_input_attn_kv> build_attn_inp_kv_impl(
 
         if (mctx_cur->compacted_prefix_active()) {
             const auto n_stream = cparams.kv_unified ? 1 : ubatch.n_seqs_unq;
+            // Note: n_stream > 1 requires fixing ensure_compacted_prefix_layer() to create
+            // K/V/kq_b tensors with ne[3]=n_stream and kq_b ne[1]=n_tps (not n_tokens).
+            // The set_input (data-fill) functions already handle n_stream via dst->ne[3],
+            // but the graph-building tensor shapes are hardcoded to ne[3]=1.
             GGML_ASSERT(n_stream == 1 && "P3 compacted-prefix execution currently supports a single attention stream");
 
             const bool zero_beta = mctx_cur->compacted_prefix_zero_beta();
-            if (!zero_beta) {
-                GGML_ASSERT(!cparams.flash_attn && "compacted-prefix execution with non-zero beta requires the non-flash attention path");
+            if (!zero_beta && cparams.flash_attn) {
+                LLAMA_LOG_WARN("%s: flash_attn overridden — non-zero compacted beta forces standard attention path\n", __func__);
             }
 
             inp->compacted_prefix_active = true;
@@ -2167,9 +2171,9 @@ ggml_tensor * llm_graph_context::build_attn(
 
     if (inp->has_compacted_prefix()) {
         const bool zero_beta = inp->compacted_prefix_is_zero_beta;
-        if (!zero_beta) {
-            GGML_ASSERT(!cparams.flash_attn && "compacted-prefix execution with non-zero beta requires the non-flash attention path");
-        }
+        // Note: if !zero_beta && cparams.flash_attn, build_attn_mha will
+        // correctly disable flash (kq_b != nullptr). The override is logged
+        // once per decode in build_inp_attn_kv, not per layer here.
 
         const int64_t live_n_kv = k->ne[2];
 
@@ -2385,9 +2389,8 @@ ggml_tensor * llm_graph_context::build_attn(
     // Compacted prefix: only for base (non-SWA) layers.
     if (!is_swa && inp->has_compacted_prefix()) {
         const bool zero_beta = inp->compacted_prefix_is_zero_beta;
-        if (!zero_beta) {
-            GGML_ASSERT(!cparams.flash_attn && "compacted-prefix execution with non-zero beta requires the non-flash attention path");
-        }
+        // Note: if !zero_beta && cparams.flash_attn, build_attn_mha will
+        // correctly disable flash (kq_b != nullptr). Logged in build_inp_attn_kv_iswa.
 
         const int64_t live_n_kv = k->ne[2];
 
@@ -2539,11 +2542,14 @@ llm_graph_input_attn_kv_iswa * llm_graph_context::build_attn_inp_kv_iswa() const
 
         if (mctx_cur->get_base()->compacted_prefix_active()) {
             const auto n_stream = cparams.kv_unified ? 1 : ubatch.n_seqs_unq;
+            // Note: n_stream > 1 requires fixing ensure_compacted_prefix_layer() to create
+            // K/V/kq_b tensors with ne[3]=n_stream and kq_b ne[1]=n_tps (not n_tokens).
+            // See standard path comment above.
             GGML_ASSERT(n_stream == 1 && "iSWA compacted-prefix execution currently supports a single attention stream");
 
             const bool zero_beta = mctx_cur->get_base()->compacted_prefix_zero_beta();
-            if (!zero_beta) {
-                GGML_ASSERT(!cparams.flash_attn && "compacted-prefix execution with non-zero beta requires the non-flash attention path");
+            if (!zero_beta && cparams.flash_attn) {
+                LLAMA_LOG_WARN("%s: flash_attn overridden — non-zero compacted beta forces standard attention path (iSWA)\n", __func__);
             }
 
             inp->compacted_prefix_active = true;

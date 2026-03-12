@@ -173,24 +173,26 @@ Near-term observability requirements:
 
 The matrix below describes the intended v0 execution-path scope for the fork as a whole. PR-2 only lands the internal memory representation and guardrails needed to reach that scope later.
 
-| Category | Status |
-|---|---|
-| Standard causal models with `llama_kv_cache` | Supported |
-| Non-flash attention path | Supported |
-| Internal compacted-prefix execution path for single-sequence, 1D-position batches | Supported |
-| Scalar K/V cache element types for compacted-prefix sidecar (`F16`, `BF16`, `F32`) | Supported |
-| Non-quantized V cache | Supported |
-| Uncompacted chat-template / BOS prefix | Supported |
-| Uniform budgets (default) | Supported |
-| Precomputed nonuniform schedules | Supported where validated |
-| Quantized K compaction | Unsupported |
-| Flash-attention compaction path | Unsupported |
-| Quantized V compaction | Unsupported |
-| SWA / split-memory compaction | Unsupported |
-| Hybrid recurrent + attention compaction | Unsupported |
-| M-RoPE edge cases | Unsupported |
-| Public/server compacted-prefix enablement | Unsupported |
-| Public API guarantees | Unsupported |
+| Category | Status | Conditions |
+|---|---|---|
+| Standard causal models with `llama_kv_cache` | Supported | — |
+| Non-flash attention path | Supported | — |
+| Flash-attention compaction path | Supported | Zero-beta only (`kq_b == nullptr`); falls back to standard attention when solver beta is non-zero |
+| Internal compacted-prefix execution path for single-sequence, 1D-position batches | Supported | — |
+| Scalar K/V cache element types for compacted-prefix sidecar (`F16`, `BF16`, `F32`) | Supported | — |
+| Quantized K compaction | Supported | Head dim must be a multiple of the quantization block size (e.g., Q8_0 requires head_dim % 32 == 0); extraction uses `type_to_float` dequantization |
+| Quantized V compaction | Supported | Non-transposed V uses per-head dequantization; transposed V uses per-row dequantization with block-aligned kv_size |
+| Non-quantized V cache | Supported | — |
+| Uncompacted chat-template / BOS prefix | Supported | — |
+| Uniform budgets (default) | Supported | — |
+| Precomputed nonuniform schedules | Supported where validated | — |
+| OMP selection | Supported | Known infeasible at production scale (>23 min for 2x on 14B); use for quality comparison only |
+| Self-study queries | Supported | Q-capture + generation + GQA regrouping (PR-6b) |
+| SWA / split-memory compaction | Unsupported | `compacted_prefix_runtime_supported()` rejects SWA caches (`n_swa > 0`) |
+| Hybrid recurrent + attention compaction | Unsupported | Requires `llama_memory_hybrid` (Mamba layers have no KV) |
+| M-RoPE edge cases | Unsupported | `compacted_prefix_runtime_supported()` rejects multi-position models (`n_pos_per_embd() > 1`) |
+| Public/server compacted-prefix enablement | Supported | `/props` reports live compaction state via KV cache queries (6b-18, 6b-19) |
+| Public API guarantees | Unsupported | Internal-only; no stable public API contract yet |
 
 ## Runtime Strategy
 

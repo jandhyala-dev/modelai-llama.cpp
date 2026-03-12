@@ -407,6 +407,79 @@ int test_execution_state_lifecycle() {
     return rc;
 }
 
+int test_multi_stream_mask_and_beta() {
+    int rc = 0;
+
+    llama_compacted_prefix_store store({
+        {
+            /* layer_id      = */ 0,
+            /* n_head_kv     = */ 1,
+            /* n_embd_head_k = */ 2,
+            /* n_embd_head_v = */ 2,
+            /* type_k        = */ GGML_TYPE_F16,
+            /* type_v        = */ GGML_TYPE_F16,
+        },
+    });
+
+    // Prefix tokens at logical positions [0, 2], live suffix starts at pos 3.
+    if (!check(store.configure_seq(0, 4, { 0, 2 }, 2), "ms: configure_seq", rc)) return rc;
+    auto * seq = store.get_seq(0);
+    if (!seq) { return fail("ms: seq should exist"); }
+    if (!check(store.set_execution(0, true), "ms: enable exec", rc)) return rc;
+
+    auto & layer = seq->layers[0];
+    layer.beta_data[0] = 10.0f;  // head 0, token 0
+    layer.beta_data[1] = 20.0f;  // head 0, token 1
+
+    // 2 tokens total, split into 2 streams of 1 token each.
+    // Stream 0: pos=1 (between prefix positions → partial mask)
+    // Stream 1: pos=3 (after all prefix positions → no masking)
+    std::vector<llama_pos> pos = { 1, 3 };
+    std::vector<llama_seq_id> seq_id_unq = { 0 };
+    llama_ubatch ubatch = {};
+    ubatch.n_tokens = 2;
+    ubatch.pos = pos.data();
+    ubatch.n_seqs_unq = 1;
+    ubatch.seq_id_unq = seq_id_unq.data();
+
+    llama_hparams hparams = {};
+    hparams.use_alibi = false;
+
+    ggml_test_ctx tctx(1u << 16);
+
+    // Mask: [n_prefix=2, n_tps=1, 1, n_stream=2]
+    auto * m = ggml_new_tensor_4d(tctx.ctx, GGML_TYPE_F32, 2, 1, 1, 2);
+    // Beta: [n_prefix=2, n_tps=1, n_head=1, n_stream=2]
+    auto * b = ggml_new_tensor_4d(tctx.ctx, GGML_TYPE_F32, 2, 1, 1, 2);
+
+    llama_compacted_prefix_set_input_mask(m, *seq, ubatch, hparams, /* causal_attn = */ true);
+    llama_compacted_prefix_set_input_beta(b, layer, 1);
+
+    // Stream 0, token at pos=1:
+    //   prefix pos 0 <= 1 → unmasked (0.0)
+    //   prefix pos 2 > 1  → masked (-inf)
+    if (!check(tensor_f32_at(m, 0, 0, 0, 0) == 0.0f,
+               "ms: stream 0 prefix pos 0 unmasked (0 <= 1)", rc)) return rc;
+    if (!check(std::isinf(tensor_f32_at(m, 1, 0, 0, 0)) && tensor_f32_at(m, 1, 0, 0, 0) < 0.0f,
+               "ms: stream 0 prefix pos 2 masked (2 > 1)", rc)) return rc;
+
+    // Stream 1, token at pos=3:
+    //   prefix pos 0 <= 3 → unmasked
+    //   prefix pos 2 <= 3 → unmasked
+    if (!check(tensor_f32_at(m, 0, 0, 0, 1) == 0.0f,
+               "ms: stream 1 prefix pos 0 unmasked (0 <= 3)", rc)) return rc;
+    if (!check(tensor_f32_at(m, 1, 0, 0, 1) == 0.0f,
+               "ms: stream 1 prefix pos 2 unmasked (2 <= 3)", rc)) return rc;
+
+    // Beta should be identical across streams (broadcast, not stream-dependent)
+    if (!check(tensor_f32_at(b, 0, 0, 0, 0) == 10.0f, "ms: stream 0 beta[0]", rc)) return rc;
+    if (!check(tensor_f32_at(b, 1, 0, 0, 0) == 20.0f, "ms: stream 0 beta[1]", rc)) return rc;
+    if (!check(tensor_f32_at(b, 0, 0, 0, 1) == 10.0f, "ms: stream 1 beta[0]", rc)) return rc;
+    if (!check(tensor_f32_at(b, 1, 0, 0, 1) == 20.0f, "ms: stream 1 beta[1]", rc)) return rc;
+
+    return rc;
+}
+
 } // namespace
 
 int main() {
@@ -423,6 +496,9 @@ int main() {
         return rc;
     }
     if (const int rc = test_execution_state_lifecycle()) {
+        return rc;
+    }
+    if (const int rc = test_multi_stream_mask_and_beta()) {
         return rc;
     }
 

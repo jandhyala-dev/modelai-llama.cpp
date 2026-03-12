@@ -333,6 +333,9 @@ int test_sequence_edge_cases() {
     if (!check(empty_seq->layers.empty(), "zero-layout sequence should have no layer storage", rc)) return rc;
     if (!check(empty_store.total_allocated_bytes() == 0, "zero-layout store should allocate zero bytes", rc)) return rc;
 
+    // Q8_0 with block-aligned head dims (32 % 32 == 0) should now SUCCEED
+    // after PR-6 coverage expansion (is_supported_compacted_type accepts
+    // quantized types when head dims are multiples of the block size).
     llama_compacted_prefix_store quantized_store({
         {
             /* layer_id      = */ 0,
@@ -343,7 +346,25 @@ int test_sequence_edge_cases() {
             /* type_v        = */ GGML_TYPE_F16,
         },
     });
-    if (!check(expect_throw([&]() { quantized_store.configure_seq(1, 8, { 0, 4 }, -1); }), "quantized K types should be rejected in P2", rc)) return rc;
+    if (!check(quantized_store.configure_seq(1, 8, { 0, 4 }, -1), "Q8_0 K with block-aligned head_dim=32 should succeed", rc)) return rc;
+    const auto * q_seq = quantized_store.get_seq(1);
+    if (q_seq == nullptr) {
+        return fail("quantized K sequence should exist after configure");
+    }
+    if (!check(q_seq->layers[0].n_compacted_tokens == 2, "quantized K sequence should have 2 compacted tokens", rc)) return rc;
+
+    // Q8_0 with NON-block-aligned head dim (17 % 32 != 0) must still throw
+    llama_compacted_prefix_store q_nonaligned({
+        {
+            /* layer_id      = */ 0,
+            /* n_head_kv     = */ 1,
+            /* n_embd_head_k = */ 17,
+            /* n_embd_head_v = */ 32,
+            /* type_k        = */ GGML_TYPE_Q8_0,
+            /* type_v        = */ GGML_TYPE_F16,
+        },
+    });
+    if (!check(expect_throw([&]() { q_nonaligned.configure_seq(1, 8, { 0, 4 }, -1); }), "Q8_0 K with non-aligned head_dim=17 should be rejected", rc)) return rc;
 
     return rc;
 }
@@ -440,6 +461,100 @@ int test_state_roundtrip() {
     return rc;
 }
 
+int test_negative_empty_prefix() {
+    int rc = 0;
+
+    llama_compacted_prefix_store store({
+        {
+            /* layer_id      = */ 0,
+            /* n_head_kv     = */ 2,
+            /* n_embd_head_k = */ 4,
+            /* n_embd_head_v = */ 8,
+            /* type_k        = */ GGML_TYPE_F16,
+            /* type_v        = */ GGML_TYPE_F16,
+        },
+    });
+
+    // Configuring with empty positions (zero compacted tokens) should succeed
+    // without crash — it is a degenerate but valid configuration.
+    // The store sets enabled=false for empty positions (correct: no prefix data).
+    if (!check(store.configure_seq(1, 0, {}, -1), "empty-position configure_seq should succeed", rc)) return rc;
+    if (!check(!store.is_enabled(1), "empty-prefix sequence should be disabled (no positions)", rc)) return rc;
+    if (!check(store.seq_allocated_bytes(1) == 0, "empty prefix should allocate 0 bytes", rc)) return rc;
+
+    // Operations on the disabled empty-prefix sequence should not crash
+    store.seq_rm(1, -1, -1);
+
+    return rc;
+}
+
+int test_negative_unconfigured_ops() {
+    int rc = 0;
+
+    llama_compacted_prefix_store store({
+        {
+            /* layer_id      = */ 0,
+            /* n_head_kv     = */ 1,
+            /* n_embd_head_k = */ 4,
+            /* n_embd_head_v = */ 4,
+            /* type_k        = */ GGML_TYPE_F16,
+            /* type_v        = */ GGML_TYPE_F16,
+        },
+    });
+
+    // Operations on non-configured (but valid-range) sequences should be safe
+    if (!check(!store.is_enabled(99), "unconfigured sequence should not be enabled", rc)) return rc;
+    if (!check(store.seq_allocated_bytes(99) == 0, "unconfigured sequence should have 0 bytes", rc)) return rc;
+
+    // seq_rm / clear_seq on unconfigured should be safe (no crash)
+    store.seq_rm(99, -1, -1);
+    store.clear_seq(99, false);
+    store.clear_seq(99, true);
+
+    // Out-of-range seq_id should return nullptr
+    if (!check(store.get_seq(-1) == nullptr, "negative seq_id should return nullptr", rc)) return rc;
+
+    // clear on store with no configured sequences should be safe
+    store.clear(true);
+    if (!check(store.total_allocated_bytes() == 0, "clear after no-op operations should be zero", rc)) return rc;
+
+    return rc;
+}
+
+int test_negative_quantized_v_non_aligned() {
+    int rc = 0;
+
+    // Q8_0 V with non-block-aligned head_dim_v must throw.
+    // head_dim_v=17, Q8_0 block_size=32 → 17 % 32 != 0
+    llama_compacted_prefix_store store({
+        {
+            /* layer_id      = */ 0,
+            /* n_head_kv     = */ 1,
+            /* n_embd_head_k = */ 32,
+            /* n_embd_head_v = */ 17,
+            /* type_k        = */ GGML_TYPE_F16,
+            /* type_v        = */ GGML_TYPE_Q8_0,
+        },
+    });
+    if (!check(expect_throw([&]() { store.configure_seq(1, 8, { 0, 4 }, -1); }),
+        "Q8_0 V with non-aligned head_dim_v=17 should be rejected", rc)) return rc;
+
+    // Q8_0 V with block-aligned head_dim_v should succeed
+    llama_compacted_prefix_store store_ok({
+        {
+            /* layer_id      = */ 0,
+            /* n_head_kv     = */ 1,
+            /* n_embd_head_k = */ 32,
+            /* n_embd_head_v = */ 64,
+            /* type_k        = */ GGML_TYPE_F16,
+            /* type_v        = */ GGML_TYPE_Q8_0,
+        },
+    });
+    if (!check(store_ok.configure_seq(1, 8, { 0, 4 }, -1), "Q8_0 V with block-aligned head_dim_v=64 should succeed", rc)) return rc;
+
+    return rc;
+}
+
 } // namespace
 
 int main() {
@@ -453,6 +568,15 @@ int main() {
         return rc;
     }
     if (const int rc = test_state_roundtrip()) {
+        return rc;
+    }
+    if (const int rc = test_negative_empty_prefix()) {
+        return rc;
+    }
+    if (const int rc = test_negative_unconfigured_ops()) {
+        return rc;
+    }
+    if (const int rc = test_negative_quantized_v_non_aligned()) {
         return rc;
     }
     return 0;

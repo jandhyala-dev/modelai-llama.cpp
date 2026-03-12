@@ -100,6 +100,14 @@ public:
             uint32_t max_queries = 256,
             int nnls_iters = 64,
             float lambda = 1e-6f);
+    bool compacted_prefix_self_study_from_live_kv(
+            struct llama_context * ctx,
+            llama_seq_id seq_id,
+            uint32_t target_tokens,
+            llama_pos live_suffix_pos0,
+            const llama_kv_compact_self_study_config & config,
+            llama_kv_compact_self_study_stats * stats = nullptr,
+            llama_pos p0 = 0);
 
     bool compacted_prefix_set_execution(llama_seq_id seq_id, bool enabled);
     bool compacted_prefix_reclaim_live_kv(llama_seq_id seq_id);

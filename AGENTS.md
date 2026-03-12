@@ -1,4 +1,4 @@
-# CLAUDE.md — modelai-llama.cpp (Private Product Fork)
+# AGENTS.md — modelai-llama.cpp (Private Product Fork)
 
 ## Review Standards
 All code reviews follow `docs/review-standards/hostile-review-protocol.md`.

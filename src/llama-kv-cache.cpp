@@ -3,6 +3,7 @@
 #include "llama-impl.h"
 #include "llama-io.h"
 #include "llama-kv-compact-pipeline.h"
+#include "llama-kv-compact-self-study.h"
 #include "llama-model.h"
 #include "llama-context.h"
 
@@ -783,7 +784,9 @@ bool llama_kv_cache::compacted_prefix_fit_from_live_kv(
         uint32_t max_queries,
         int nnls_iters,
         float lambda) {
-    return llama_kv_compact_fit_from_live_kv(*this, seq_id, target_tokens, live_suffix_pos0, stats, p0, max_queries, nnls_iters, lambda);
+    const bool ok = llama_kv_compact_fit_from_live_kv(*this, seq_id, target_tokens, live_suffix_pos0, stats, p0, max_queries, nnls_iters, lambda);
+    if (ok) { compacted_prefix_last_method = "fit"; }
+    return ok;
 }
 
 bool llama_kv_cache::compacted_prefix_select_from_live_kv(
@@ -792,7 +795,9 @@ bool llama_kv_cache::compacted_prefix_select_from_live_kv(
         llama_pos live_suffix_pos0,
         llama_kv_compact_pipeline_stats * stats,
         llama_pos p0) {
-    return llama_kv_compact_select_from_live_kv(*this, seq_id, target_tokens, live_suffix_pos0, stats, p0);
+    const bool ok = llama_kv_compact_select_from_live_kv(*this, seq_id, target_tokens, live_suffix_pos0, stats, p0);
+    if (ok) { compacted_prefix_last_method = "select"; }
+    return ok;
 }
 
 bool llama_kv_cache::compacted_prefix_omp_from_live_kv(
@@ -804,7 +809,22 @@ bool llama_kv_cache::compacted_prefix_omp_from_live_kv(
         uint32_t max_queries,
         int nnls_iters,
         float lambda) {
-    return llama_kv_compact_omp_from_live_kv(*this, seq_id, target_tokens, live_suffix_pos0, stats, p0, max_queries, nnls_iters, lambda);
+    const bool ok = llama_kv_compact_omp_from_live_kv(*this, seq_id, target_tokens, live_suffix_pos0, stats, p0, max_queries, nnls_iters, lambda);
+    if (ok) { compacted_prefix_last_method = "omp"; }
+    return ok;
+}
+
+bool llama_kv_cache::compacted_prefix_self_study_from_live_kv(
+        struct llama_context * ctx,
+        llama_seq_id seq_id,
+        uint32_t target_tokens,
+        llama_pos live_suffix_pos0,
+        const llama_kv_compact_self_study_config & config,
+        llama_kv_compact_self_study_stats * stats,
+        llama_pos p0) {
+    const bool ok = llama_kv_compact_self_study_from_live_kv(ctx, *this, seq_id, target_tokens, live_suffix_pos0, config, stats, p0);
+    if (ok) { compacted_prefix_last_method = "self-study"; }
+    return ok;
 }
 
 bool llama_kv_cache::compacted_prefix_layer_layout_for_solver(int32_t il, llama_compacted_prefix_layer_layout & out) const {
@@ -950,7 +970,6 @@ bool llama_kv_cache::compacted_prefix_copy_v_head_f32(
 
     const uint32_t head_dim = layout.n_embd_head_v;
     const uint32_t n_embd_v_gqa = hparams.n_embd_v_gqa(il);
-    const size_t type_size = ggml_type_size(layout.type_v);
     out.resize(size_t(positions.size()) * head_dim);
 
     if (!v_trans) {
@@ -971,19 +990,23 @@ bool llama_kv_cache::compacted_prefix_copy_v_head_f32(
         return true;
     }
 
-    // Batch column extraction: read one full column per embedding dimension.
-    // Transposed V layout: v[cell_idx + (head_offset + j) * kv_size].
+    // Batch row extraction for transposed V.
+    //
+    // Transposed V is stored as a 1D tensor of n_embd_v_gqa * kv_size elements.
+    // Logical row d (embedding dimension d, all positions) starts at linear
+    // index d * kv_size.  When kv_size is block-aligned (guaranteed by KV cache
+    // padding), each row is independently quantized, so we can dequantize one
+    // row at a time to extract per-position values.
+    //
+    // Byte layout per row: ggml_row_size(type_v, kv_size) bytes.
     // O(head_dim) backend calls instead of O(positions * head_dim).
-    // Note: transposed V with quantized types is not supported — quantization
-    // blocks span the embedding dimension, incompatible with column layout.
-    if (ggml_blck_size(layout.type_v) > 1) {
-        return false;
-    }
     const uint32_t kv_size = get_size();
+    GGML_ASSERT(kv_size % ggml_blck_size(layout.type_v) == 0 &&
+                "KV cache size must be block-aligned for transposed V extraction");
     const uint32_t head_offset = head_kv * head_dim;
-    const size_t col_bytes = size_t(kv_size) * type_size;
-    std::vector<uint8_t> col_buf(col_bytes);
-    std::vector<float> col_f32(kv_size);
+    const size_t row_bytes = ggml_row_size(layout.type_v, kv_size);
+    std::vector<uint8_t> row_buf(row_bytes);
+    std::vector<float> row_f32(kv_size);
 
     // Build cell index lookup for positions.
     std::vector<uint32_t> cell_indices(positions.size());
@@ -995,14 +1018,13 @@ bool llama_kv_cache::compacted_prefix_copy_v_head_f32(
         cell_indices[i] = pos_it->second;
     }
 
-    auto to_float = ggml_get_type_traits(layout.type_v)->to_float;
     for (uint32_t j = 0; j < head_dim; ++j) {
-        const size_t col_offset = size_t(head_offset + j) * kv_size * type_size;
-        ggml_backend_tensor_get(v, col_buf.data(), col_offset, col_bytes);
-        to_float(col_buf.data(), col_f32.data(), kv_size);
+        const size_t row_offset = size_t(head_offset + j) * row_bytes;
+        ggml_backend_tensor_get(v, row_buf.data(), row_offset, row_bytes);
+        type_to_float(row_buf.data(), layout.type_v, row_f32.data(), kv_size);
 
         for (size_t i = 0; i < positions.size(); ++i) {
-            out[i * head_dim + j] = col_f32[cell_indices[i]];
+            out[i * head_dim + j] = row_f32[cell_indices[i]];
         }
     }
 
@@ -1017,11 +1039,57 @@ llama_compacted_prefix_store * llama_kv_cache::get_compacted_prefix() {
     return &compacted_prefix;
 }
 
+bool llama_kv_cache::supports_compaction() const {
+    return compacted_prefix_runtime_supported();
+}
+
+bool llama_kv_cache::has_compacted_prefix() const {
+    if (!compacted_prefix_runtime_supported()) {
+        return false;
+    }
+    for (llama_seq_id sid = 0; sid < (llama_seq_id) seq_to_stream.size(); ++sid) {
+        if (compacted_prefix.execution_enabled(sid)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+const std::string & llama_kv_cache::compacted_prefix_method() const {
+    return compacted_prefix_last_method;
+}
+
+bool llama_kv_cache::compacted_prefix_forces_non_flash() const {
+    // Non-zero-beta methods require the non-flash attention path.
+    // "select" uses zero beta and is flash-compatible.
+    if (!has_compacted_prefix()) {
+        return false;
+    }
+    const auto & m = compacted_prefix_last_method;
+    return m == "fit" || m == "omp" || m == "self-study";
+}
+
 bool llama_kv_cache::compacted_prefix_runtime_supported() const {
     // Check instance-level SWA config, not model-level hparams.
     // When used as kv_base inside llama_kv_cache_iswa, this instance has
     // n_swa=0 and swa_type=NONE even though the model has SWA layers.
     if (n_swa > 0 || swa_type != LLAMA_SWA_TYPE_NONE) {
+        return false;
+    }
+
+    // M-RoPE models (Qwen2-VL, Qwen3-VL, GLM4) use multi-dimensional positions
+    // that the compacted prefix pipeline cannot represent.  logical_positions
+    // stores scalar llama_pos only, and mask computation uses scalar comparisons.
+    // Allowing compaction would silently lose spatial coordinates, and
+    // reclaim_live_kv would destroy prefix KV cells that can_execute will later
+    // refuse to serve — causing catastrophic context loss.
+    if (hparams.n_pos_per_embd() > 1) {
+        static bool warned = false;
+        if (!warned) {
+            LLAMA_LOG_WARN("%s: compacted prefix not supported for M-RoPE models (n_pos_per_embd=%u)\n",
+                           __func__, hparams.n_pos_per_embd());
+            warned = true;
+        }
         return false;
     }
 

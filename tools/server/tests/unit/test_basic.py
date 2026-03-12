@@ -51,15 +51,24 @@ def test_server_props():
     assert caps["prompt_cache"]["enabled"] is True
     assert caps["save_restore"]["available"] is True
     assert caps["save_restore"]["validated_for_compacted_path"] is False
-    assert caps["compacted_prefix"]["available"] is False
+    # compaction availability is model-dependent (stories260K is a standard causal
+    # model — no SWA, no M-RoPE — so it supports compaction at the runtime level)
+    assert isinstance(caps["compacted_prefix"]["available"], bool)
+    assert caps["compacted_prefix"]["available"] is True  # stories260K supports it
+    assert caps["compacted_prefix"]["enabled"] is False   # no compaction performed yet
+    assert isinstance(caps["compacted_prefix"]["flash_attn_overridden"], bool)
+    assert isinstance(caps["compacted_prefix"]["last_fallback_reason"], str)
     assert caps["features"]["metrics_endpoint"] is True
     assert caps["features"]["slots_endpoint"] is True
 
     assert runtime["state"] in {"ready", "sleeping"}
     assert runtime["memory"]["allocated_context_bytes"] >= 0
     assert runtime["kv"]["active_n_kv_total"] >= 0
-    assert runtime["compaction"]["query_generation_time_ms"] is None
-    assert runtime["compaction"]["solver_time_ms"] is None
+    # runtime compaction section exposes live state, not timing fields
+    assert isinstance(runtime["compaction"]["available"], bool)
+    assert isinstance(runtime["compaction"]["enabled"], bool)
+    assert runtime["compaction"]["available"] is True  # stories260K supports it
+    assert runtime["compaction"]["enabled"] is False   # no compaction performed yet
 
 
 def test_server_models():

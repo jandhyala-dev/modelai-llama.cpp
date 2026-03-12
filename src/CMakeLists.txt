@@ -25,6 +25,7 @@ add_library(llama
             llama-kv-compact-pipeline.cpp
             llama-kv-compact-query.cpp
             llama-kv-compact-select.cpp
+            llama-kv-compact-self-study.cpp
             llama-kv-compact-solver.cpp
             llama-kv-cache.cpp
             llama-kv-cache-iswa.cpp

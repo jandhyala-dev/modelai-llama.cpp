@@ -26,6 +26,7 @@ enum server_task_type {
     SERVER_TASK_TYPE_SLOT_ERASE,
     SERVER_TASK_TYPE_GET_LORA,
     SERVER_TASK_TYPE_SET_LORA,
+    SERVER_TASK_TYPE_COMPACT,
 };
 
 // TODO: change this to more generic "response_format" to replace the "format_response_*" in server-common
@@ -163,6 +164,23 @@ struct server_task {
 
     // used by SERVER_TASK_TYPE_METRICS
     bool metrics_reset_bucket = false;
+
+    // used by SERVER_TASK_TYPE_COMPACT
+    struct compact_action {
+        int         id_slot             = 0;
+        std::string method              = "select"; // "select" | "solver" | "omp" | "self_study"
+        int32_t     target_tokens       = -1;       // explicit target, or -1 to use ratio
+        float       ratio               = 2.0f;     // compression ratio (used if target_tokens < 0)
+        int32_t     live_suffix_tokens  = 0;         // recent tokens to keep live (default: 0 = compact all)
+        llama_pos   p0                  = 0;         // start position
+        uint32_t    max_queries         = 256;       // solver/omp param
+        int         nnls_iters          = 64;        // solver/omp param
+        float       lambda              = 1e-6f;     // solver/omp regularization
+        uint32_t    n_generate          = 256;       // self_study param
+        uint32_t    max_queries_per_kv_head = 1024;  // self_study param
+        bool        reclaim             = true;      // reclaim live KV cells after compaction
+    };
+    compact_action compact_params;
 
     // used by SERVER_TASK_TYPE_SET_LORA
     std::map<int, float> set_lora; // mapping adapter ID -> scale
@@ -523,11 +541,43 @@ struct server_task_result_metrics : server_task_result {
     uint64_t active_n_kv_max            = 0;
     uint64_t sequence_state_bytes_total = 0;
 
+    // compaction state (queried from KV cache at metrics collection time)
+    bool compaction_available        = false;
+    bool compaction_enabled          = false;
+    bool compaction_forces_non_flash = false;
+    std::string compaction_method    = "none";
+
     // while we can also use std::vector<server_slot> this requires copying the slot object which can be quite messy
     // therefore, we use json to temporarily store the slot.to_json() result
     json slots_data = json::array();
 
     virtual json to_json() override;
+};
+
+struct server_task_result_compact : server_task_result {
+    std::string method;
+    uint32_t    compacted_tokens     = 0;
+    uint32_t    original_tokens      = 0;
+    double      compression_ratio    = 0.0;
+    double      compaction_time_ms   = 0.0;
+    uint32_t    active_n_kv_before   = 0;
+    uint32_t    active_n_kv_after    = 0;
+    bool        reclaimed            = false;
+
+    virtual json to_json() override {
+        return json {
+            { "success",             true },
+            { "id_slot",             id_slot },
+            { "method",              method },
+            { "compacted_tokens",    compacted_tokens },
+            { "original_tokens",     original_tokens },
+            { "compression_ratio",   compression_ratio },
+            { "compaction_time_ms",  compaction_time_ms },
+            { "active_n_kv_before",  active_n_kv_before },
+            { "active_n_kv_after",   active_n_kv_after },
+            { "reclaimed",           reclaimed },
+        };
+    }
 };
 
 struct server_task_result_slot_save_load : server_task_result {

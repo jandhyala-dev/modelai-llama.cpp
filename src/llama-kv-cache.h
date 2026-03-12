@@ -15,6 +15,8 @@ struct llama_hparams;
 struct llama_model;
 struct llama_context;
 struct llama_kv_compact_pipeline_stats;
+struct llama_kv_compact_self_study_config;
+struct llama_kv_compact_self_study_stats;
 
 //
 // llama_kv_cache
@@ -199,6 +201,14 @@ public:
             uint32_t max_queries = 256,
             int nnls_iters = 64,
             float lambda = 1e-6f);
+    bool compacted_prefix_self_study_from_live_kv(
+            struct llama_context * ctx,
+            llama_seq_id seq_id,
+            uint32_t target_tokens,
+            llama_pos live_suffix_pos0,
+            const llama_kv_compact_self_study_config & config,
+            llama_kv_compact_self_study_stats * stats = nullptr,
+            llama_pos p0 = 0);
 
     bool compacted_prefix_layer_layout_for_solver(int32_t il, llama_compacted_prefix_layer_layout & out) const;
     bool compacted_prefix_seq_positions(llama_seq_id seq_id, llama_pos p0, llama_pos p1, std::vector<llama_pos> & out) const;
@@ -207,6 +217,12 @@ public:
 
     const llama_compacted_prefix_store * get_compacted_prefix() const;
           llama_compacted_prefix_store * get_compacted_prefix();
+
+    // Compaction capability and state queries (6b-18, 6b-19)
+    bool supports_compaction() const;
+    bool has_compacted_prefix() const;
+    const std::string & compacted_prefix_method() const;
+    bool compacted_prefix_forces_non_flash() const;
 
     //
     // graph_build API
@@ -265,6 +281,8 @@ public:
     void set_input_compacted_prefix_kq_b(ggml_tensor * dst, int32_t il, llama_seq_id seq_id) const;
 
 private:
+    std::string compacted_prefix_last_method = "none";
+
     bool compacted_prefix_runtime_supported() const;
     bool compacted_prefix_stream_owned_by_seq(uint32_t strm, llama_seq_id seq_id, std::vector<uint32_t> & live_cell_idxs) const;
     void compacted_prefix_pack_stream_tensors(uint32_t strm, const std::vector<uint32_t> & live_cell_idxs);

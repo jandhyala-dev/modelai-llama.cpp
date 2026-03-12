@@ -46,6 +46,9 @@ struct server_context_meta {
     int32_t model_n_embd_inp;
     uint64_t model_n_params;
     uint64_t model_size;
+
+    // compaction capability (set at load time via KV cache query)
+    bool compaction_supported = false;
 };
 
 struct server_context {
@@ -115,6 +118,7 @@ struct server_routes {
     server_http_context::handler_t post_rerank;
     server_http_context::handler_t get_lora_adapters;
     server_http_context::handler_t post_lora_adapters;
+    server_http_context::handler_t post_compact;
 private:
     std::unique_ptr<server_res_generator> handle_completions_impl(
             const server_http_req & req,
