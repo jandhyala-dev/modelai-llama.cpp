@@ -626,9 +626,9 @@ PR-6 solved this for the selection-only pipeline (zero beta) by:
 
 ### Option A: Wait for FlashBias (Recommended)
 
-The `modelai-performance-roadmap.md` already documents FlashBias (NeurIPS 2025, arXiv:2505.12044) as the solution. When ggml adds native flash attention bias support:
+The `modelai-performance-roadmap.md` already documents FlashBias (NeurIPS 2025, arXiv:2505.12044) as the solution. When ggml adds native flash attention bias support (or equivalent API/graph change):
 1. The `kq_b == nullptr` guard at `llama-graph.cpp:1883` can be relaxed
-2. Beta tensor gets passed to `ggml_flash_attn_ext_bias()` (or equivalent)
+2. Beta tensor gets passed to the new flash-bias API
 3. Full solver pipeline works with flash attention
 
 **Effort:** 0 (wait for upstream ggml)
@@ -641,19 +641,24 @@ Fold per-head beta into the attention mask. This requires per-layer per-head mas
 
 ### Option C: Fallback to Non-Flash for Non-Zero Beta (Current Behavior)
 
-The current assertions already enforce this: when beta is non-zero, flash attention is disabled and the standard path is used. This works correctly today.
+The current code already enforces this at two levels:
+- Generic: `use_flash_attn = cparams.flash_attn && kq_b == nullptr` at `llama-graph.cpp:1883`
+  disables flash whenever a beta bias tensor exists.
+- Compacted-prefix: explicit `GGML_ASSERT(!cparams.flash_attn)` guards on non-zero-beta
+  compacted paths at `llama-graph.cpp:2097`, `2175`, and `2393`.
 
 **No code changes needed.** Document the tradeoff: flash is faster but selection-only; standard is slower but supports full solver with non-zero beta.
 
 ### Decision
 
-**Adopt Option A (wait) + Option C (current fallback).** Add documentation explaining the tradeoff.
+**Adopt Option A (wait) + Option C (current fallback).**
 
-**Files:**
-- `docs/pr6b-self-study-implementation-plan.md` — This document (already documents the decision)
-- No code changes for flash + beta in this PR
+**6b-12 (completed):** This section IS the deliverable. The flash+beta tradeoff, all three
+options, and the decision are documented above. No code changes needed — current assertions
+already enforce the fallback behavior (non-flash for non-zero beta).
 
-**Effort:** 0 (documentation only)
+**Files:** `docs/pr6b-self-study-implementation-plan.md` — this section
+**Effort:** 0 (documentation only, completed)
 
 ---
 
@@ -663,11 +668,20 @@ The current assertions already enforce this: when beta is non-zero, flash attent
 
 | Test | Model | Context | Target | Pipeline | Metric |
 |------|-------|---------|--------|----------|--------|
-| **4a. SEC Filing Extraction** | Qwen3-14B | 8K-32K token filing | 512 tokens | select, self-study | Answer accuracy vs full context |
-| **4b. Long Document QA** | Qwen3-14B | 32K token document | 1024 tokens | select, self-study, OMP | ROUGE/F1 on extraction tasks |
-| **4c. Multi-Filing Batch** | Qwen3-14B | 200 filings × 8K each | 512 tokens each | select (speed), self-study (quality) | Throughput (filings/min), accuracy |
-| **4d. Vision Document** | Qwen3-VL-8B | Image + 4K text | 256 tokens | select | Answer accuracy |
+| **4a. SEC Filing Extraction** | 14B-class¹ | 8K-32K token filing | 512 tokens | select, self-study | Answer accuracy vs full context |
+| **4b. Long Document QA** | 14B-class¹ | 32K token document | 1024 tokens | select, self-study, OMP | ROUGE/F1 on extraction tasks |
+| **4c. Multi-Filing Batch** | 14B-class¹ | 200 filings × 8K each | 512 tokens each | select (speed), self-study (quality) | Throughput (filings/min), accuracy |
 | **4e. Small Model Smoke** | stories15M | 512 tokens | 64 tokens | all pipelines | No crashes, basic quality |
+
+¹ Approved 14B-class models: Qwen2.5-14B-Instruct (preferred), DeepSeek-R1-14B (qwen2
+arch, acceptable with caution — reasoning-heavy training may affect compaction quality
+differently). Both available locally via ollama blobs.
+
+### Deferred Workloads (blocked by unsupported model architectures)
+
+| Test | Model | Blocker | Resume When |
+|------|-------|---------|-------------|
+| **4d. Vision Document** | Qwen3-VL-8B | M-RoPE unsupported (6b-10) | M-RoPE support implemented |
 
 ## Implementation
 
@@ -773,12 +787,13 @@ If a test fails its threshold:
 
 **Problem:** `llama_kv_compact_omp_opts` is declared in both `src/llama-kv-compact-select.h:19` and forward-declared in `src/llama-kv-compact-pipeline.h:40`.
 
-**Solution:** Keep the definition in `llama-kv-compact-select.h` only. Replace the forward declaration in `llama-kv-compact-pipeline.h` with an `#include`.
+**6b-14 fix (completed):** Removed the dead forward declaration from `pipeline.h`.
+No function signature in `pipeline.h` references `omp_opts`, so neither a forward
+declaration nor an include is needed — the type is only used internally in `pipeline.cpp`
+which already includes `llama-kv-compact-select.h`.
 
-**Files:**
-- `src/llama-kv-compact-pipeline.h` — Replace forward declaration with include
-
-**Effort:** 15 minutes
+**Files:** `src/llama-kv-compact-pipeline.h` — removed dead forward declaration
+**Effort:** 15 minutes (completed)
 
 ### 5b. Public API Decision
 

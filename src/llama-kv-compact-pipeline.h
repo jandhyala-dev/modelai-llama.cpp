@@ -37,8 +37,6 @@ bool llama_kv_compact_select_from_live_kv(
         llama_kv_compact_pipeline_stats * stats = nullptr,
         llama_pos p0 = 0);
 
-struct llama_kv_compact_omp_opts;
-
 // OMP selection pipeline: uses Orthogonal Matching Pursuit (Algorithm 1,
 // arXiv:2602.16284 §3.2) per-head for greedy residual-based key selection,
 // then aggregates across heads via vote counting for a global selection set.
