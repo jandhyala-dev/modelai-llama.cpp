@@ -1039,6 +1039,22 @@ bool llama_kv_cache::compacted_prefix_runtime_supported() const {
         return false;
     }
 
+    // M-RoPE models (Qwen2-VL, Qwen3-VL, GLM4) use multi-dimensional positions
+    // that the compacted prefix pipeline cannot represent.  logical_positions
+    // stores scalar llama_pos only, and mask computation uses scalar comparisons.
+    // Allowing compaction would silently lose spatial coordinates, and
+    // reclaim_live_kv would destroy prefix KV cells that can_execute will later
+    // refuse to serve — causing catastrophic context loss.
+    if (hparams.n_pos_per_embd() > 1) {
+        static bool warned = false;
+        if (!warned) {
+            LLAMA_LOG_WARN("%s: compacted prefix not supported for M-RoPE models (n_pos_per_embd=%u)\n",
+                           __func__, hparams.n_pos_per_embd());
+            warned = true;
+        }
+        return false;
+    }
+
     return true;
 }
 

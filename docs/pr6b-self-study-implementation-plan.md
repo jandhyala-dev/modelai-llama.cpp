@@ -536,29 +536,73 @@ selection-only and full solver pipelines. Results:
 Both `ggml_rope_ext` and `ggml_rope_multi` produce identically named "Qcur-{il}"
 tensors with the same 3D shape [n_embd_head, n_head_q, n_tokens].
 
-**Required work for M-RoPE support (deferred):**
+**Safety fix applied:** Added M-RoPE guard to `compacted_prefix_runtime_supported()`
+in `llama-kv-cache.cpp`. When `hparams.n_pos_per_embd() > 1`, the function returns
+false, which blocks execution enablement (`set_execution`), execution resolution
+(`resolve_compacted_prefix_exec`), and reclaim (`reclaim_live_kv`) — preventing the
+catastrophic context loss chain. Note: pipeline entry points (`select_from_live_kv`,
+`fit_from_live_kv`, `omp_from_live_kv`) are not guarded and may still build compacted
+prefix state that cannot be executed; this wastes CPU but does not cause data loss.
+By inspection and local validation (`./build/bin/test-kv-compact-quality -m
+Qwen3VL-2B-Instruct-Q4_K_M.gguf`), Qwen3-VL now fails at `set_execution` (safe)
+instead of at decode time after context loss (catastrophic).
+
+**Remaining work for M-RoPE support (deferred):**
 1. Store M-RoPE extended positions (`llama_kv_cell_ext`) in `logical_positions`
 2. Update mask computation to use multi-dimensional position comparisons
 3. Remove `is_pos_2d()` guard from `can_execute()` after fixing positions/mask
-4. Add safety check: refuse `reclaim_live_kv` if `can_execute` would reject
 
-**Files:** No code changes — validation only.
+**Files:** `src/llama-kv-cache.cpp` — M-RoPE guard in `compacted_prefix_runtime_supported()`
 **Effort:** 0.5 day (completed)
 
 ### 2d. Backend Validation
 
 **Problem:** Compacted prefix data is always CPU-allocated (`ggml_backend_cpu_buffer_type()` in `llama-kv-compacted-prefix.cpp:775`). The set_input functions assume host-backed tensors (`require_host_or_direct_data` in `llama-kv-compacted-prefix-exec.cpp:20-27`). This works on Metal and CUDA because the ggml scheduler copies data to GPU as needed.
 
-**Solution:** No code changes needed. Add explicit backend validation tests:
-- Metal: run quality test on Apple Silicon with `GGML_METAL=ON`
-- CUDA: run quality test with `GGML_CUDA=ON` (CI or manual)
-- CPU-only: run quality test with no accelerator
+**6b-11 manual exploratory validation (completed):** Ran `test-kv-compact-quality` with
+stories15M (Q4_0) on Metal and CPU-only backends, all three pipelines (selection, solver,
+OMP), plus flash attention on Metal. Model: stories15M-q4_0.gguf, 24M params, 6 layers,
+n_ctx=512. Artifact not yet archived; values below are from manual runs.
 
-**Files:**
-- `tests/test-kv-compact-quality.cpp` — Add backend-specific test annotations
-- `docs/modelai-ci-policy.md` — Document backend test matrix
+Commands used:
+```bash
+# Metal (default build: -DGGML_METAL=ON -DLLAMA_FATAL_WARNINGS=ON)
+./build/bin/test-kv-compact-quality -m build/tinyllamas/stories15M-q4_0.gguf
+USE_SOLVER=1 ./build/bin/test-kv-compact-quality -m build/tinyllamas/stories15M-q4_0.gguf
+USE_OMP=1 ./build/bin/test-kv-compact-quality -m build/tinyllamas/stories15M-q4_0.gguf
+USE_FLASH=1 ./build/bin/test-kv-compact-quality -m build/tinyllamas/stories15M-q4_0.gguf
 
-**Effort:** 0.5 day
+# CPU-only (separate build: -DGGML_METAL=OFF -DGGML_CUDA=OFF -DLLAMA_FATAL_WARNINGS=ON)
+./build-cpu/bin/test-kv-compact-quality -m build/tinyllamas/stories15M-q4_0.gguf
+USE_SOLVER=1 ./build-cpu/bin/test-kv-compact-quality -m build/tinyllamas/stories15M-q4_0.gguf
+USE_OMP=1 ./build-cpu/bin/test-kv-compact-quality -m build/tinyllamas/stories15M-q4_0.gguf
+```
+
+| Backend | Pipeline | 2x cos | 4x cos | 8x cos | Result |
+|---------|----------|--------|--------|--------|--------|
+| Metal | Selection | 0.9998 | 0.9996 | 0.9995 | PASS |
+| Metal | Solver | 0.9991 | 0.9998 | 0.9997 | PASS |
+| Metal | OMP | 0.9999 | 0.9986 | 0.9998 | PASS |
+| Metal+Flash | Selection | 0.9998 | 0.9996 | 0.9995 | PASS |
+| CPU-only | Selection | 0.9997 | 0.9996 | 0.9996 | PASS |
+| CPU-only | Solver | 0.9996 | 0.9998 | 0.9995 | PASS |
+| CPU-only | OMP | 0.9994 | 0.9933 | 0.9996 | PASS |
+
+**Key findings:**
+- Provides a preliminary backend sanity check on Metal vs CPU-only for a small model.
+  Stories15M (24M params, 6 layers) validates data flow correctness but does not prove
+  broad backend equivalence for production-class workloads — larger model validation is
+  deferred to Part 4 (production workload tests).
+- All pipelines exceed quality thresholds (2x≥0.95, 4x≥0.90, 8x≥0.85) by wide margins.
+- CPU-only OMP at 4x compression (0.9933) is the lowest observed datapoint across all
+  backend/pipeline combinations. Still above threshold but should be rechecked on larger
+  models during production validation.
+- Flash attention (zero-beta selection path) works identically to non-flash on Metal.
+- CUDA validation deferred: no CUDA hardware available. CI policy (`modelai-ci-policy.md`)
+  documents CUDA as Phase 3+ requirement.
+
+**Files:** No code changes — validation only.
+**Effort:** 0.5 day (completed)
 
 ---
 
