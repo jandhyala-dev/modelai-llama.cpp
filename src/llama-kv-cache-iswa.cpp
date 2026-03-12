@@ -287,6 +287,18 @@ bool llama_kv_cache_iswa::compacted_prefix_omp_from_live_kv(
             p0, max_queries, nnls_iters, lambda);
 }
 
+bool llama_kv_cache_iswa::compacted_prefix_self_study_from_live_kv(
+        struct llama_context * ctx,
+        llama_seq_id seq_id,
+        uint32_t target_tokens,
+        llama_pos live_suffix_pos0,
+        const llama_kv_compact_self_study_config & config,
+        llama_kv_compact_self_study_stats * stats,
+        llama_pos p0) {
+    return kv_base->compacted_prefix_self_study_from_live_kv(
+            ctx, seq_id, target_tokens, live_suffix_pos0, config, stats, p0);
+}
+
 bool llama_kv_cache_iswa::compacted_prefix_set_execution(llama_seq_id seq_id, bool enabled) {
     return kv_base->compacted_prefix_set_execution(seq_id, enabled);
 }

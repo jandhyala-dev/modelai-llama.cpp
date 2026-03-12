@@ -57,3 +57,7 @@ bool llama_kv_compact_omp_from_live_kv(
         uint32_t max_queries = 256,
         int nnls_iters = 64,
         float lambda = 1e-6f);
+
+// Self-study pipeline is declared in llama-kv-compact-self-study.h
+// (llama_kv_compact_self_study_from_live_kv) — requires llama_context
+// for Q-capture generation via cb_eval.

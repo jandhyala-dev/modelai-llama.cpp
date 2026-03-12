@@ -3,6 +3,7 @@
 #include "llama-impl.h"
 #include "llama-io.h"
 #include "llama-kv-compact-pipeline.h"
+#include "llama-kv-compact-self-study.h"
 #include "llama-model.h"
 #include "llama-context.h"
 
@@ -805,6 +806,17 @@ bool llama_kv_cache::compacted_prefix_omp_from_live_kv(
         int nnls_iters,
         float lambda) {
     return llama_kv_compact_omp_from_live_kv(*this, seq_id, target_tokens, live_suffix_pos0, stats, p0, max_queries, nnls_iters, lambda);
+}
+
+bool llama_kv_cache::compacted_prefix_self_study_from_live_kv(
+        struct llama_context * ctx,
+        llama_seq_id seq_id,
+        uint32_t target_tokens,
+        llama_pos live_suffix_pos0,
+        const llama_kv_compact_self_study_config & config,
+        llama_kv_compact_self_study_stats * stats,
+        llama_pos p0) {
+    return llama_kv_compact_self_study_from_live_kv(ctx, *this, seq_id, target_tokens, live_suffix_pos0, config, stats, p0);
 }
 
 bool llama_kv_cache::compacted_prefix_layer_layout_for_solver(int32_t il, llama_compacted_prefix_layer_layout & out) const {
