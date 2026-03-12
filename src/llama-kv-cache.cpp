@@ -962,7 +962,6 @@ bool llama_kv_cache::compacted_prefix_copy_v_head_f32(
 
     const uint32_t head_dim = layout.n_embd_head_v;
     const uint32_t n_embd_v_gqa = hparams.n_embd_v_gqa(il);
-    const size_t type_size = ggml_type_size(layout.type_v);
     out.resize(size_t(positions.size()) * head_dim);
 
     if (!v_trans) {
@@ -983,19 +982,23 @@ bool llama_kv_cache::compacted_prefix_copy_v_head_f32(
         return true;
     }
 
-    // Batch column extraction: read one full column per embedding dimension.
-    // Transposed V layout: v[cell_idx + (head_offset + j) * kv_size].
+    // Batch row extraction for transposed V.
+    //
+    // Transposed V is stored as a 1D tensor of n_embd_v_gqa * kv_size elements.
+    // Logical row d (embedding dimension d, all positions) starts at linear
+    // index d * kv_size.  When kv_size is block-aligned (guaranteed by KV cache
+    // padding), each row is independently quantized, so we can dequantize one
+    // row at a time to extract per-position values.
+    //
+    // Byte layout per row: ggml_row_size(type_v, kv_size) bytes.
     // O(head_dim) backend calls instead of O(positions * head_dim).
-    // Note: transposed V with quantized types is not supported — quantization
-    // blocks span the embedding dimension, incompatible with column layout.
-    if (ggml_blck_size(layout.type_v) > 1) {
-        return false;
-    }
     const uint32_t kv_size = get_size();
+    GGML_ASSERT(kv_size % ggml_blck_size(layout.type_v) == 0 &&
+                "KV cache size must be block-aligned for transposed V extraction");
     const uint32_t head_offset = head_kv * head_dim;
-    const size_t col_bytes = size_t(kv_size) * type_size;
-    std::vector<uint8_t> col_buf(col_bytes);
-    std::vector<float> col_f32(kv_size);
+    const size_t row_bytes = ggml_row_size(layout.type_v, kv_size);
+    std::vector<uint8_t> row_buf(row_bytes);
+    std::vector<float> row_f32(kv_size);
 
     // Build cell index lookup for positions.
     std::vector<uint32_t> cell_indices(positions.size());
@@ -1007,14 +1010,13 @@ bool llama_kv_cache::compacted_prefix_copy_v_head_f32(
         cell_indices[i] = pos_it->second;
     }
 
-    auto to_float = ggml_get_type_traits(layout.type_v)->to_float;
     for (uint32_t j = 0; j < head_dim; ++j) {
-        const size_t col_offset = size_t(head_offset + j) * kv_size * type_size;
-        ggml_backend_tensor_get(v, col_buf.data(), col_offset, col_bytes);
-        to_float(col_buf.data(), col_f32.data(), kv_size);
+        const size_t row_offset = size_t(head_offset + j) * row_bytes;
+        ggml_backend_tensor_get(v, row_buf.data(), row_offset, row_bytes);
+        type_to_float(row_buf.data(), layout.type_v, row_f32.data(), kv_size);
 
         for (size_t i = 0; i < positions.size(); ++i) {
-            out[i * head_dim + j] = col_f32[cell_indices[i]];
+            out[i * head_dim + j] = row_f32[cell_indices[i]];
         }
     }
 

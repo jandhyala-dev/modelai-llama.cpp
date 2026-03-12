@@ -548,6 +548,73 @@ int main() {
         if (!check(state.layers[0].data[3] == 200.0f, "ow+multi: tok1 from C (val1)", rc)) return rc;
     }
 
-    std::fprintf(stderr, "test-kv-compact-self-study: all tests passed\n");
+    // -----------------------------------------------------------------------
+    // Test 18: quantized transposed V byte-offset arithmetic (6b-8)
+    //
+    // Verifies that ggml_row_size() produces correct offsets for accessing
+    // individual rows in a quantized 1D tensor.  This is the invariant
+    // required by compacted_prefix_copy_v_head_f32() for transposed V
+    // with quantized types (Q8_0, Q4_0, etc.).
+    //
+    // Transposed V is a 1D tensor of n_embd_v_gqa * kv_size elements.
+    // Logical row d covers all kv_size positions for embedding dim d.
+    // When kv_size is block-aligned, each row is independently quantized
+    // and starts at byte offset: d * ggml_row_size(type, kv_size).
+    // -----------------------------------------------------------------------
+    {
+        const uint32_t kv_size = 64;   // must be multiple of block_size (32)
+        const uint32_t n_rows  = 4;    // simulate 4 embedding dimensions
+        const uint32_t n_total = n_rows * kv_size;
+
+        const ggml_type type = GGML_TYPE_Q8_0;
+        const int64_t blk = ggml_blck_size(type);
+        if (!check(kv_size % blk == 0, "q8_0 offset: kv_size must be block-aligned", rc)) return rc;
+
+        // Generate known data: row r, position p → value (r+1)*1000 + p
+        std::vector<float> src(n_total);
+        for (uint32_t r = 0; r < n_rows; ++r) {
+            for (uint32_t p = 0; p < kv_size; ++p) {
+                src[r * kv_size + p] = float((r + 1) * 1000 + p);
+            }
+        }
+
+        // Quantize the entire buffer (blocks align at kv_size boundaries)
+        const size_t total_bytes = ggml_row_size(type, n_total);
+        std::vector<uint8_t> quantized(total_bytes);
+        auto from_float = ggml_get_type_traits(type)->from_float_ref;
+        if (!check(from_float != nullptr, "q8_0 offset: from_float_ref must exist", rc)) return rc;
+        from_float(src.data(), quantized.data(), n_total);
+
+        // Verify the CORRECT formula: row_bytes = ggml_row_size(type, kv_size)
+        const size_t row_bytes = ggml_row_size(type, kv_size);
+        if (!check(n_rows * row_bytes == total_bytes,
+                   "q8_0 offset: n_rows * row_bytes must equal total_bytes", rc)) return rc;
+
+        // Verify the OLD formula (kv_size * type_size) was WRONG for quantized types
+        const size_t old_row_bytes = size_t(kv_size) * ggml_type_size(type);
+        if (!check(old_row_bytes != row_bytes,
+                   "q8_0 offset: old formula should differ from correct formula", rc)) return rc;
+
+        // Read back each row using ggml_row_size() offsets and dequantize
+        auto to_float_fn = ggml_get_type_traits(type)->to_float;
+        if (!check(to_float_fn != nullptr, "q8_0 offset: to_float must exist", rc)) return rc;
+
+        std::vector<float> row_f32(kv_size);
+        for (uint32_t r = 0; r < n_rows; ++r) {
+            const size_t offset = size_t(r) * row_bytes;
+            to_float_fn(quantized.data() + offset, row_f32.data(), kv_size);
+
+            for (uint32_t p = 0; p < kv_size; ++p) {
+                const float expected = float((r + 1) * 1000 + p);
+                const float rel_err = std::fabs(row_f32[p] - expected) / std::fabs(expected);
+                if (!check(rel_err < 0.02f,
+                           "q8_0 offset: row " + std::to_string(r) + " pos " + std::to_string(p) +
+                           " expected " + std::to_string(expected) + " got " + std::to_string(row_f32[p]),
+                           rc)) return rc;
+            }
+        }
+    }
+
+    std::fprintf(stderr, "test-kv-compact-self-study: all 18 tests passed\n");
     return 0;
 }
