@@ -505,14 +505,45 @@ production. The assertions are correct guards, not conservative.
 
 ### 2c. M-RoPE Model Testing
 
-**Problem:** Models using `ggml_rope_multi()` (Qwen2-VL, Qwen3-VL, GLM4) have not been tested with compaction. The Q-capture callback should still work since the post-RoPE Qcur is still named `"Qcur-{il}"` and is 3D.
+**Problem:** Models using `ggml_rope_multi()` (Qwen2-VL, Qwen3-VL, GLM4) have not been tested with compaction.
 
-**Solution:** Add a test using a Qwen3-VL model to verify Q-capture works with multi-dimensional RoPE. No code changes expected — just validation.
+**6b-10 validation (completed):** Tested Qwen3-VL-2B-Instruct (Q4_K_M) with both
+selection-only and full solver pipelines. Results:
 
-**Files:**
-- `tests/test-kv-compact-quality.cpp` — Add M-RoPE model variant test
+| Pipeline | Cosine similarity | Threshold | Result |
+|----------|------------------|-----------|--------|
+| Selection-only | -0.13 | 0.95 | FAIL |
+| Full solver | -0.04 | 0.95 | FAIL |
 
-**Effort:** 0.5 day
+**Root cause analysis:**
+1. `can_execute()` at `llama-kv-compacted-prefix-exec.cpp:54` correctly rejects
+   M-RoPE batches via `ubatch.is_pos_2d()` — compacted prefix execution is never
+   activated for M-RoPE models.
+2. However, the pipeline still reclaims live KV cells for the prefix range via
+   `compacted_prefix_reclaim_live_kv()`, deleting 256 of 320 context tokens.
+3. Continuation decode runs without compacted prefix AND without prefix KV →
+   80% context loss → catastrophic quality degradation.
+
+**Code-level findings (all confirm V0 "unsupported" status):**
+- `llama-kv-compacted-prefix-exec.cpp:54`: `is_pos_2d()` guard rejects M-RoPE
+- `llama-kv-compacted-prefix.h:49`: `logical_positions` stores scalar `llama_pos`
+  only, loses M-RoPE spatial coordinates (x, y)
+- `llama-kv-compacted-prefix-exec.cpp:83-131`: mask computation uses scalar
+  position comparisons, ignoring M-RoPE dimensions
+- `llama-kv-cache.cpp:838-870`: position extraction ignores `llama_kv_cell_ext`
+
+**Positive finding:** Q-capture callback and tensor naming are M-RoPE-compatible.
+Both `ggml_rope_ext` and `ggml_rope_multi` produce identically named "Qcur-{il}"
+tensors with the same 3D shape [n_embd_head, n_head_q, n_tokens].
+
+**Required work for M-RoPE support (deferred):**
+1. Store M-RoPE extended positions (`llama_kv_cell_ext`) in `logical_positions`
+2. Update mask computation to use multi-dimensional position comparisons
+3. Remove `is_pos_2d()` guard from `can_execute()` after fixing positions/mask
+4. Add safety check: refuse `reclaim_live_kv` if `can_execute` would reject
+
+**Files:** No code changes — validation only.
+**Effort:** 0.5 day (completed)
 
 ### 2d. Backend Validation
 
