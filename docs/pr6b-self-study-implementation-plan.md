@@ -883,7 +883,243 @@ which already includes `llama-kv-compact-select.h`.
 **Files:** `src/llama-kv-compact-pipeline.h` — removed dead forward declaration
 **Effort:** 15 minutes (completed)
 
-### 5b. Public API Decision
+### 5b. Long-Context Benchmark Campaign + Admin Console Integration (6b-15)
+
+**Problem:** All existing benchmarks run at 4K context where compacted decode is
+slower than baseline (dual-pass attention overhead dominates at small KV sizes).
+The throughput crossover point — where KV memory bandwidth savings exceed the
+dual-pass overhead — has not been measured.  Without this data we cannot claim
+decode speedup on the resume or in product positioning.
+
+Benchmark results are currently CSV files on disk with no central visibility.
+The admin console (`/admin/benchmarks`) has tabs for Rankings, Categories, Runs,
+and Vision — but nothing for KV compaction.  All compaction benchmark data must
+be persisted to Supabase and viewable in the admin console as the first
+requirement for production observability.
+
+**Goal:**
+1. Find the context length at which compaction delivers net positive decode
+   throughput for each supported architecture
+2. Measure quality degradation at longer contexts
+3. Persist all results to Supabase for historical tracking
+4. Display results in a new **KV Compaction** tab on the admin benchmarks page
+
+---
+
+#### A. Test Matrix
+
+**Models (6 total — all compaction-compatible):**
+
+| Model | Params | Architecture | KV Path | Rationale |
+|-------|--------|-------------|---------|-----------|
+| Qwen3-30B-A3B-Instruct | 30B (3B active) | MoE, GQA 8:1 | standard | Production model |
+| Qwen3-14B | 14B | Dense, GQA 5:1 | standard | Dense baseline |
+| Qwen3-8B | 8B | Dense, GQA | standard | Small/fast iteration |
+| Qwen2.5-14B-Instruct | 14B | Dense, GQA | standard | Prior-gen comparison |
+| DeepSeek-R1-Distill-Qwen-14B | 14B | Dense, GQA | standard | Reasoning variant |
+| Gemma-3-12B-IT | 12B | iSWA (mixed) | iSWA base | Tests iSWA compaction path |
+
+**Blocked models (cannot test):**
+- Vision (Qwen3-VL) — M-RoPE guard, no fix planned
+- Qwen3.5-35B-A3B — hybrid recurrent, needs `llama_memory_hybrid`
+- bge-m3 — embedding model (no generation)
+
+**Context sizes:** 4096, 8192, 16384, 32768
+**Compression ratios:** 2x, 4x, 8x
+**Pipelines:** select (primary), solver, omp (smoke only)
+**Total data points:** 6 models × 4 contexts × 3 ratios = 72 minimum
+
+**Metrics per cell:**
+- `logit_cosine` — compacted vs baseline logit cosine similarity
+- `baseline_tok_s` — decode tok/s without compaction
+- `compacted_tok_s` — decode tok/s with compaction active
+- `throughput_delta_pct` — `(compacted - baseline) / baseline × 100`
+- `compaction_time_ms` — wall time for the compaction pipeline
+- `prefill_tok_s` — prefill throughput
+- `active_n_kv` — KV slots after compaction + reclaim
+- `pass` — whether logit cosine meets threshold for this ratio
+
+**Data sources:**
+- QuALITY validation articles (`tests/data/quality-validation.jsonl`, 115 articles,
+  2.7K-8.5K tokens) for 4K-8K natural-text prefill
+- Concatenated QuALITY articles or synthetic SEC-filing text for 16K-32K tests
+
+---
+
+#### B. C++ Test Binary
+
+New file: `tests/test-kv-compact-longctx.cpp`
+- Accepts model path, context size, pipeline, and compression ratio via CLI args
+  and environment variables (`N_CTX`, `PIPELINE`, `RATIO`, `ARTIFACT`)
+- Prefills to target context (QuALITY article text or synthetic SEC-filing text
+  via `build_real_text_prompt()`, reused from 6b-13 workload test)
+- Runs compaction at specified ratio, measures all metrics above
+- Outputs one CSV row per run for aggregation
+- Reuses `llama_kv_compact_cosine_similarity()` and `decode_burst()` patterns
+  from `test-kv-compact-workload.cpp`
+- Build-only in CMake (no auto-run — requires model files)
+
+---
+
+#### C. Benchmark Driver Script
+
+New file: `scripts/bench-kv-compact-longctx.sh`
+- Iterates: models × context sizes × ratios × pipelines
+- Skips combinations that exceed available memory (32GB M2 Pro constraint)
+- Produces combined CSV artifact: `bench-results/<timestamp>-longctx-all.csv`
+- Summary table at end with crossover annotation per model
+- Calls upload script (D) after all runs complete
+
+---
+
+#### D. Supabase Persistence
+
+All benchmark results must be persisted to Supabase for historical tracking and
+admin console display.  This follows the existing pattern in ModelAI where
+benchmark data flows from scripts → Supabase → admin API → admin UI.
+
+**New Supabase migration** (in `ModelAI/apps/marketing/supabase/migrations/`):
+
+```sql
+-- Table: kv_compaction_runs
+-- One row per benchmark campaign execution
+create table kv_compaction_runs (
+  id            uuid primary key default gen_random_uuid(),
+  run_id        text unique not null,         -- e.g. "20260312-143000"
+  started_at    timestamptz not null default now(),
+  completed_at  timestamptz,
+  hardware      text not null,                -- e.g. "Apple M2 Pro 32GB"
+  branch        text not null,                -- git branch
+  commit_sha    text not null,                -- git commit
+  total_models  int not null default 0,
+  total_results int not null default 0,
+  status        text not null default 'running',  -- running | completed | failed
+  notes         text,
+  created_at    timestamptz not null default now()
+);
+
+-- Table: kv_compaction_results
+-- One row per (model × context × ratio × pipeline) measurement
+create table kv_compaction_results (
+  id                    uuid primary key default gen_random_uuid(),
+  run_id                text not null references kv_compaction_runs(run_id),
+  model_name            text not null,
+  model_params_b        real not null,          -- e.g. 14.0, 30.5
+  architecture          text not null,          -- e.g. "dense", "moe", "iswa"
+  pipeline              text not null,          -- select | solver | omp
+  backend               text not null,          -- metal | cuda | cpu
+  n_ctx                 int not null,
+  compression_ratio     int not null,           -- 2, 4, 8
+  compactable_tokens    int not null,
+  compacted_tokens      int not null,
+  continuation_tokens   int not null,
+  logit_cosine          real not null,
+  threshold             real not null,
+  pass                  boolean not null,
+  compaction_time_ms    real not null,
+  solver_time_ms        real not null default 0,
+  query_gen_time_ms     real not null default 0,
+  prefill_tok_s         real,
+  baseline_tok_s        real not null,
+  compacted_tok_s       real not null,
+  throughput_delta_pct  real generated always as
+    (case when baseline_tok_s > 0
+          then ((compacted_tok_s - baseline_tok_s) / baseline_tok_s) * 100
+          else 0 end) stored,
+  active_n_kv           int not null,
+  created_at            timestamptz not null default now()
+);
+
+-- Indexes for admin console queries
+create index idx_kv_compaction_results_run on kv_compaction_results(run_id);
+create index idx_kv_compaction_results_model on kv_compaction_results(model_name);
+create index idx_kv_compaction_results_ctx on kv_compaction_results(n_ctx);
+
+-- RLS: admin-only access (matches existing benchmark table pattern)
+alter table kv_compaction_runs enable row level security;
+alter table kv_compaction_results enable row level security;
+-- Policies follow the same pattern as benchmarks_runs / benchmarks_results
+```
+
+**Upload script:** `scripts/upload-kv-bench-results.sh`
+- Reads combined CSV artifact
+- Creates a `kv_compaction_runs` row with git branch, commit SHA, hardware info
+- Inserts each CSV row as a `kv_compaction_results` row
+- Uses Supabase REST API with service role key (same pattern as existing
+  benchmark ingestion scripts in ModelAI)
+- Requires `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY` env vars
+
+---
+
+#### E. Admin Console — KV Compaction Tab
+
+Add a **"KV Compaction"** tab to the existing benchmarks page at
+`ModelAI/apps/marketing/app/admin/benchmarks/page.tsx`.
+
+The existing page has tabs: Rankings, Categories, Runs, Vision.
+Add: **KV Compaction** as a fifth tab.
+
+**Tab content:**
+
+1. **Summary cards** (top row):
+   - Total runs, total results, last run date, best crossover model
+
+2. **Crossover heatmap** (main view):
+   - Rows: models (6)
+   - Columns: context sizes (4K, 8K, 16K, 32K)
+   - Cells: throughput delta % at best compression ratio
+   - Color: red (slower) → green (faster)
+   - Click cell → detail popover with all 3 ratios
+
+3. **Quality matrix**:
+   - Same grid layout
+   - Cells: logit cosine at each ratio (color-coded by threshold pass/fail)
+
+4. **Run history**:
+   - List of recent `kv_compaction_runs` with date, branch, commit, status
+   - Click → expand to see all results for that run
+
+**New admin API endpoints** (in `ModelAI/apps/marketing/app/api/admin/benchmarks/`):
+- `GET /api/admin/benchmarks/kv-compaction/stats` — summary counts
+- `GET /api/admin/benchmarks/kv-compaction/results?run_id=...` — results for a run
+- `GET /api/admin/benchmarks/kv-compaction/crossover` — crossover analysis
+  (returns per-model min context size where throughput_delta_pct > 0)
+- `GET /api/admin/benchmarks/kv-compaction/runs?limit=10` — recent runs
+
+---
+
+#### F. Expected Outcomes
+
+**Throughput crossover hypothesis:** 8K-16K for dense 14B models, possibly
+lower for 30B MoE (larger KV per layer reduces memory bandwidth headroom).
+
+**Quality at long context:** Logit cosine may degrade at 32K if the compactable
+prefix contains information the model needs to attend to.  QuALITY articles are
+designed to require full-context comprehension — this is a stress test.
+
+**Admin visibility:** After 6b-15, any engineer can view compaction benchmark
+history in the admin console without SSH access to the build machine.
+
+---
+
+#### G. Files
+
+**modelai-llama.cpp (this repo):**
+- `tests/test-kv-compact-longctx.cpp` — Long-context benchmark test
+- `scripts/bench-kv-compact-longctx.sh` — Multi-model benchmark driver
+- `scripts/upload-kv-bench-results.sh` — CSV → Supabase upload
+- `tests/CMakeLists.txt` — Register (build-only, no auto-run)
+- `docs/pr6b-self-study-implementation-plan.md` — Results table (post-run)
+
+**ModelAI (cross-repo, `jandhyala-dev/ModelAI`):**
+- `apps/marketing/supabase/migrations/0XX_kv_compaction_benchmarks.sql` — New tables
+- `apps/marketing/app/api/admin/benchmarks/kv-compaction/` — API endpoints
+  (`stats/route.ts`, `results/route.ts`, `crossover/route.ts`, `runs/route.ts`)
+- `apps/marketing/app/admin/benchmarks/page.tsx` — Add KV Compaction tab
+
+**Effort:** 2-3 days (C++ test + scripts) + 1-2 days (Supabase + admin UI)
+
+### 5c. Public API Decision (deferred, no slice)
 
 **Decision for v0:** Keep compaction as internal API. Do NOT add `LLAMA_API` markers. Rationale:
 - API is still evolving (self-study adds `llama_context *` parameter)
@@ -1705,19 +1941,20 @@ Current `cpu_params` (`common/common.h:69-76`) has affinity mask and priority, b
 | **6b-12** | 3 | Flash + beta documentation (no code) | docs | None | 0.5 day |
 | **6b-13** | 4 | Production workload tests | tests/test-kv-compact-workload.cpp, scripts/ | Medium | 2-3 days |
 | **6b-14** | 5a | Fix duplicate OMP opts struct | llama-kv-compact-pipeline.h | None | 15 min |
-| **6b-15** | 5c | Upstream algorithm + integration docs | docs/ | None | 1-2 days |
-| **6b-16** | 5d | Test hardening (negative cases) | tests/ | None | 0.5 day |
+| **6b-15** | 5b | Long-context benchmark (throughput crossover) | tests/test-kv-compact-longctx.cpp, scripts/ | Medium | 2-3 days |
+| **6b-16** | 5c | Upstream algorithm + integration docs | docs/ | None | 1-2 days |
+| **6b-17** | 5d | Test hardening (negative cases) | tests/ | None | 0.5 day |
 
-**Phase 1 Total: ~14-18 days**
+**Phase 1 Total: ~16-21 days**
 
 ## Phase 2: Compaction Runtime Integration (Part 6)
 
 | Step | Part | What | Files | Risk | Effort |
 |------|------|------|-------|------|--------|
-| **6b-17** | 6a | Wire real compaction state into /props, /metrics | server-context.cpp/.h, llama-kv-cache.h/.cpp | Low | 1 day |
-| **6b-18** | 6b | FA + compaction mode selection + observability | llama-graph.cpp, server-context.cpp | Low | 0.5 day |
-| **6b-19** | 6c | Fix quantized K compaction spec drift | test-kv-compacted-prefix.cpp, test-kv-compact-quality.cpp | Low | 0.5 day |
-| **6b-20** | 6d | Update fork summary support matrix | modelai-fork-summary.md | None | 0.5 hour |
+| **6b-18** | 6a | Wire real compaction state into /props, /metrics | server-context.cpp/.h, llama-kv-cache.h/.cpp | Low | 1 day |
+| **6b-19** | 6b | FA + compaction mode selection + observability | llama-graph.cpp, server-context.cpp | Low | 0.5 day |
+| **6b-20** | 6c | Fix quantized K compaction spec drift | test-kv-compacted-prefix.cpp, test-kv-compact-quality.cpp | Low | 0.5 day |
+| **6b-21** | 6d | Update fork summary support matrix | modelai-fork-summary.md | None | 0.5 hour |
 
 **Phase 2 Total: ~2-3 days**
 
@@ -1804,7 +2041,7 @@ The "last 3D Qcur-prefixed" disambiguation strategy works for all standard atten
 | Risk | Likelihood | Impact | Mitigation |
 |------|-----------|--------|------------|
 | Capability reporting enables compaction on unsupported models | Medium | High | Runtime checks: verify non-SWA cache, standard attention, supported arch before reporting available |
-| Quantized K spec drift breaks existing tests | High | Low | Fix test immediately (6b-19); test now validates acceptance, not rejection |
+| Quantized K spec drift breaks existing tests | High | Low | Fix test immediately (6b-20); test now validates acceptance, not rejection |
 | FA override not visible to product layer | Medium | Medium | Add counter + log + /props field so orchestrator can detect non-FA fallback |
 
 ## Server Hardening Risks (Part 7)
