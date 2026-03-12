@@ -503,10 +503,14 @@ bool llama_kv_compact_self_study_from_live_kv(
 
     auto * seq = kv.get_compacted_prefix()->get_seq(seq_id);
     if (seq == nullptr || !seq->enabled || seq->layers.size() != layouts.size()) {
+        kv.compacted_prefix_clear(seq_id, true);
         return false;
     }
 
     // --- Phase 3: Solver (reuses cached K + queries from Phase 2) ---
+    //
+    // After compacted_prefix_configure(), any failure must roll back the
+    // store to avoid leaving a partially written sequence enabled.
     const auto t_solver_start = std::chrono::steady_clock::now();
     const llama_kv_compact_solver_opts solver_opts = {
         /* lambda           */ config.lambda,
@@ -515,19 +519,28 @@ bool llama_kv_compact_self_study_from_live_kv(
         /* nnls_upper_bound */ 20.0f,
     };
 
-    for (size_t li = 0; li < layouts.size(); ++li) {
+    bool solver_ok = true;
+    uint32_t actual_queries_per_head = 0;
+
+    for (size_t li = 0; li < layouts.size() && solver_ok; ++li) {
         const auto & layout = layouts[li];
         auto & dst_layer = seq->layers[li];
 
-        for (uint32_t head = 0; head < layout.n_head_kv; ++head) {
+        for (uint32_t head = 0; head < layout.n_head_kv && solver_ok; ++head) {
             const auto & entry = layer_cache[li][head];
+
+            // Track actual query count (after regroup + subsample)
+            if (li == 0 && head == 0) {
+                actual_queries_per_head = entry.queries.rows;
+            }
 
             // V extraction (not cached in Phase 2 to save memory)
             std::vector<float> full_v_data;
             if (!kv.compacted_prefix_copy_v_head_f32(
                         (int32_t)layout.layer_id, seq_id, head,
                         prefix_positions, full_v_data)) {
-                return false;
+                solver_ok = false;
+                break;
             }
             llama_kv_compact_matrix full_v(n_prefix_tokens, layout.n_embd_head_v);
             full_v.data = std::move(full_v_data);
@@ -535,7 +548,8 @@ bool llama_kv_compact_self_study_from_live_kv(
             // Gather selected K rows
             llama_kv_compact_matrix compacted_k;
             if (!gather_matrix_rows(entry.k, selected_local, compacted_k)) {
-                return false;
+                solver_ok = false;
+                break;
             }
 
             // NNLS beta fitting
@@ -543,7 +557,8 @@ bool llama_kv_compact_self_study_from_live_kv(
             if (!llama_kv_compact_fit_beta(entry.queries, entry.k,
                                             compacted_k, solver_opts,
                                             beta, nullptr)) {
-                return false;
+                solver_ok = false;
+                break;
             }
 
             // Least-squares V fitting
@@ -553,7 +568,8 @@ bool llama_kv_compact_self_study_from_live_kv(
                             entry.queries, entry.k, full_v,
                             compacted_k, beta, solver_opts,
                             compacted_v)) {
-                    return false;
+                    solver_ok = false;
+                    break;
                 }
                 write_compacted_payload(dst_layer.v_data, layout.type_v,
                                         n_selected, head,
@@ -573,13 +589,18 @@ bool llama_kv_compact_self_study_from_live_kv(
     }
     const auto t_solver_end = std::chrono::steady_clock::now();
 
+    if (!solver_ok) {
+        kv.compacted_prefix_clear(seq_id, true);
+        return false;
+    }
+
     // --- Populate stats ---
     if (stats) {
         stats->generation_time_ms = std::chrono::duration<double, std::milli>(t_gen_end - t_gen_start).count();
         stats->q_capture_time_ms  = std::chrono::duration<double, std::milli>(t_query_end - t_query_start).count();
         stats->solver_time_ms     = std::chrono::duration<double, std::milli>(t_solver_end - t_solver_start).count();
         stats->n_tokens_generated = q_state.layers.empty() ? 0 : q_state.layers[0].n_tokens;
-        stats->n_queries_per_head = config.max_queries_per_kv_head;
+        stats->n_queries_per_head = actual_queries_per_head;
         stats->n_prefix_tokens    = n_prefix_tokens;
         stats->n_selected_tokens  = n_selected;
     }
