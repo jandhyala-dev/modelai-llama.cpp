@@ -639,9 +639,9 @@ Fold per-head beta into the attention mask. This requires per-layer per-head mas
 
 **Not recommended for v0.** Document as future option.
 
-### Option C: Fallback to Non-Flash for Non-Zero Beta (Current Behavior)
+### Option C: Require Non-Flash for Non-Zero Beta (Current Behavior)
 
-The current code already enforces this at two levels:
+The current code enforces this requirement at two levels:
 - Generic: `use_flash_attn = cparams.flash_attn && kq_b == nullptr` at `llama-graph.cpp:1883`
   disables flash whenever a beta bias tensor exists.
 - Compacted-prefix: explicit `GGML_ASSERT(!cparams.flash_attn)` guards on non-zero-beta
@@ -651,11 +651,12 @@ The current code already enforces this at two levels:
 
 ### Decision
 
-**Adopt Option A (wait) + Option C (current fallback).**
+**Adopt Option A (wait) + Option C (current non-flash requirement).**
 
 **6b-12 (completed):** This section IS the deliverable. The flash+beta tradeoff, all three
-options, and the decision are documented above. No code changes needed — current assertions
-already enforce the fallback behavior (non-flash for non-zero beta).
+options, and the decision are documented above. No code changes needed — current code
+requires the non-flash path for non-zero beta; compacted-prefix flash+non-zero-beta is
+guarded by assertions and is not a supported runtime mode.
 
 **Files:** `docs/pr6b-self-study-implementation-plan.md` — this section
 **Effort:** 0 (documentation only, completed)
