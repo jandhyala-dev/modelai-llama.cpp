@@ -2130,6 +2130,8 @@ private:
                 } break;
             case SERVER_TASK_TYPE_COMPACT:
                 {
+                    if (!check_no_mtmd(task.id)) break;
+
                     const auto & cp = task.compact_params;
                     const int id_slot = cp.id_slot;
 
@@ -2171,7 +2173,9 @@ private:
                         break;
                     }
 
-                    const uint32_t live_suffix = std::min((uint32_t) cp.live_suffix_tokens, prompt_tokens);
+                    const uint32_t live_suffix = (cp.live_suffix_tokens > 0)
+                        ? std::min((uint32_t) cp.live_suffix_tokens, prompt_tokens)
+                        : 0u;
                     const uint32_t compactable = prompt_tokens - live_suffix;
                     const llama_pos live_suffix_pos0 = (llama_pos) compactable;
 
@@ -2179,6 +2183,10 @@ private:
                     if (cp.target_tokens > 0) {
                         target_tokens = (uint32_t) cp.target_tokens;
                     } else {
+                        if (cp.ratio < 1.0f) {
+                            send_error(task, "Compression ratio must be >= 1.0", ERROR_TYPE_INVALID_REQUEST);
+                            break;
+                        }
                         target_tokens = std::max(1u, (uint32_t)(compactable / cp.ratio));
                     }
                     if (target_tokens >= compactable) {
@@ -2220,7 +2228,10 @@ private:
                     }
 
                     // Enable execution and optionally reclaim live KV
-                    kv->compacted_prefix_set_execution(seq_id, true);
+                    if (!kv->compacted_prefix_set_execution(seq_id, true)) {
+                        send_error(task, "Failed to enable compacted prefix execution", ERROR_TYPE_SERVER);
+                        break;
+                    }
 
                     bool reclaimed = false;
                     if (cp.reclaim) {
