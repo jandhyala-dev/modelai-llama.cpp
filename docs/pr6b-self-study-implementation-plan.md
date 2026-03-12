@@ -969,8 +969,9 @@ campaign includes baseline + select + solver. OMP W1 smoke rows are additional.
 **`baseline`:** Run prefill + decode burst at full context with NO compaction.
 Emit a CSV row with `pipeline=baseline`, `compression_ratio=1`,
 `compacted_tokens=0`, all compaction/solver/query time fields = `0`,
-`throughput_delta_pct=0`. This row provides the reference decode tok/s for
-computing throughput delta in compacted rows.
+`throughput_delta_pct=0`, and `compacted_decode_tok_s` equal to
+`baseline_decode_tok_s` (no compaction applied). This row provides the
+reference decode tok/s for computing throughput delta in compacted rows.
 
 **`select`:** Top-k position selection (earliest positions by aggregate
 attention score). Zero beta weights. Calls
