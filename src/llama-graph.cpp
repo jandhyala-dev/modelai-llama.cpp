@@ -2086,6 +2086,10 @@ static std::unique_ptr<llm_graph_input_attn_kv> build_attn_inp_kv_impl(
 
         if (mctx_cur->compacted_prefix_active()) {
             const auto n_stream = cparams.kv_unified ? 1 : ubatch.n_seqs_unq;
+            // Note: n_stream > 1 requires fixing ensure_compacted_prefix_layer() to create
+            // K/V/kq_b tensors with ne[3]=n_stream and kq_b ne[1]=n_tps (not n_tokens).
+            // The set_input (data-fill) functions already handle n_stream via dst->ne[3],
+            // but the graph-building tensor shapes are hardcoded to ne[3]=1.
             GGML_ASSERT(n_stream == 1 && "P3 compacted-prefix execution currently supports a single attention stream");
 
             const bool zero_beta = mctx_cur->compacted_prefix_zero_beta();
@@ -2539,6 +2543,9 @@ llm_graph_input_attn_kv_iswa * llm_graph_context::build_attn_inp_kv_iswa() const
 
         if (mctx_cur->get_base()->compacted_prefix_active()) {
             const auto n_stream = cparams.kv_unified ? 1 : ubatch.n_seqs_unq;
+            // Note: n_stream > 1 requires fixing ensure_compacted_prefix_layer() to create
+            // K/V/kq_b tensors with ne[3]=n_stream and kq_b ne[1]=n_tps (not n_tokens).
+            // See standard path comment above.
             GGML_ASSERT(n_stream == 1 && "iSWA compacted-prefix execution currently supports a single attention stream");
 
             const bool zero_beta = mctx_cur->get_base()->compacted_prefix_zero_beta();

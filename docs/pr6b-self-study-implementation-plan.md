@@ -476,15 +476,32 @@ bool llama_kv_compact_self_study_generate(
 
 **Problem:** `llama-graph.cpp:2089` asserts `n_stream == 1` for compacted prefix execution.
 
-**Analysis:** Multiple streams are used for speculative decoding and parallel sampling. The compacted prefix mask already has an `n_stream` dimension (`dst->ne[3]` in `llama-kv-compacted-prefix-exec.cpp:96`), and the beta set_input handles streams (`dst->ne[3]` in `llama-kv-compacted-prefix-exec.cpp:187`). The assertion is conservative.
+**Analysis (corrected):** The original analysis was incomplete. The set_input
+(data-fill) functions (`set_input_mask`, `set_input_beta`) already handle
+`n_stream > 1` via `dst->ne[3]`. However, the graph-building code in
+`ensure_compacted_prefix_layer()` hardcodes `ne[3]=1` for K/V/kq_b tensors.
+When `n_stream > 1`, `ggml_concat` asserts matching `ne[3]` on non-concat
+dimensions, causing a fatal crash. Additionally, `can_execute` rejects
+`n_seqs_unq != 1`, making multi-stream compacted prefix unreachable in
+production. The assertions are correct guards, not conservative.
 
-**Solution:** Remove the assertion and test with n_stream > 1. The exec functions already handle it.
+**6b-9 (completed):** Clarified guardrails + corrected plan assumptions.
+- Added explanatory comments to both assertions documenting graph-path constraints
+- Added `test_multi_stream_mask_and_beta()` proving set_input helpers are
+  multi-stream-ready (data-fill layer is not the blocker)
+
+**Remaining work for full multi-stream support (deferred):**
+1. Thread `n_stream` through `ensure_compacted_prefix_layer()`
+2. Create compacted K/V tensors with `ne[3]=n_stream` (not hardcoded 1)
+3. Fix compacted `kq_b` to use `n_tps = n_tokens/n_stream` for `ne[1]`
+4. Relax `can_execute` to allow `n_seqs_unq > 1` only after graph path is ready
+5. Remove the `n_stream == 1` assertions in both standard and iSWA paths
 
 **Files:**
-- `src/llama-graph.cpp` — Remove P3 single-stream assertion at line 2089
-- `tests/test-kv-compacted-prefix-exec.cpp` — Add multi-stream test case
+- `src/llama-graph.cpp` — Clarified assertion comments (both standard and iSWA paths)
+- `tests/test-kv-compacted-prefix-exec.cpp` — Multi-stream set_input test case
 
-**Effort:** 0.5 day
+**Effort:** 0.5 day (completed); full multi-stream: 1-2 days (deferred)
 
 ### 2c. M-RoPE Model Testing
 
