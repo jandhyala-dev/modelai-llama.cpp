@@ -45,6 +45,32 @@ struct tensor_ctx {
     }
 };
 
+bool make_f32_tensor_2d(tensor_ctx & tc, const char * name,
+                        int64_t d0, int64_t d1,
+                        const float * data) {
+    struct ggml_init_params params = {
+        /* .mem_size   = */ ggml_tensor_overhead() * 2,
+        /* .mem_buffer = */ nullptr,
+        /* .no_alloc   = */ true,
+    };
+    tc.ctx = ggml_init(params);
+    if (!tc.ctx) { return false; }
+
+    tc.t = ggml_new_tensor_2d(tc.ctx, GGML_TYPE_F32, d0, d1);
+    if (!tc.t) { return false; }
+
+    ggml_set_name(tc.t, name);
+
+    tc.be = ggml_backend_cpu_init();
+    if (!tc.be) { return false; }
+
+    tc.buf = ggml_backend_alloc_ctx_tensors(tc.ctx, tc.be);
+    if (!tc.buf) { return false; }
+
+    ggml_backend_tensor_set(tc.t, data, 0, ggml_nbytes(tc.t));
+    return true;
+}
+
 bool make_f32_tensor_3d(tensor_ctx & tc, const char * name,
                         int64_t d0, int64_t d1, int64_t d2,
                         const float * data) {
@@ -249,7 +275,37 @@ int main() {
     }
 
     // -----------------------------------------------------------------------
-    // Test 7: cb_eval callback — receive phase data capture
+    // Test 7: ask-phase regression — 2D pre-reshape Qcur accepted by ask,
+    //         rejected by receive (the new contract from the n_dims fix)
+    // -----------------------------------------------------------------------
+    {
+        // State expects n_embd_head=128, n_head_q=32 (typical Llama dimensions)
+        llama_q_capture_state state;
+        state.reset(1, 128, 32);
+        state.active = true;
+
+        // Pre-reshape Qcur projection: 2D [n_embd=4096, n_tokens=1]
+        // This is what cb(Qcur, "Qcur", il) emits BEFORE ggml_reshape_3d.
+        // n_embd = n_embd_head * n_head_q = 128 * 32 = 4096
+        std::vector<float> proj_data(4096, 1.0f);
+        tensor_ctx tc_2d;
+        if (!check(make_f32_tensor_2d(tc_2d, "Qcur-0", 4096, 1, proj_data.data()),
+                   "ask regression: create 2D pre-reshape tensor", rc)) return rc;
+
+        // Ask phase: must accept (the fix — no more n_dims filter)
+        bool ask_result = llama_q_capture_eval_callback(tc_2d.t, true, &state);
+        if (!check(ask_result, "ask regression: 2D Qcur should be accepted in ask phase", rc)) return rc;
+
+        // Receive phase: must reject because d0=4096 != n_embd_head=128
+        bool recv_result = llama_q_capture_eval_callback(tc_2d.t, false, &state);
+        if (!check(recv_result, "ask regression: receive should return true (continue graph)", rc)) return rc;
+        if (!check(state.layers[0].data.empty(), "ask regression: no data should be appended", rc)) return rc;
+        if (!check(!state.layers[0].has_pending, "ask regression: no pending state", rc)) return rc;
+        if (!check(state.layers[0].n_tokens == 0, "ask regression: no tokens committed", rc)) return rc;
+    }
+
+    // -----------------------------------------------------------------------
+    // Test 8: cb_eval callback — receive phase data capture
     // -----------------------------------------------------------------------
     {
         llama_q_capture_state state;
@@ -271,7 +327,7 @@ int main() {
     }
 
     // -----------------------------------------------------------------------
-    // Test 8: GQA regrouping — non-GQA (n_rep == 1)
+    // Test 9: GQA regrouping — non-GQA (n_rep == 1)
     // -----------------------------------------------------------------------
     {
         llama_q_capture_state state;
@@ -298,7 +354,7 @@ int main() {
     }
 
     // -----------------------------------------------------------------------
-    // Test 9: GQA regrouping — GQA with n_rep == 2
+    // Test 10: GQA regrouping — GQA with n_rep == 2
     // -----------------------------------------------------------------------
     {
         llama_q_capture_state state;
@@ -339,7 +395,7 @@ int main() {
     }
 
     // -----------------------------------------------------------------------
-    // Test 10: subsampling — no-op when rows <= max
+    // Test 11: subsampling — no-op when rows <= max
     // -----------------------------------------------------------------------
     {
         llama_kv_compact_matrix mat(3, 2);
@@ -353,7 +409,7 @@ int main() {
     }
 
     // -----------------------------------------------------------------------
-    // Test 11: subsampling — exact match (rows == max)
+    // Test 12: subsampling — exact match (rows == max)
     // -----------------------------------------------------------------------
     {
         llama_kv_compact_matrix mat(4, 2);
@@ -367,7 +423,7 @@ int main() {
     }
 
     // -----------------------------------------------------------------------
-    // Test 12: subsampling — float stepping (Qwen3-14B-like: 1280 → 1024)
+    // Test 13: subsampling — float stepping (Qwen3-14B-like: 1280 → 1024)
     // -----------------------------------------------------------------------
     {
         // Simulate: n_rep=5, n_tokens=256 → 1280 rows, subsample to 1024
@@ -402,7 +458,7 @@ int main() {
     }
 
     // -----------------------------------------------------------------------
-    // Test 13: subsampling — 2x reduction
+    // Test 14: subsampling — 2x reduction
     // -----------------------------------------------------------------------
     {
         llama_kv_compact_matrix mat(6, 1);
@@ -423,7 +479,7 @@ int main() {
     }
 
     // -----------------------------------------------------------------------
-    // Test 14: regroup with empty capture → returns false
+    // Test 15: regroup with empty capture → returns false
     // -----------------------------------------------------------------------
     {
         llama_q_capture_state state;
@@ -436,7 +492,7 @@ int main() {
     }
 
     // -----------------------------------------------------------------------
-    // Test 15: regroup with out-of-range layer → returns false
+    // Test 16: regroup with out-of-range layer → returns false
     // -----------------------------------------------------------------------
     {
         llama_q_capture_state state;
@@ -453,7 +509,7 @@ int main() {
     }
 
     // -----------------------------------------------------------------------
-    // Test 16: overwrite + multi-step interaction
+    // Test 17: overwrite + multi-step interaction
     //          Step 1: two tensors (overwrite), Step 2: one tensor
     // -----------------------------------------------------------------------
     {
