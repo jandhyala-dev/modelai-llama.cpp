@@ -345,8 +345,17 @@ static longhealth_score run_longhealth_eval(
 
     int correct = 0;
     int total = 0;
+    const int n_lh_entries = (int) entries.size();
 
     for (const auto & entry : entries) {
+        // Progress output every 10 questions.
+        if (total > 0 && total % 10 == 0) {
+            std::printf("  LongHealth %d/%d: correct=%d (%.1f%%)\n",
+                        total, n_lh_entries, correct,
+                        total > 0 ? 100.0f * correct / total : 0.0f);
+            std::fflush(stdout);
+        }
+
         // Build prompt: patient text + question + 5 options + "Answer:"
         std::string prompt_str = entry.patient_text + "\n\nQuestion: " + entry.question + "\n\n";
         for (int i = 0; i < 5; ++i) {
@@ -683,8 +692,17 @@ static quality_score run_quality_eval(
 
     int correct = 0;
     int total = 0;
+    const int n_entries = (int) entries.size();
 
     for (const auto & entry : entries) {
+        // Progress output every 10 questions.
+        if (total > 0 && total % 10 == 0) {
+            std::printf("  QuALITY %d/%d: correct=%d (%.1f%%)\n",
+                        total, n_entries, correct,
+                        total > 0 ? 100.0f * correct / total : 0.0f);
+            std::fflush(stdout);
+        }
+
         // Build prompt: article + question + options + "Answer:"
         std::string prompt_str = entry.article + "\n\nQuestion: " + entry.question + "\n\n";
         for (int i = 0; i < 4; ++i) {

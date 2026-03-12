@@ -86,16 +86,21 @@ echo ""
 CONTEXTS="${CONTEXTS:-4096 8192 16384 32768}"
 RATIOS="${RATIOS:-2 4 8}"
 
-# Pipelines: baseline + compacted.
-PIPELINES="baseline select solver"
-# OMP: W1 smoke only — add if model is small enough.
-MODEL_SIZE=$(stat -f%z "$MODEL" 2>/dev/null || stat -c%s "$MODEL" 2>/dev/null || echo 0)
-if [ "$MODEL_SIZE" -lt 2000000000 ]; then
-    PIPELINES="$PIPELINES omp"
-fi
-# 6b-15b: self_study if enabled.
-if [ "$SELF_STUDY" = "1" ]; then
-    PIPELINES="$PIPELINES self_study"
+# Pipelines: baseline + compacted. Override with PIPELINES env var.
+if [ -n "${PIPELINES:-}" ]; then
+    # Use caller's pipeline list directly.
+    true
+else
+    PIPELINES="baseline select solver"
+    # OMP: W1 smoke only — add if model is small enough.
+    MODEL_SIZE=$(stat -f%z "$MODEL" 2>/dev/null || stat -c%s "$MODEL" 2>/dev/null || echo 0)
+    if [ "$MODEL_SIZE" -lt 2000000000 ]; then
+        PIPELINES="$PIPELINES omp"
+    fi
+    # 6b-15b: self_study if enabled.
+    if [ "$SELF_STUDY" = "1" ]; then
+        PIPELINES="$PIPELINES self_study"
+    fi
 fi
 
 N_PASS=0
@@ -147,9 +152,9 @@ run_one() {
     } &
     local watchdog_pid=$!
 
-    # Wait for the test process (|| true to prevent set -e abort).
-    wait "$bin_pid" 2>/dev/null || true
-    local rc=$?
+    # Wait for the test process. Capture real exit code (|| true masks it).
+    local rc=0
+    wait "$bin_pid" 2>/dev/null || rc=$?
 
     # Kill the watchdog (|| true to prevent set -e abort on already-dead process).
     kill "$watchdog_pid" 2>/dev/null || true
