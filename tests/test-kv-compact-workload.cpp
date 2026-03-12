@@ -64,7 +64,7 @@ struct workload_result {
     std::string model_name;
     std::string pipeline;
     std::string backend;
-    int         prefix_tokens;
+    int         compactable_tokens;
     int         compression_ratio;
     int         compacted_tokens;
     int         continuation_tokens;
@@ -90,7 +90,7 @@ void print_result(const workload_result & r) {
 }
 
 void write_csv_header(FILE * f) {
-    std::fprintf(f, "model,pipeline,backend,prefix_tokens,compression_ratio,"
+    std::fprintf(f, "model,pipeline,backend,compactable_tokens,compression_ratio,"
                     "compacted_tokens,continuation_tokens,logit_cosine,threshold,"
                     "pass,compaction_time_ms,solver_time_ms,query_gen_time_ms,"
                     "baseline_decode_tok_s,compacted_decode_tok_s,active_n_kv\n");
@@ -99,7 +99,7 @@ void write_csv_header(FILE * f) {
 void write_csv_row(FILE * f, const workload_result & r) {
     std::fprintf(f, "%s,%s,%s,%d,%d,%d,%d,%.6f,%.2f,%s,%.1f,%.1f,%.1f,%.1f,%.1f,%u\n",
                  r.model_name.c_str(), r.pipeline.c_str(), r.backend.c_str(),
-                 r.prefix_tokens, r.compression_ratio, r.compacted_tokens,
+                 r.compactable_tokens, r.compression_ratio, r.compacted_tokens,
                  r.continuation_tokens, r.logit_cosine, r.threshold,
                  r.pass ? "PASS" : "FAIL",
                  r.compaction_time_ms, r.solver_time_ms, r.query_gen_time_ms,
@@ -198,6 +198,10 @@ int main(int argc, char ** argv) {
 
     const int live_suffix_pos0 = (int)(prefix_tokens * 0.8);  // compact 80% of prefix
     const int seed_tokens = prefix_tokens;
+
+    if (prefix_tokens < 64 || live_suffix_pos0 < 8) {
+        return fail("n_ctx too small for meaningful workload test (need prefix >= 64, compactable >= 8)");
+    }
 
     // Detect backend.
     std::string backend_name = "cpu";
@@ -376,7 +380,7 @@ int main(int argc, char ** argv) {
         r.model_name          = model_name;
         r.pipeline            = pipeline;
         r.backend             = backend_name;
-        r.prefix_tokens       = live_suffix_pos0;
+        r.compactable_tokens       = live_suffix_pos0;
         r.compression_ratio   = ratio;
         r.compacted_tokens    = target;
         r.continuation_tokens = continuation_tokens;
