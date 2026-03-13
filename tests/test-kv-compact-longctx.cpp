@@ -116,6 +116,56 @@ static float lookup_threshold(const char * /*workload_id*/, int ratio) {
 }
 
 // ---------------------------------------------------------------------------
+// Support classification — encodes the measured envelope.
+// ---------------------------------------------------------------------------
+
+struct support_classification {
+    std::string level;   // "supported" | "experimental" | "blocked"
+    std::string reason;
+};
+
+static support_classification classify_support(
+        const std::string & pipeline,
+        int n_ctx,
+        int ratio) {
+    // Self-study: blocked until quality is proven.
+    if (pipeline == "self_study") {
+        return {"blocked", "self_study_quality_unproven"};
+    }
+
+    // OMP: experimental (insufficient benchmark evidence).
+    if (pipeline == "omp") {
+        return {"experimental", "insufficient_benchmark_evidence"};
+    }
+
+    // Solver: experimental (insufficient benchmark evidence).
+    if (pipeline == "solver") {
+        return {"experimental", "insufficient_benchmark_evidence"};
+    }
+
+    // Baseline: always supported (it's the reference).
+    if (pipeline == "baseline") {
+        return {"supported", ""};
+    }
+
+    // Select pipeline: context + ratio dependent.
+    if (pipeline == "select") {
+        // 4K at high ratios: experimental.
+        if (n_ctx <= 4096 && ratio > 4) {
+            return {"experimental", "4k_high_ratio_quality_unproven"};
+        }
+        // 32K: experimental (throughput regresses).
+        if (n_ctx >= 32768) {
+            return {"experimental", "32k_throughput_regression"};
+        }
+        // 8K-16K at any ratio, or 4K at ratio <= 4: supported.
+        return {"supported", ""};
+    }
+
+    return {"experimental", "unknown_pipeline"};
+}
+
+// ---------------------------------------------------------------------------
 // QuALITY MC entry
 // ---------------------------------------------------------------------------
 
@@ -486,6 +536,11 @@ struct longctx_result {
     float       threshold_value;
     bool        pass;
 
+    // support classification
+    std::string support_level;    // "supported", "experimental", "blocked"
+    std::string support_reason;   // human-readable reason for classification
+    bool        throughput_pass;  // true if compacted >= baseline throughput
+
     // safety
     bool        fallback_used;
     std::string fallback_reason;
@@ -507,7 +562,8 @@ static void write_csv_header(FILE * f) {
         "quality_correct,quality_total,quality_accuracy,quality_baseline_accuracy,"
         "longhealth_correct,longhealth_total,longhealth_accuracy,longhealth_baseline_accuracy,"
         "threshold_name,threshold_value,pass,fallback_used,fallback_reason,"
-        "crash,error_text,artifact_path\n");
+        "crash,error_text,artifact_path,"
+        "support_level,support_reason,throughput_pass\n");
 }
 
 static void write_csv_row(FILE * f, const longctx_result & r) {
@@ -523,7 +579,8 @@ static void write_csv_row(FILE * f, const longctx_result & r) {
         "%s,%s,%s,%s,"                        // quality_correct..quality_baseline_accuracy
         "%s,%s,%s,%s,"                        // longhealth_correct..longhealth_baseline_accuracy
         "%s,%.4f,%s,%s,%s,"                   // threshold_name..fallback_reason
-        "%s,%s,%s\n",                         // crash..artifact_path
+        "%s,%s,%s,"                           // crash..artifact_path
+        "%s,%s,%s\n",                         // support_level..throughput_pass
         r.schema_version, r.run_id.c_str(),
         r.workload_id.c_str(), r.workload_name.c_str(), r.dataset_id.c_str(),
         r.model_name.c_str(), r.model_params_b,
@@ -548,7 +605,9 @@ static void write_csv_row(FILE * f, const longctx_result & r) {
         r.pass ? "true" : "false",
         r.fallback_used ? "true" : "false", r.fallback_reason.c_str(),
         r.crash ? "true" : "false", r.error_text.c_str(),
-        r.artifact_path.c_str());
+        r.artifact_path.c_str(),
+        r.support_level.c_str(), r.support_reason.c_str(),
+        r.throughput_pass ? "true" : "false");
 }
 
 // ---------------------------------------------------------------------------
@@ -931,6 +990,9 @@ int main(int argc, char ** argv) {
                   "%s:logit_cosine:%d", wid, ratio);
     const std::string threshold_name = threshold_name_buf;
 
+    // Support classification.
+    const auto sc = classify_support(pipeline, n_ctx, ratio);
+
     // Artifact path.
     std::string artifact_path;
     if (env_artifact) {
@@ -969,7 +1031,7 @@ int main(int argc, char ** argv) {
 
     // --- Initialize result ---
     longctx_result result = {};
-    result.schema_version = 1;
+    result.schema_version = 2;
     result.run_id = run_id;
     result.workload_id = wid;
     result.workload_name = wname;
@@ -1034,6 +1096,9 @@ int main(int argc, char ** argv) {
         result.threshold_name = "";
         result.threshold_value = 0.0f;
         result.pass = true;
+        result.support_level = "supported";
+        result.support_reason = "";
+        result.throughput_pass = true;
 
         // QuALITY baseline accuracy.
         if (do_quality) {
@@ -1255,6 +1320,10 @@ int main(int argc, char ** argv) {
         result.threshold_name = threshold_name;
         result.threshold_value = threshold_value;
         result.pass = result.logit_cosine >= threshold_value;
+        result.support_level = sc.level;
+        result.support_reason = sc.reason;
+        // INFORMATIONAL ONLY — do NOT use to gate result.pass.
+        result.throughput_pass = (result.throughput_delta_pct > -60.0);
 
         // QuALITY MC evaluation (compacted).
         if (do_quality) {
