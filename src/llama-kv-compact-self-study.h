@@ -27,6 +27,15 @@ struct llama_kv_compact_self_study_stats {
     uint32_t n_queries_per_head   = 0;
     uint32_t n_prefix_tokens      = 0;
     uint32_t n_selected_tokens    = 0;
+
+    // diagnostics (Sprint 2)
+    uint32_t n_layers_with_q      = 0;  // layers where Q was captured
+    uint32_t n_dim_mismatches     = 0;  // tensors skipped due to dim mismatch
+    float    q_norm_mean          = 0.0f;  // mean L2 norm of captured Q rows
+    float    k_norm_mean          = 0.0f;  // mean L2 norm of extracted K rows
+    float    beta_norm_mean       = 0.0f;  // mean L2 norm of fitted beta vectors
+    float    beta_sparsity        = 0.0f;  // fraction of log-beta values near zero (weight ~ 1.0)
+    float    fit_residual_mean    = 0.0f;  // mean relative error from fit_beta
 };
 
 // Q-capture state (user_data for cb_eval callback)
