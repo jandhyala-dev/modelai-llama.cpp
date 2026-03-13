@@ -30,29 +30,39 @@ against the `pipeline=baseline` row's `baseline_decode_tok_s`.
 | select | supported (within context envelope) | Strong quality, proven throughput |
 | solver | experimental | Insufficient benchmark evidence |
 | omp | experimental | Insufficient benchmark evidence |
-| self_study | blocked | Catastrophic quality failure (0.11-0.71 cosine) |
+| self_study | experimental | Quality proven (0.988 cosine post Q/K norm fix); pipeline overhead (~22min at 4K) limits throughput |
 
-## Self-Study Root Cause (Sprint 2 Diagnostics)
+## Self-Study Root Cause (Sprint 2 Diagnostics — Resolved)
 
-**Status:** blocked. Diagnostic instrumentation added (Sprint 2a-2d) but runtime
-analysis pending. The following diagnostics are now available when running
-self_study pipeline with stats enabled:
+**Status:** experimental. Root cause identified and fixed (bcced551).
 
-- `n_layers_with_q` / `n_dim_mismatches` — detect silent Q capture failures
-- `q_norm_mean` / `k_norm_mean` — detect Q/K space mismatch (scale or RoPE)
-- `beta_norm_mean` / `beta_sparsity` — detect degenerate solver solutions
-- `fit_residual_mean` — detect solver inability to reconstruct attention
+**Root cause:** Q/K scale mismatch. Self-study captures post-RoPE Q from
+autoregressive generation via `cb_eval`. Q norms (~16) are ~1.8x smaller
+than K norms (~28) due to different learned scales in W_q vs W_k projections.
+Without normalization, the attention softmax peaks incorrectly and the NNLS
+solver produces extreme beta weights (beta_norm ~356).
 
-**Hypothesized root causes (to be confirmed by diagnostic run):**
-1. Q/K scale mismatch — self-study Q vectors captured post-RoPE may have
-   different normalization than K vectors extracted from the live cache
-2. Solver instability — NNLS with 1024 queries and high-dimensional inputs
-   may produce degenerate beta vectors
-3. Tensor variant mismatch — dim filter may be rejecting the correct
-   post-RoPE tensor while accepting an intermediate
+**Fix:** Per-head Q normalization — scale Q rows by `k_norm / q_norm` before
+attention score computation. Diagnostics log pre-normalization values.
 
-**Next steps:** Run `PIPELINE=self_study RATIO=2 ./build/bin/test-kv-compact-longctx
--m models/test/Qwen3-8B-Q4_K_M.gguf -c 4096` and read diagnostic output.
+**Results (Qwen3-8B, 4K/4x):**
+| Metric | Before fix | After fix |
+|--------|-----------|-----------|
+| cosine | -0.458 / 0.710 | **0.988** |
+| beta_norm | 356 / 536 | 285 |
+| fit_residual | 0.144 / 0.167 | 0.063 |
+
+**Other hypotheses ruled out:**
+- Tensor variant mismatch: `layers_with_q=36` (all layers captured Q correctly).
+  The 7344 dim mismatches are pre-reshape 2D Qcur projections [4096,1] being
+  correctly rejected; post-reshape 3D tensors [128,32,1] are accepted.
+- Solver instability: fit_residual dropped from 14-17% to 6.3% after Q
+  normalization, confirming the solver works correctly when given properly
+  scaled inputs.
+
+**Remaining limitation:** Pipeline overhead (~22 min at 4K) from 256-token
+autoregressive generation + NNLS solver across all heads. Decode throughput
+after compaction is similar to OMP, but the compaction step itself is slow.
 
 ## Larger Models
 

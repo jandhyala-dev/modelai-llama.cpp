@@ -2174,8 +2174,8 @@ private:
 
                     // Support envelope warnings (warn, do not block).
                     if (method == "self_study") {
-                        SRV_WRN("compaction method '%s' is currently blocked "
-                                "(quality unproven) — proceeding at caller's risk\n", method.c_str());
+                        SRV_WRN("compaction method '%s' is experimental "
+                                "(quality proven but pipeline overhead is high) — proceeding at caller's risk\n", method.c_str());
                     }
 
                     // Compute target_tokens and live_suffix_pos0 from slot state
