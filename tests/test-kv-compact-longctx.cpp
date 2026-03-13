@@ -509,7 +509,7 @@ struct longctx_result {
     double      first_token_ms;
     double      baseline_decode_tok_s;
     double      compacted_decode_tok_s;
-    double      throughput_delta_pct;
+    double      in_run_throughput_delta_pct;
 
     // KV bytes (nullable)
     uint32_t    active_n_kv;
@@ -557,7 +557,7 @@ static void write_csv_header(FILE * f) {
         "compression_ratio,compacted_tokens,continuation_tokens,"
         "prefill_ms,prefill_tok_s,compaction_time_ms,query_generation_time_ms,"
         "solver_time_ms,first_token_ms,baseline_decode_tok_s,compacted_decode_tok_s,"
-        "throughput_delta_pct,active_n_kv,allocated_kv_bytes,reclaimed_kv_bytes,"
+        "in_run_throughput_delta_pct,active_n_kv,allocated_kv_bytes,reclaimed_kv_bytes,"
         "logit_cosine,task_metric_name,task_metric_value,"
         "quality_correct,quality_total,quality_accuracy,quality_baseline_accuracy,"
         "longhealth_correct,longhealth_total,longhealth_accuracy,longhealth_baseline_accuracy,"
@@ -574,7 +574,7 @@ static void write_csv_row(FILE * f, const longctx_result & r) {
         "%d,%d,%d,"                           // compression_ratio..continuation_tokens
         "%.1f,%.1f,%.1f,%.1f,"               // prefill_ms..query_generation_time_ms
         "%.1f,%.1f,%.1f,%.1f,"               // solver_time_ms..compacted_decode_tok_s
-        "%.4f,%u,%s,%s,"                      // throughput_delta_pct..reclaimed_kv_bytes
+        "%.4f,%u,%s,%s,"                      // in_run_throughput_delta_pct..reclaimed_kv_bytes
         "%.6f,%s,%s,"                         // logit_cosine..task_metric_value
         "%s,%s,%s,%s,"                        // quality_correct..quality_baseline_accuracy
         "%s,%s,%s,%s,"                        // longhealth_correct..longhealth_baseline_accuracy
@@ -593,7 +593,7 @@ static void write_csv_row(FILE * f, const longctx_result & r) {
         r.query_generation_time_ms,
         r.solver_time_ms, r.first_token_ms,
         r.baseline_decode_tok_s, r.compacted_decode_tok_s,
-        r.throughput_delta_pct, r.active_n_kv,
+        r.in_run_throughput_delta_pct, r.active_n_kv,
         r.allocated_kv_bytes.c_str(), r.reclaimed_kv_bytes.c_str(),
         r.logit_cosine,
         r.task_metric_name.c_str(), r.task_metric_value.c_str(),
@@ -1090,7 +1090,7 @@ int main(int argc, char ** argv) {
         result.compaction_time_ms = 0.0;
         result.query_generation_time_ms = 0.0;
         result.solver_time_ms = 0.0;
-        result.throughput_delta_pct = 0.0;
+        result.in_run_throughput_delta_pct = 0.0;
         result.active_n_kv = prefix_tokens + continuation_tokens;
         result.logit_cosine = 1.0f;
         result.threshold_name = "";
@@ -1311,7 +1311,7 @@ int main(int argc, char ** argv) {
 
         // Throughput delta (emitted by runner, not inferred).
         if (result.baseline_decode_tok_s > 0) {
-            result.throughput_delta_pct =
+            result.in_run_throughput_delta_pct =
                 ((result.compacted_decode_tok_s - result.baseline_decode_tok_s) /
                  result.baseline_decode_tok_s) * 100.0;
         }
@@ -1323,7 +1323,7 @@ int main(int argc, char ** argv) {
         result.support_level = sc.level;
         result.support_reason = sc.reason;
         // INFORMATIONAL ONLY — do NOT use to gate result.pass.
-        result.throughput_pass = (result.throughput_delta_pct > -60.0);
+        result.throughput_pass = (result.in_run_throughput_delta_pct > -60.0);
 
         // QuALITY MC evaluation (compacted).
         if (do_quality) {
@@ -1410,7 +1410,7 @@ int main(int argc, char ** argv) {
         std::printf("  compact=%.1fms | baseline=%.1f tok/s | compacted=%.1f tok/s | delta=%.2f%%\n",
                     result.compaction_time_ms,
                     result.baseline_decode_tok_s, result.compacted_decode_tok_s,
-                    result.throughput_delta_pct);
+                    result.in_run_throughput_delta_pct);
         std::printf("  active_n_kv=%u\n", result.active_n_kv);
     }
 
