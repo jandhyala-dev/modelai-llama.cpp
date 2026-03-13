@@ -300,24 +300,37 @@ cmake --build build --target test-kv-compact-longctx llama-server -j$(sysctl -n 
 
 **File:** `src/llama-kv-compact-self-study.cpp`
 
-**Add warning on dimension mismatch skip (line 53):**
+**Add warning and dim-mismatch counter on dimension mismatch skip (line 53):**
 ```cpp
     if (d0 != lq.n_embd_head || d1 != lq.n_head_q) {
         LLAMA_LOG_WARN("q_capture: skipping tensor '%s' — dims [%d,%d] != expected [%d,%d]\n",
                        t->name, (int)d0, (int)d1, (int)lq.n_embd_head, (int)lq.n_head_q);
+        lq.n_dim_mismatches++;
         return;
     }
 ```
 
-**Add tensor name tracking to capture state. In the layer struct (wherever `llama_q_capture_layer` is defined):**
+**File:** `src/llama-kv-compact-self-study.h`
+
+**Add dim-mismatch counter and tensor name tracking to `layer_q` (nested struct inside `llama_q_capture_state`, line 43):**
 ```cpp
-    std::string last_accepted_tensor_name;  // name of last tensor that passed dim check
+    uint32_t    n_dim_mismatches = 0;             // tensors skipped due to dim mismatch
+    std::string last_accepted_tensor_name;        // name of last tensor that passed all checks
 ```
 
-**Set it after successful capture (~line 57):**
+Also reset the counter in `llama_q_capture_state::reset()` (self-study.cpp line 26, inside the loop):
+```cpp
+        lq.n_dim_mismatches = 0;
+        lq.last_accepted_tensor_name.clear();
+```
+
+**Set tensor name after ALL checks pass (after the F32 type check at line 62, before the pending/append block at line 74):**
 ```cpp
     lq.last_accepted_tensor_name = t->name;
 ```
+Note: this must be AFTER the `t->type != GGML_TYPE_F32` check (line 59-62),
+not between the dim check and the type check, to avoid recording tensors that
+are rejected for being non-F32.
 
 ### Slice 2b — Diagnostic stats extension
 
@@ -349,27 +362,7 @@ struct llama_kv_compact_self_study_stats {
 
 **File:** `src/llama-kv-compact-self-study.cpp`
 
-In the main pipeline function (after Q capture, after solver), compute and populate:
-
-```cpp
-// After Q capture finalize:
-stats->n_layers_with_q = 0;
-stats->n_dim_mismatches = 0;
-for (int il = 0; il < q_state.n_layers; ++il) {
-    if (q_state.layers[il].n_tokens > 0) {
-        stats->n_layers_with_q++;
-    }
-}
-
-// After GQA regroup + solver for each head, accumulate:
-//   q_norm_mean: compute L2 norm of each Q row, average
-//   k_norm_mean: compute L2 norm of each K row, average
-//   beta_norm_mean: L2 norm of fitted beta vector
-//   beta_sparsity: count(|beta[i]| < 1e-6) / len(beta)
-//   fit_residual_mean: from solver output (relative error)
-```
-
-The exact code for norm computation:
+**Helper function (add as static in `src/llama-kv-compact-self-study.cpp`, before the pipeline function):**
 ```cpp
 static float compute_row_norm_mean(const llama_kv_compact_matrix & m) {
     if (m.rows == 0 || m.cols == 0) return 0.0f;
@@ -386,48 +379,113 @@ static float compute_row_norm_mean(const llama_kv_compact_matrix & m) {
 }
 ```
 
+**Populate diagnostics in the pipeline function `llama_kv_compact_self_study_from_live_kv`.**
+
+**Step 1: After Q capture (after line 446, before Phase 2), inside `if (stats)`:**
+```cpp
+    if (stats) {
+        stats->n_layers_with_q = 0;
+        stats->n_dim_mismatches = 0;
+        for (int il = 0; il < q_state.n_layers; ++il) {
+            if (q_state.layers[il].n_tokens > 0) {
+                stats->n_layers_with_q++;
+            }
+            stats->n_dim_mismatches += q_state.layers[il].n_dim_mismatches;
+        }
+    }
+```
+Note: `n_dim_mismatches` is summed from the per-layer counters added in Slice 2a.
+
+**Step 2: Inside the Phase 2 loop (after `llama_kv_compact_accumulate_attention_scores` call, line ~488), accumulate Q and K norms:**
+```cpp
+            // Accumulate Q/K norms for diagnostics
+            if (stats) {
+                q_norm_sum += compute_row_norm_mean(entry.queries);
+                k_norm_sum += compute_row_norm_mean(entry.k);
+                n_heads_seen++;
+            }
+```
+Declare accumulators before the Phase 2 loop:
+```cpp
+    double q_norm_sum = 0.0, k_norm_sum = 0.0;
+    double beta_norm_sum = 0.0, beta_sparsity_sum = 0.0;
+    double fit_residual_sum = 0.0;
+    uint32_t n_heads_seen = 0;
+```
+
+**Step 3: Inside the Phase 3 solver loop (after `fit_beta` succeeds, line ~566), accumulate beta diagnostics:**
+```cpp
+            // Beta diagnostics
+            if (stats) {
+                // Beta norm (L2 of the log-space beta vector)
+                float beta_norm_sq = 0.0f;
+                uint32_t beta_zero_count = 0;
+                for (uint32_t bi = 0; bi < (uint32_t)beta.size(); ++bi) {
+                    beta_norm_sq += beta[bi] * beta[bi];
+                    if (std::fabs(beta[bi]) < 1e-6f) beta_zero_count++;
+                }
+                beta_norm_sum += std::sqrt(beta_norm_sq);
+                beta_sparsity_sum += (float)beta_zero_count / std::max<uint32_t>(1, (uint32_t)beta.size());
+            }
+```
+
+**Step 4: For `fit_residual_mean`, use the existing `partition_sum_relative_error` output parameter from `fit_beta`.**
+The pipeline currently passes `nullptr` (line 562). Change to:
+```cpp
+            float head_residual = 0.0f;
+            if (!llama_kv_compact_fit_beta(entry.queries, entry.k,
+                                            compacted_k, solver_opts,
+                                            beta, stats ? &head_residual : nullptr)) {
+                solver_ok = false;
+                break;
+            }
+            if (stats) {
+                fit_residual_sum += head_residual;
+            }
+```
+This reuses the existing residual computation inside `fit_beta`
+(lines 302-313 of `llama-kv-compact-solver.cpp`) — do NOT reimplement it.
+
+**Step 5: After both Phase 2 and Phase 3 loops complete, finalize averages (inside the existing `if (stats)` block at line ~601):**
+```cpp
+        if (n_heads_seen > 0) {
+            stats->q_norm_mean       = (float)(q_norm_sum / n_heads_seen);
+            stats->k_norm_mean       = (float)(k_norm_sum / n_heads_seen);
+            stats->beta_norm_mean    = (float)(beta_norm_sum / n_heads_seen);
+            stats->beta_sparsity     = (float)(beta_sparsity_sum / n_heads_seen);
+            stats->fit_residual_mean = (float)(fit_residual_sum / n_heads_seen);
+        }
+```
+
 ### Slice 2d — Log diagnostics after self-study run
 
 **File:** `src/llama-kv-compact-self-study.cpp`
 
-At the end of the pipeline function, after stats are populated:
+At the end of the pipeline function, **inside the existing `if (stats)` block**
+(line ~601). This MUST be inside the null guard — `stats` can be `nullptr` per
+the function signature's default parameter:
 ```cpp
-LLAMA_LOG_INFO("self_study diagnostics: layers_with_q=%u dim_mismatches=%u "
-               "q_norm=%.4f k_norm=%.4f beta_norm=%.4f beta_sparsity=%.4f "
-               "fit_residual=%.6f\n",
-               stats->n_layers_with_q, stats->n_dim_mismatches,
-               stats->q_norm_mean, stats->k_norm_mean,
-               stats->beta_norm_mean, stats->beta_sparsity,
-               stats->fit_residual_mean);
+        LLAMA_LOG_INFO("self_study diagnostics: layers_with_q=%u dim_mismatches=%u "
+                       "q_norm=%.4f k_norm=%.4f beta_norm=%.4f beta_sparsity=%.4f "
+                       "fit_residual=%.6f\n",
+                       stats->n_layers_with_q, stats->n_dim_mismatches,
+                       stats->q_norm_mean, stats->k_norm_mean,
+                       stats->beta_norm_mean, stats->beta_sparsity,
+                       stats->fit_residual_mean);
 ```
 
 ### Slice 2e — Solver per-head residual output
 
-**File:** `src/llama-kv-compact-solver.cpp`
+**No new code required in `src/llama-kv-compact-solver.cpp`.**
 
-In `compute_exp_scores` or `fit_beta`, after NNLS completes, compute and store:
-```cpp
-// After NNLS solve for beta:
-float residual = 0.0f;
-// ... compute ||A*beta - b||^2 / ||b||^2 ...
-// Store in pipeline_stats or return via output parameter
-```
+`llama_kv_compact_fit_beta` already computes the partition-sum relative error
+and exposes it via the optional `float * partition_sum_relative_error` parameter
+(solver.cpp lines 302-313). The metric is `mean(|pred - target| / max(target, 1e-6))`
+across all query rows — this is exactly the `fit_residual_mean` diagnostic.
 
-The exact residual computation:
-```cpp
-// After NNLS: beta is fitted, compute reconstruction error
-double sum_sq_err = 0.0;
-double sum_sq_target = 0.0;
-for (uint32_t qi = 0; qi < queries.rows; ++qi) {
-    // target = exp_scores[qi] (original attention distribution)
-    // reconstructed = compacted_exp_scores[qi] * beta
-    // ... dot product ...
-    double err = target - reconstructed;
-    sum_sq_err += err * err;
-    sum_sq_target += target * target;
-}
-float relative_residual = (sum_sq_target > 0) ? (float)(sum_sq_err / sum_sq_target) : 0.0f;
-```
+The only change is in the caller (`src/llama-kv-compact-self-study.cpp`):
+pass a non-null `float*` instead of `nullptr`. This is already specified in
+Slice 2c Step 4 above. No solver modifications needed.
 
 ### Slice 2f — Root cause analysis
 
@@ -664,12 +722,12 @@ After all three sprints:
 
 ## Reviewer 1 Verdict
 
-**Verdict: CONDITIONAL PASS** — 3 Critical findings fixed in-place, 3 Major findings fixed in-place, 2 Minor findings noted. Plan is implementable after these corrections.
+**Verdict: CONDITIONAL PASS** — 3 Critical findings fixed in-place, 6 Major findings fixed in-place, 5 Minor findings noted. All sprints reviewed. Plan is implementable after these corrections.
 
 ### Scope
 
-**In scope:** Sprint 1 (Slices 1a-1e), Sprint 3 (Slices 3a-3d), disprove-it pass across all sprints.
-**Out of scope:** Sprint 2 implementation details (assigned to Reviewer 2).
+**In scope:** All sprints — Sprint 1 (Slices 1a-1e), Sprint 2 (Slices 2a-2g), Sprint 3 (Slices 3a-3d). Full disprove-it pass across all sprints.
+**Out of scope:** Upstream llama.cpp code quality; prior PR reviews; ModelAI repo integration.
 **Scope leak:** None detected — all changes are within declared scope.
 
 ### Findings (all fixed in this commit)
@@ -718,6 +776,36 @@ The original instructions for adding CSV columns were ambiguous about how to mer
 
 If Sprint 3 promotes 32K to "supported", the hardcoded `max_context` in Slice 1c must also update. Added explicit cross-sprint dependency note in Slice 3c.
 
+#### F-R1-9 (Major → Fixed): `n_dim_mismatches` stat never populated
+
+Slice 2b added `n_dim_mismatches` to the stats struct and Slice 2c initialized it to 0, but no code incremented it. The capture state `layer_q` struct had no dim-mismatch counter, and Slice 2a only added a warning log.
+
+**Fix applied:** Added `n_dim_mismatches` counter to `layer_q`, increment on dim-check failure in `append_from_tensor`, sum across layers into `stats->n_dim_mismatches` in Slice 2c.
+
+#### F-R1-10 (Major → Fixed): Slice 2e duplicates existing residual output
+
+`fit_beta` already computes `partition_sum_relative_error` (solver.cpp lines 302-313) and exposes it via an optional `float*` parameter. The plan proposed reimplementing this computation with incomplete pseudo-code. The pipeline call at line 562 passes `nullptr` — changing it to a non-null pointer is the correct fix.
+
+**Fix applied:** Rewrote Slice 2e to reference existing `fit_beta` parameter. Moved caller change to Slice 2c Step 4. Removed pseudo-code reimplementation.
+
+#### F-R1-11 (Major → Fixed): Slice 2c norm accumulation was pseudo-code
+
+The plan provided `compute_row_norm_mean` but described norm, sparsity, and residual accumulation as comments, not verbatim implementation. The plan is intended to be applied verbatim.
+
+**Fix applied:** Rewrote Slice 2c with 5 explicit steps, accumulator declarations, insertion points with line references, and complete code for beta norm/sparsity/residual accumulation.
+
+#### F-R1-12 (Minor, noted): Wrong struct name in Slice 2a
+
+Plan referenced `llama_q_capture_layer` — actual name is `layer_q` nested inside `llama_q_capture_state` (header line 43). Corrected.
+
+#### F-R1-13 (Minor, noted): Tensor name set before F32 type check
+
+Plan said "after successful capture (~line 57)" but line 57 is between the dim check and the F32 type check (line 59). Setting the name there records tensors rejected for non-F32 type. Moved to after the type check (after line 62).
+
+#### F-R1-14 (Minor, noted): Diagnostic log placement relative to null guard
+
+Plan's diagnostic log in Slice 2d uses `stats->` fields but didn't specify placement relative to the `if (stats)` null guard (line 601). `stats` defaults to `nullptr` per function signature. Placed outside the guard, this is a nullptr dereference. Explicitly specified placement inside the guard.
+
 ### Traces Executed
 
 #### Production trace (Sprint 1, Slice 1a)
@@ -751,10 +839,40 @@ If Sprint 3 promotes 32K to "supported", the hardcoded `max_context` in Slice 1c
   3. Graph build → cache miss (version 2 != 3) → re-materialize
 - **Result:** Cache correctly invalidated because bump is in configure, not set_execution.
 
-#### Integer arithmetic trace (Sprint 1)
+#### Production trace (Sprint 2, Slice 2c)
+- **Model:** Qwen3-8B-Q4_K_M, self_study pipeline, 8K context
+- **Q capture:** `n_generate=256`, `n_head_q=32`, `n_embd_head=128`, `n_head_kv=8`
+- **GQA regroup for h_kv=0:** `n_rep = 32/8 = 4`, `q_head_start=0`, `q_head_end=4`
+  output rows = `4 * 256 = 1024`, cols = 128
+- **Subsample:** `max_queries_per_kv_head=1024`, `1024 <= 1024` → no subsampling needed
+- **Norm accumulation:** `compute_row_norm_mean(queries)` iterates 1024 rows × 128 cols → valid
+- **fit_beta call:** passes `&head_residual` instead of `nullptr` → residual populated
+- **Phase 3 beta diagnostics:** `beta.size() = n_selected`, iterates to compute norm and sparsity
+- **Stats finalization:** `n_heads_seen = 8 layers × 8 KV heads = 64` (if all layers in layouts) → means divide by 64
+
+#### Boundary trace (Sprint 2, Slice 2a)
+- **Case:** Tensor with matching dims but non-F32 type
+- **`append_from_tensor` called with:** `d0=128, d1=32` (matches), `t->type=GGML_TYPE_F16`
+- **Dim check (line 53):** passes (d0 == n_embd_head, d1 == n_head_q)
+- **Pre-fix path:** `last_accepted_tensor_name` would be set here — **wrong** (tensor not captured)
+- **Post-fix path:** name NOT set yet, F32 check at line 59 fails → returns → name NOT recorded → **correct**
+- **`n_dim_mismatches`:** NOT incremented (type mismatch, not dim mismatch) → correct, this is a separate failure mode
+
+#### Adversarial trace (Sprint 2, Slices 2a/2c)
+- **Case:** Model with `n_head_q=40, n_head_kv=8` (Qwen3-14B, n_rep=5)
+- **GQA regroup:** `n_rep=5, q_head_start=0, q_head_end=5`, output rows = `5 * 256 = 1280`
+- **Subsample:** `1280 > 1024`, `step = 1280.0/1024.0 = 1.25`
+  - `i=0: src_row=0`, `i=1: src_row=1`, ..., `i=4: src_row=5` (1.25*4=5.0)
+  - Float step correctly samples across all 5 GQA head groups
+- **`n_dim_mismatches` across layers:** If layer 0 has 3 mismatches and layer 1 has 1, Slice 2c sums to `stats->n_dim_mismatches = 4` → correct
+
+#### Integer arithmetic trace (Sprint 1 + Sprint 2)
 - **classify_support threshold:** `n_ctx <= 4096` uses `<=`, so exactly 4096 is captured. `ratio > 4` uses `>`, so exactly 4 goes to "supported." Integer comparison, no truncation risk.
 - **throughput_pass:** `in_run_throughput_delta_pct > -60.0` — double comparison, no truncation.
 - **CSV column count:** existing 45 columns + 3 new = 48. Format string has 48 `%` specifiers. Verified by counting.
+- **Subsample float step (Sprint 2):** `step = 1280.0f / 1024.0f = 1.25f`. `src_row = (uint32_t)(i * step)` — float→uint32 truncation. At `i=1023`: `1023 * 1.25 = 1278.75 → 1278` (last valid index is 1279). No out-of-bounds.
+- **Beta norm divisor:** `std::max<uint32_t>(1, beta.size())` — prevents division by zero when beta is empty.
+- **fit_residual divisor:** `std::max<uint32_t>(1, exp_compact.rows)` — prevents division by zero in solver.
 
 ### Test Reality Check
 - `test_basic.py::test_server_props` — verifies `/props` has `compacted_prefix` section. Plan adds assertion for `supported_envelope`. This is a real test that will catch missing fields.
@@ -762,23 +880,44 @@ If Sprint 3 promotes 32K to "supported", the hardcoded `max_context` in Slice 1c
 - **Gap:** No automated test exercises the CSV schema v2 output or the throughput gate. The plan relies on manual verification. This is acceptable for a benchmark binary but should be documented as a known gap.
 
 ### Disprove-it Attempt
+
+**Sprint 1:**
 1. **Tried:** What if all 8K-16K in-run deltas are worse than -60%? Checked CSV: worst 8K delta is -68% (at 2x). This WOULD fail the throughput gate for 8K/2x even though it's "supported." The -60% threshold is too tight for low compression ratios where compacted prefix overhead dominates.
    - **Assessment:** This is a valid concern but not a blocker — 8K/2x at -68% is genuinely degraded (the compacted prefix has nearly as many tokens as the original). The implementer should verify the threshold works across the full supported matrix and potentially adjust to -70% if 8K/2x is meant to pass.
 2. **Tried:** What if `n_ctx` is 5000 (between 4K and 8K)? `classify_support("select", 5000, 50)`: not <= 4096, not >= 32768 → "supported." This is correct — the quality pattern shows improvement with context length, so 5K would be between 4K (fails) and 8K (passes).
 3. **Tried:** What if pipeline string is "fit" instead of "solver"? The benchmark uses "solver" for the full solver pipeline. `classify_support` checks for "solver" which matches. No mismatch.
 
+**Sprint 2:**
+4. **Tried:** What if `n_dim_mismatches` counter wraps on uint32_t overflow? Each layer gets at most 1 dim mismatch per tensor per decode step. With n_generate=256 and n_layers=32, maximum mismatches = 256 * 32 * ~3 variants = ~24K — well within uint32 range.
+5. **Tried:** What if `q_state.layers[il].n_tokens == 0` for all layers (Q capture failed silently)? The pipeline already checks `if (!llama_kv_compact_self_study_generate(...)) return false;` (line 443-445), and the generate function returns false if `n_generated == 0`. If exactly 1 token was generated but cb_eval never matched a Qcur tensor, `n_tokens` would be 0 for all layers, and the Phase 2 regroup would return false at line 251, causing the pipeline to fail. Correct: no silent false-success path.
+6. **Tried:** What if `fit_beta` returns false but `head_residual` was partially written? The code checks `solver_ok` in the outer loop (line 526) and `head_residual` is a stack local — even if partially written, it's not read because the break exits the loop. Correct.
+7. **Tried:** What if `n_heads_seen == 0` when computing norm means? The `if (n_heads_seen > 0)` guard in Step 5 prevents division by zero. All stats fields have default 0.0 — correct.
+
+**Sprint 3:**
+8. **Tried:** Can a stale-cache scenario exist in the B5 caching design? Traced: configure() bumps version → cache miss → materialize → cache fill → next decode → version matches → cache hit (K/V/beta reused, mask rebuilt). If clear() is called, version bumps again → cache miss. If state_read() restores, version bumps → cache miss. No stale path found.
+9. **Tried:** Can throughput gate produce a false pass (baseline_decode_tok_s = 0)? `in_run_throughput_delta_pct` is `(compacted - baseline) / baseline * 100`. If baseline = 0, division produces infinity or NaN. `NaN > -60.0` is false → throughput_pass = false → fails the gate. Correct: zero baseline causes fail, not false pass.
+
 ### Deferred Risks
 - The -60% throughput floor may need adjustment after the full benchmark matrix is verified. This is safe to defer to implementation time.
 - The `supported_envelope` in `/props` uses hardcoded constants. A runtime probe would be better but is out of scope for this sprint.
-- Sprint 2 findings (out of scope for this reviewer) may affect the overall verdict.
 
 ### Pass Justification
-All Critical and Major findings have been corrected in the plan text. The corrected plan:
+
+All 3 Critical and 6 Major findings across all three sprints have been corrected in the plan text. The corrected plan:
+
+**Sprint 1:**
 1. Uses the right 4K boundary (4x, not 8x) — verified against CSV data
 2. Uses a workable throughput gate (-60% floor) instead of the broken strict non-regression gate
-3. Correctly describes the actual code structure for profiling
-4. Places the tensor cache version bump in the right function
-5. Correctly identifies beta as cacheable alongside K/V
-6. Specifies where the cache instance lives
 
-The plan is ready for Reviewer 2 with these corrections applied.
+**Sprint 2:**
+3. Populates `n_dim_mismatches` via per-layer counters in the capture state
+4. Reuses existing `partition_sum_relative_error` from `fit_beta` instead of reimplementing
+5. Provides complete verbatim accumulation code with exact insertion points
+
+**Sprint 3:**
+6. Correctly describes the actual code structure for profiling (4 functions, not 1)
+7. Places the tensor cache version bump in the right function (configure, not set_execution)
+8. Correctly identifies beta as cacheable alongside K/V
+9. Specifies where the cache instance lives (llama_kv_cache private member)
+
+The plan is ready for Reviewer 2.
