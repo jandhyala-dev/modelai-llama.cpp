@@ -19,6 +19,104 @@
 
 set -euo pipefail
 
+# --- Process cleanup (prevents orphaned PIDs) ---
+CHILD_PIDS=()
+
+cleanup() {
+    local sig="${1:-TERM}"
+    # Kill all tracked child PIDs (test binaries + watchdog sleeps).
+    for pid in "${CHILD_PIDS[@]:-}"; do
+        [ -z "$pid" ] && continue
+        kill -"$sig" "$pid" 2>/dev/null || true
+    done
+    # Release GPU lock.
+    release_gpu_lock
+}
+
+trap 'cleanup TERM; exit 130' INT
+trap 'cleanup TERM; exit 143' TERM
+trap 'cleanup TERM' EXIT
+
+# --- GPU lockfile (prevents concurrent bench runs) ---
+LOCK_DIR="/tmp/bench-kv-compact.lock"
+SKIP_GPU_LOCK="${SKIP_GPU_LOCK:-0}"
+
+acquire_gpu_lock() {
+    [ "$SKIP_GPU_LOCK" = "1" ] && return 0
+    if mkdir "$LOCK_DIR" 2>/dev/null; then
+        echo "$$" > "$LOCK_DIR/pid"
+        echo "$(date +%Y%m%d-%H%M%S)" > "$LOCK_DIR/started"
+        return 0
+    fi
+    # Lock exists — check if holder is still alive.
+    local holder_pid
+    holder_pid=$(cat "$LOCK_DIR/pid" 2>/dev/null || echo "")
+    if [ -n "$holder_pid" ] && kill -0 "$holder_pid" 2>/dev/null; then
+        local started
+        started=$(cat "$LOCK_DIR/started" 2>/dev/null || echo "unknown")
+        echo "ERROR: Another benchmark is running (pid $holder_pid, started $started)."
+        echo "  Wait for it to finish, or remove the lock: rm -rf $LOCK_DIR"
+        exit 1
+    fi
+    # Stale lock — reclaim.
+    echo "WARNING: Removing stale lock (pid ${holder_pid:-unknown} is dead)"
+    rm -rf "$LOCK_DIR"
+    mkdir "$LOCK_DIR"
+    echo "$$" > "$LOCK_DIR/pid"
+    echo "$(date +%Y%m%d-%H%M%S)" > "$LOCK_DIR/started"
+}
+
+release_gpu_lock() {
+    [ "$SKIP_GPU_LOCK" = "1" ] && return 0
+    # Only release if we own the lock.
+    local holder_pid
+    holder_pid=$(cat "$LOCK_DIR/pid" 2>/dev/null || echo "")
+    if [ "$holder_pid" = "$$" ]; then
+        rm -rf "$LOCK_DIR"
+    fi
+}
+
+# --- Pre-flight GPU check ---
+preflight_gpu_check() {
+    local dominated=0
+    local warnings=""
+
+    # Check for ollama serve (loads models into GPU memory).
+    local ollama_pids
+    ollama_pids=$(pgrep -f "ollama serve" 2>/dev/null || true)
+    if [ -n "$ollama_pids" ]; then
+        warnings="${warnings}\n  - ollama serve is running (pids: $ollama_pids). Stop with: brew services stop ollama"
+        dominated=1
+    fi
+
+    # Check for other llama-cli / llama-server instances.
+    local llama_pids
+    llama_pids=$(pgrep -f "llama-cli|llama-server" 2>/dev/null || true)
+    if [ -n "$llama_pids" ]; then
+        warnings="${warnings}\n  - llama-cli/server running (pids: $llama_pids)"
+        dominated=1
+    fi
+
+    # Check for other test-kv-compact binaries (not us).
+    local test_pids
+    test_pids=$(pgrep -f "test-kv-compact" 2>/dev/null | grep -v "^$$\$" || true)
+    if [ -n "$test_pids" ]; then
+        warnings="${warnings}\n  - Other test-kv-compact processes (pids: $test_pids)"
+        dominated=1
+    fi
+
+    if [ "$dominated" -eq 1 ]; then
+        echo "WARNING: GPU may be contested by other processes:"
+        echo -e "$warnings"
+        if [ "${FORCE_RUN:-0}" = "1" ]; then
+            echo "  FORCE_RUN=1 — proceeding anyway (throughput numbers may be unreliable)"
+        else
+            echo "  Set FORCE_RUN=1 to proceed, or stop the competing processes first."
+            exit 1
+        fi
+    fi
+}
+
 MODEL="${1:?Usage: $0 <model.gguf> [ngl]}"
 NGL="${2:-99}"
 BUILD_DIR="${BUILD_DIR:-build}"
@@ -40,6 +138,10 @@ if [ ! -f "$MODEL" ] && [ ! -L "$MODEL" ]; then
     echo "ERROR: Model not found: $MODEL"
     exit 1
 fi
+
+# Acquire GPU lock and run pre-flight checks.
+acquire_gpu_lock
+preflight_gpu_check
 
 # Model name for artifacts.
 MODEL_NAME=$(basename "$MODEL" .gguf)
@@ -139,6 +241,7 @@ run_one() {
         > "$tmp_out" 2>>"$STDERR_LOG" &
     local bin_pid=$!
     echo "$bin_pid" > "$pid_file"
+    CHILD_PIDS+=("$bin_pid")
 
     # Watchdog: kill if exceeds timeout.
     {
@@ -151,6 +254,7 @@ run_one() {
         fi
     } &
     local watchdog_pid=$!
+    CHILD_PIDS+=("$watchdog_pid")
 
     # Wait for the test process. Capture real exit code (|| true masks it).
     local rc=0
@@ -159,6 +263,9 @@ run_one() {
     # Kill the watchdog (|| true to prevent set -e abort on already-dead process).
     kill "$watchdog_pid" 2>/dev/null || true
     wait "$watchdog_pid" 2>/dev/null || true
+
+    # Remove finished PIDs from tracking.
+    CHILD_PIDS=("${CHILD_PIDS[@]/$bin_pid}" "${CHILD_PIDS[@]/$watchdog_pid}")
 
     # Display and log captured stdout.
     if [ -s "$tmp_out" ]; then
