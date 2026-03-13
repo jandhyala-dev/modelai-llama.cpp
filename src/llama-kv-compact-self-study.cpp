@@ -30,6 +30,8 @@ void llama_q_capture_state::reset(int32_t n_layers_, uint32_t n_embd_head_, uint
         lq.has_pending  = false;
         lq.pending_off  = 0;
         lq.data.clear();
+        lq.n_dim_mismatches = 0;
+        lq.last_accepted_tensor_name.clear();
         if (n_reserve > 0) {
             lq.data.reserve(floats_per_token * n_reserve);
         }
@@ -51,7 +53,9 @@ void llama_q_capture_state::append_from_tensor(int32_t il, const struct ggml_ten
     const uint32_t d2 = (uint32_t)t->ne[2];  // n_tokens (usually 1 during autoregressive)
 
     if (d0 != lq.n_embd_head || d1 != lq.n_head_q) {
-        // Mismatched dimensions — skip (pre-reshape or different variant)
+        LLAMA_LOG_WARN("q_capture: skipping tensor '%s' — dims [%d,%d] != expected [%d,%d]\n",
+                       t->name, (int)d0, (int)d1, (int)lq.n_embd_head, (int)lq.n_head_q);
+        lq.n_dim_mismatches++;
         return;
     }
 
@@ -60,6 +64,8 @@ void llama_q_capture_state::append_from_tensor(int32_t il, const struct ggml_ten
         LLAMA_LOG_WARN("q_capture: expected F32 tensor, got type %d\n", (int)t->type);
         return;
     }
+
+    lq.last_accepted_tensor_name = t->name;
 
     const size_t floats_per_token = (size_t)d0 * d1;
     const size_t new_floats = floats_per_token * d2;

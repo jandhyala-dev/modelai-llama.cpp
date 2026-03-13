@@ -47,6 +47,8 @@ struct llama_q_capture_state {
         bool     has_pending  = false;  // true if current step wrote data
         size_t   pending_off  = 0;      // offset of pending data in data[]
         std::vector<float> data;    // token-major: [tok0_head0..headN, tok1_head0..headN, ...]
+        uint32_t    n_dim_mismatches = 0;             // tensors skipped due to dim mismatch
+        std::string last_accepted_tensor_name;        // name of last tensor that passed all checks
     };
     std::vector<layer_q> layers;    // indexed by il
 
