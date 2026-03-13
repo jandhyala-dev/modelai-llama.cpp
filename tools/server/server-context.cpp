@@ -2172,9 +2172,19 @@ private:
                         break;
                     }
 
+                    // Support envelope warnings (warn, do not block).
+                    if (method == "self_study") {
+                        SRV_WRN("compaction method '%s' is currently blocked "
+                                "(quality unproven) — proceeding at caller's risk\n", method.c_str());
+                    }
+
                     // Compute target_tokens and live_suffix_pos0 from slot state
                     const llama_seq_id seq_id = slot->id;
                     const uint32_t prompt_tokens = slot->prompt.tokens.size();
+                    if (prompt_tokens >= 32768) {
+                        SRV_WRN("compaction at context >= 32K (%u tokens) is experimental "
+                                "(throughput may regress) — proceeding at caller's risk\n", prompt_tokens);
+                    }
                     if (prompt_tokens == 0) {
                         send_error(task, "Slot has no prompt tokens to compact", ERROR_TYPE_INVALID_REQUEST);
                         break;
