@@ -58,6 +58,13 @@ def test_server_props():
     assert caps["compacted_prefix"]["enabled"] is False   # no compaction performed yet
     assert isinstance(caps["compacted_prefix"]["flash_attn_overridden"], bool)
     assert isinstance(caps["compacted_prefix"]["last_fallback_reason"], str)
+    # supported_envelope (Sprint 1c)
+    assert "supported_envelope" in caps["compacted_prefix"]
+    envelope = caps["compacted_prefix"]["supported_envelope"]
+    assert envelope["min_context"] == 4096
+    assert envelope["max_context"] == 16384
+    assert envelope["max_ratio_4k"] == 4
+    assert "select" in envelope["pipelines"]
     assert caps["features"]["metrics_endpoint"] is True
     assert caps["features"]["slots_endpoint"] is True
 
