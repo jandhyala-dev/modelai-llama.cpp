@@ -128,9 +128,9 @@ static support_classification classify_support(
         const std::string & pipeline,
         int n_ctx,
         int ratio) {
-    // Self-study: blocked until quality is proven.
+    // Self-study: experimental (quality proven post Q/K norm fix, but pipeline overhead limits use).
     if (pipeline == "self_study") {
-        return {"blocked", "self_study_quality_unproven"};
+        return {"experimental", "self_study_pipeline_overhead"};
     }
 
     // OMP: experimental (insufficient benchmark evidence).
