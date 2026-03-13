@@ -679,6 +679,14 @@ bool llama_kv_compact_self_study_from_live_kv(
         stats->beta_norm_mean    = (n_beta_heads_seen > 0) ? (float)(beta_norm_sum / n_beta_heads_seen) : 0.0f;
         stats->beta_sparsity     = (n_beta_heads_seen > 0) ? (float)(beta_sparsity_sum / n_beta_heads_seen) : 0.0f;
         stats->fit_residual_mean = (n_beta_heads_seen > 0) ? (float)(fit_residual_sum / n_beta_heads_seen) : 0.0f;
+
+        LLAMA_LOG_INFO("self_study diagnostics: layers_with_q=%u dim_mismatches=%u "
+                       "q_norm=%.4f k_norm=%.4f beta_norm=%.4f beta_sparsity=%.4f "
+                       "fit_residual=%.6f\n",
+                       stats->n_layers_with_q, stats->n_dim_mismatches,
+                       stats->q_norm_mean, stats->k_norm_mean,
+                       stats->beta_norm_mean, stats->beta_sparsity,
+                       stats->fit_residual_mean);
     }
 
     LLAMA_LOG_INFO("self-study: pipeline complete — %u prefix → %u selected (seq %d)\n",
