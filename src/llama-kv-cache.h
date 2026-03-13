@@ -280,8 +280,33 @@ public:
     void set_input_compacted_prefix_v   (ggml_tensor * dst, int32_t il, llama_seq_id seq_id) const;
     void set_input_compacted_prefix_kq_b(ggml_tensor * dst, int32_t il, llama_seq_id seq_id) const;
 
+    uint64_t compacted_prefix_state_version() const { return compacted_prefix_version_counter; }
+
 private:
     std::string compacted_prefix_last_method = "none";
+
+    // Version counter for tensor caching — bumped on configure/clear/state_read.
+    uint64_t compacted_prefix_version_counter = 0;
+
+    // Tensor cache: stores materialized K/V/beta bytes per layer to avoid
+    // repeated strided copies during decode. Mask is NOT cached (depends on
+    // ubatch.pos which changes every decode). Invalidated by version bump.
+    struct cp_tensor_cache_t {
+        uint64_t    version = 0;
+        llama_seq_id seq_id = -1;
+
+        // Per-layer cached bytes (indexed by KV layer id, not model layer id)
+        std::vector<std::vector<uint8_t>> k_bytes;
+        std::vector<std::vector<uint8_t>> v_bytes;
+        std::vector<std::vector<uint8_t>> beta_bytes;
+        uint32_t beta_n_tps = 0;  // shape guard for beta
+
+        bool valid(llama_seq_id sid, uint64_t ver) const {
+            return seq_id == sid && version == ver && version > 0;
+        }
+        void invalidate() { version = 0; }
+    };
+    mutable cp_tensor_cache_t cp_cache;
 
     bool compacted_prefix_runtime_supported() const;
     bool compacted_prefix_stream_owned_by_seq(uint32_t strm, llama_seq_id seq_id, std::vector<uint32_t> & live_cell_idxs) const;

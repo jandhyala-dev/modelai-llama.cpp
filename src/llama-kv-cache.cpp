@@ -570,16 +570,20 @@ bool llama_kv_cache::compacted_prefix_configure(
         uint32_t logical_token_count,
         const std::vector<llama_pos> & logical_positions,
         llama_pos live_suffix_pos0) {
-    return compacted_prefix.configure_seq(seq_id, logical_token_count, logical_positions, live_suffix_pos0);
+    const bool ok = compacted_prefix.configure_seq(seq_id, logical_token_count, logical_positions, live_suffix_pos0);
+    if (ok) {
+        ++compacted_prefix_version_counter;
+    }
+    return ok;
 }
 
 void llama_kv_cache::compacted_prefix_clear(llama_seq_id seq_id, bool data) {
     if (seq_id < 0) {
         compacted_prefix.clear(data);
-        return;
+    } else {
+        compacted_prefix.clear_seq(seq_id, data);
     }
-
-    compacted_prefix.clear_seq(seq_id, data);
+    ++compacted_prefix_version_counter;
 }
 
 bool llama_kv_cache::compacted_prefix_enabled(llama_seq_id seq_id) const {
@@ -2109,7 +2113,31 @@ void llama_kv_cache::set_input_compacted_prefix_k(ggml_tensor * dst, int32_t il,
     const int32_t ikv = map_layer_ids.at(il);
     GGML_ASSERT((size_t) ikv < state->layers.size());
 
+    const uint64_t ver = compacted_prefix_version_counter;
+    const size_t nbytes = ggml_nbytes(dst);
+
+    // Cache hit: copy from cached bytes.
+    if (cp_cache.valid(seq_id, ver) && (size_t)ikv < cp_cache.k_bytes.size() &&
+            cp_cache.k_bytes[ikv].size() == nbytes) {
+        std::memcpy(dst->data, cp_cache.k_bytes[ikv].data(), nbytes);
+        return;
+    }
+
+    // Cache miss: materialize and snapshot.
     llama_compacted_prefix_set_input_k(dst, state->layers[ikv]);
+
+    if (cp_cache.version != ver || cp_cache.seq_id != seq_id) {
+        cp_cache.version = ver;
+        cp_cache.seq_id = seq_id;
+        cp_cache.k_bytes.clear();
+        cp_cache.v_bytes.clear();
+        cp_cache.beta_bytes.clear();
+        cp_cache.k_bytes.resize(state->layers.size());
+        cp_cache.v_bytes.resize(state->layers.size());
+        cp_cache.beta_bytes.resize(state->layers.size());
+    }
+    cp_cache.k_bytes[ikv].resize(nbytes);
+    std::memcpy(cp_cache.k_bytes[ikv].data(), dst->data, nbytes);
 }
 
 void llama_kv_cache::set_input_compacted_prefix_v(ggml_tensor * dst, int32_t il, llama_seq_id seq_id) const {
@@ -2121,7 +2149,31 @@ void llama_kv_cache::set_input_compacted_prefix_v(ggml_tensor * dst, int32_t il,
     const int32_t ikv = map_layer_ids.at(il);
     GGML_ASSERT((size_t) ikv < state->layers.size());
 
+    const uint64_t ver = compacted_prefix_version_counter;
+    const size_t nbytes = ggml_nbytes(dst);
+
+    // Cache hit.
+    if (cp_cache.valid(seq_id, ver) && (size_t)ikv < cp_cache.v_bytes.size() &&
+            cp_cache.v_bytes[ikv].size() == nbytes) {
+        std::memcpy(dst->data, cp_cache.v_bytes[ikv].data(), nbytes);
+        return;
+    }
+
+    // Cache miss.
     llama_compacted_prefix_set_input_v(dst, state->layers[ikv]);
+
+    if (cp_cache.version != ver || cp_cache.seq_id != seq_id) {
+        cp_cache.version = ver;
+        cp_cache.seq_id = seq_id;
+        cp_cache.k_bytes.clear();
+        cp_cache.v_bytes.clear();
+        cp_cache.beta_bytes.clear();
+        cp_cache.k_bytes.resize(state->layers.size());
+        cp_cache.v_bytes.resize(state->layers.size());
+        cp_cache.beta_bytes.resize(state->layers.size());
+    }
+    cp_cache.v_bytes[ikv].resize(nbytes);
+    std::memcpy(cp_cache.v_bytes[ikv].data(), dst->data, nbytes);
 }
 
 void llama_kv_cache::set_input_compacted_prefix_kq_b(ggml_tensor * dst, int32_t il, llama_seq_id seq_id) const {
@@ -2133,7 +2185,33 @@ void llama_kv_cache::set_input_compacted_prefix_kq_b(ggml_tensor * dst, int32_t 
     const int32_t ikv = map_layer_ids.at(il);
     GGML_ASSERT((size_t) ikv < state->layers.size());
 
+    const uint64_t ver = compacted_prefix_version_counter;
+    const size_t nbytes = ggml_nbytes(dst);
+    const uint32_t n_tps = (uint32_t)dst->ne[1];
+
+    // Cache hit (with shape guard on n_tps).
+    if (cp_cache.valid(seq_id, ver) && (size_t)ikv < cp_cache.beta_bytes.size() &&
+            cp_cache.beta_bytes[ikv].size() == nbytes && cp_cache.beta_n_tps == n_tps) {
+        std::memcpy(dst->data, cp_cache.beta_bytes[ikv].data(), nbytes);
+        return;
+    }
+
+    // Cache miss.
     llama_compacted_prefix_set_input_beta(dst, state->layers[ikv], hparams.n_head(il));
+
+    if (cp_cache.version != ver || cp_cache.seq_id != seq_id) {
+        cp_cache.version = ver;
+        cp_cache.seq_id = seq_id;
+        cp_cache.k_bytes.clear();
+        cp_cache.v_bytes.clear();
+        cp_cache.beta_bytes.clear();
+        cp_cache.k_bytes.resize(state->layers.size());
+        cp_cache.v_bytes.resize(state->layers.size());
+        cp_cache.beta_bytes.resize(state->layers.size());
+    }
+    cp_cache.beta_bytes[ikv].resize(nbytes);
+    std::memcpy(cp_cache.beta_bytes[ikv].data(), dst->data, nbytes);
+    cp_cache.beta_n_tps = n_tps;
 }
 
 void llama_kv_cache::set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const {
@@ -2396,6 +2474,7 @@ void llama_kv_cache::state_read(llama_io_read_i & io, llama_seq_id seq_id, llama
 
     try {
         compacted_prefix.state_read(io, seq_id);
+        ++compacted_prefix_version_counter;
     } catch (...) {
         if (seq_id == -1) {
             clear(true);
