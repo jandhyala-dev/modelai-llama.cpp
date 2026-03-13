@@ -132,11 +132,18 @@ static json build_modelai_server_capabilities(const common_params & params, cons
             { "slots_endpoint",    params.endpoint_slots },
         } },
         { "compacted_prefix", {
-            { "available",                meta.compaction_supported },
-            { "enabled",                  compaction_enabled },
+            { "available",                  meta.compaction_supported },
+            { "enabled",                    compaction_enabled },
             { "zero_beta_flash_compatible", true },
-            { "flash_attn_overridden",    compaction_flash_overridden },
-            { "last_fallback_reason",     meta.compaction_supported ? "" : "model_unsupported" },
+            { "flash_attn_overridden",      compaction_flash_overridden },
+            { "last_fallback_reason",       meta.compaction_supported ? "" : "model_unsupported" },
+            { "supported_envelope", {
+                { "pipelines",    json::array({"select"}) },
+                { "min_context",  4096 },
+                { "max_context",  16384 },
+                { "max_ratio_4k", 4 },
+                { "note",         "50x supported at 8K-16K; 4K supported at 2x-4x only (8x fails 0.838 < 0.85); 32K experimental" },
+            } },
         } },
     };
 }
