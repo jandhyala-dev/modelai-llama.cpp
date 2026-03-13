@@ -7,6 +7,7 @@
 #include "llama-kv-cells.h"
 #include "llama-memory.h"
 
+#include <cstdlib>
 #include <unordered_map>
 #include <vector>
 
@@ -291,14 +292,68 @@ private:
     // Tensor cache: stores materialized K/V/beta bytes per layer to avoid
     // repeated strided copies during decode. Mask is NOT cached (depends on
     // ubatch.pos which changes every decode). Invalidated by version bump.
+    //
+    // Zero-copy optimization: cache buffers are 64-byte aligned so that
+    // dst->data can point directly at the cached memory, eliminating the
+    // per-decode memcpy for K/V/beta tensors.
+    struct aligned_byte_buffer {
+        void * ptr = nullptr;
+        size_t len = 0;
+
+        aligned_byte_buffer() = default;
+        ~aligned_byte_buffer() { clear(); }
+
+        // Non-copyable, movable.
+        aligned_byte_buffer(const aligned_byte_buffer &) = delete;
+        aligned_byte_buffer & operator=(const aligned_byte_buffer &) = delete;
+        aligned_byte_buffer(aligned_byte_buffer && o) noexcept : ptr(o.ptr), len(o.len) {
+            o.ptr = nullptr;
+            o.len = 0;
+        }
+        aligned_byte_buffer & operator=(aligned_byte_buffer && o) noexcept {
+            if (this != &o) {
+                clear();
+                ptr = o.ptr;
+                len = o.len;
+                o.ptr = nullptr;
+                o.len = 0;
+            }
+            return *this;
+        }
+
+        void resize(size_t n) {
+            if (n == len && ptr) {
+                return;
+            }
+            clear();
+            if (n > 0) {
+                int ret = posix_memalign(&ptr, 64, n);
+                GGML_ASSERT(ret == 0 && ptr && "aligned_byte_buffer: allocation failed");
+                len = n;
+            }
+        }
+        void clear() {
+            if (ptr) {
+                free(ptr);
+                ptr = nullptr;
+            }
+            len = 0;
+        }
+        uint8_t *       data()       { return (uint8_t *)ptr; }
+        const uint8_t * data() const { return (const uint8_t *)ptr; }
+        size_t          size() const { return len; }
+        bool           empty() const { return len == 0; }
+    };
+
     struct cp_tensor_cache_t {
         uint64_t    version = 0;
         llama_seq_id seq_id = -1;
 
-        // Per-layer cached bytes (indexed by KV layer id, not model layer id)
-        std::vector<std::vector<uint8_t>> k_bytes;
-        std::vector<std::vector<uint8_t>> v_bytes;
-        std::vector<std::vector<uint8_t>> beta_bytes;
+        // Per-layer cached bytes (indexed by KV layer id, not model layer id).
+        // Aligned to 64 bytes for zero-copy pointer swap into ggml tensors.
+        std::vector<aligned_byte_buffer> k_bytes;
+        std::vector<aligned_byte_buffer> v_bytes;
+        std::vector<aligned_byte_buffer> beta_bytes;
         uint32_t beta_n_tps = 0;  // shape guard for beta
 
         bool valid(llama_seq_id sid, uint64_t ver) const {
