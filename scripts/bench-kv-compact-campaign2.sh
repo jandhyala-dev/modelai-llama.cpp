@@ -37,10 +37,10 @@ fi
 ALL_MODELS=(
     "models/test/Qwen3-8B-Q4_K_M.gguf"
     "models/test/Qwen3-14B-Q4_K_M.gguf"
-    "models/test/Qwen3-30B-A3B-Q4_K_M.gguf"
-    "models/test/Qwen2.5-14B-Instruct-Q4_K_M.gguf"
-    "models/test/DeepSeek-R1-Distill-Qwen-14B-Q4_K_M.gguf"
-    "models/test/Gemma-3-12B-Q4_K_M.gguf"
+    "models/test/Qwen3-30B-A3B-Instruct-Q4_K_M.gguf"
+    "models/test/qwen2.5-14b-instruct-q4_k_m.gguf"
+    "models/test/deepseek-r1-distill-qwen-14b-q4_k_m.gguf"
+    "models/test/gemma-3-12b-it-Q4_K_M.gguf"
 )
 
 # If model path provided as arg, use just that model.
@@ -176,13 +176,14 @@ for MODEL in "${MODELS[@]}"; do
 
     # Phase 2: QuALITY MC eval on key configurations (8K context only).
     # Self_study excluded: produces garbage quality (cosine 0.11-0.23 at 4K) and times out at 8K.
-    # Timeout: 100 questions x ~27s each = ~2700s + prefill/compaction overhead.
-    # 3600s (1 hour) per run provides safe margin for variable question lengths.
-    echo "--- Phase 2: QuALITY MC eval (8K, 1-hour timeout) ---"
+    # Timeout: each select run evaluates QuALITY TWICE (compacted + baseline comparison) =
+    # ~200 evals at ~28s each = ~5600s. 7200s (2 hours) provides safe margin.
+    # Prior run with 3600s timed out at ~130/200 evals for all 3 ratios.
+    echo "--- Phase 2: QuALITY MC eval (8K, 2-hour timeout) ---"
     CONTEXTS="8192" \
     RATIOS="4 8 16" \
     PIPELINES="baseline select" \
-    RUN_TIMEOUT=3600 \
+    RUN_TIMEOUT=7200 \
     QUALITY_EVAL=1 \
     QUALITY_LIMIT="${QUALITY_LIMIT:-100}" \
     LONGHEALTH_EVAL=0 \
