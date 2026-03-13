@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstring>
 
 // ---------------------------------------------------------------------------
@@ -368,6 +369,21 @@ bool llama_q_capture_eval_callback(struct ggml_tensor * t, bool ask, void * user
 // Self-study pipeline entry point (slice 6b-5)
 // ---------------------------------------------------------------------------
 
+// Compute mean L2 row norm across all rows of a matrix.
+static float compute_row_norm_mean(const llama_kv_compact_matrix & m) {
+    if (m.rows == 0 || m.cols == 0) return 0.0f;
+    double sum = 0.0;
+    for (uint32_t r = 0; r < m.rows; ++r) {
+        const float * row = m.row(r);
+        float norm_sq = 0.0f;
+        for (uint32_t c = 0; c < m.cols; ++c) {
+            norm_sq += row[c] * row[c];
+        }
+        sum += std::sqrt(norm_sq);
+    }
+    return (float)(sum / m.rows);
+}
+
 // Gather selected rows from a source matrix into a destination matrix.
 static bool gather_matrix_rows(
         const llama_kv_compact_matrix & src,
@@ -451,6 +467,18 @@ bool llama_kv_compact_self_study_from_live_kv(
     }
     const auto t_gen_end = std::chrono::steady_clock::now();
 
+    // Q-capture layer diagnostics.
+    if (stats) {
+        stats->n_layers_with_q = 0;
+        stats->n_dim_mismatches = 0;
+        for (int il = 0; il < q_state.n_layers; ++il) {
+            if (q_state.layers[il].n_tokens > 0) {
+                stats->n_layers_with_q++;
+            }
+            stats->n_dim_mismatches += q_state.layers[il].n_dim_mismatches;
+        }
+    }
+
     // --- Phase 2: Score + select ---
     // For each layer/head: regroup Q, subsample, extract K, accumulate scores.
     std::vector<float> aggregate_scores(n_prefix_tokens, 0.0f);
@@ -460,6 +488,13 @@ bool llama_kv_compact_self_study_from_live_kv(
         llama_kv_compact_matrix queries; // [n_queries x n_embd_head_k]
     };
     std::vector<std::vector<head_cache_entry>> layer_cache(layouts.size());
+
+    // Diagnostic accumulators.
+    double q_norm_sum = 0.0, k_norm_sum = 0.0;
+    double beta_norm_sum = 0.0, beta_sparsity_sum = 0.0;
+    double fit_residual_sum = 0.0;
+    uint32_t n_heads_seen = 0;
+    uint32_t n_beta_heads_seen = 0;
 
     const auto t_query_start = std::chrono::steady_clock::now();
     for (size_t li = 0; li < layouts.size(); ++li) {
@@ -492,6 +527,13 @@ bool llama_kv_compact_self_study_from_live_kv(
             // Accumulate attention scores
             llama_kv_compact_accumulate_attention_scores(
                     entry.queries, entry.k, aggregate_scores);
+
+            // Accumulate Q/K norms for diagnostics.
+            if (stats) {
+                q_norm_sum += compute_row_norm_mean(entry.queries);
+                k_norm_sum += compute_row_norm_mean(entry.k);
+                n_heads_seen++;
+            }
         }
     }
     const auto t_query_end = std::chrono::steady_clock::now();
@@ -564,11 +606,28 @@ bool llama_kv_compact_self_study_from_live_kv(
 
             // NNLS beta fitting
             std::vector<float> beta;
+            float head_residual = 0.0f;
             if (!llama_kv_compact_fit_beta(entry.queries, entry.k,
                                             compacted_k, solver_opts,
-                                            beta, nullptr)) {
+                                            beta, stats ? &head_residual : nullptr)) {
                 solver_ok = false;
                 break;
+            }
+
+            // Beta diagnostics.
+            if (stats) {
+                float beta_norm_sq = 0.0f;
+                uint32_t beta_zero_count = 0;
+                for (uint32_t bi = 0; bi < (uint32_t)beta.size(); ++bi) {
+                    beta_norm_sq += beta[bi] * beta[bi];
+                    if (std::fabs(beta[bi]) < 1e-6f) {
+                        beta_zero_count++;
+                    }
+                }
+                beta_norm_sum += std::sqrt(beta_norm_sq);
+                beta_sparsity_sum += (float)beta_zero_count / std::max<uint32_t>(1, (uint32_t)beta.size());
+                fit_residual_sum += head_residual;
+                n_beta_heads_seen++;
             }
 
             // Least-squares V fitting
@@ -613,6 +672,13 @@ bool llama_kv_compact_self_study_from_live_kv(
         stats->n_queries_per_head = actual_queries_per_head;
         stats->n_prefix_tokens    = n_prefix_tokens;
         stats->n_selected_tokens  = n_selected;
+
+        // Diagnostic averages (Sprint 2).
+        stats->q_norm_mean       = (n_heads_seen > 0) ? (float)(q_norm_sum / n_heads_seen) : 0.0f;
+        stats->k_norm_mean       = (n_heads_seen > 0) ? (float)(k_norm_sum / n_heads_seen) : 0.0f;
+        stats->beta_norm_mean    = (n_beta_heads_seen > 0) ? (float)(beta_norm_sum / n_beta_heads_seen) : 0.0f;
+        stats->beta_sparsity     = (n_beta_heads_seen > 0) ? (float)(beta_sparsity_sum / n_beta_heads_seen) : 0.0f;
+        stats->fit_residual_mean = (n_beta_heads_seen > 0) ? (float)(fit_residual_sum / n_beta_heads_seen) : 0.0f;
     }
 
     LLAMA_LOG_INFO("self-study: pipeline complete — %u prefix → %u selected (seq %d)\n",
