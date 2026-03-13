@@ -127,20 +127,20 @@ struct support_classification {
 static support_classification classify_support(
         const std::string & pipeline,
         int n_ctx,
-        int ratio) {
+        int /*ratio*/) {
     // Self-study: experimental (quality proven post Q/K norm fix, but pipeline overhead limits use).
     if (pipeline == "self_study") {
         return {"experimental", "self_study_pipeline_overhead"};
     }
 
-    // OMP: experimental (insufficient benchmark evidence).
+    // OMP: experimental (slow compaction, timeout-prone at low ratios).
     if (pipeline == "omp") {
-        return {"experimental", "insufficient_benchmark_evidence"};
+        return {"experimental", "omp_compaction_overhead"};
     }
 
-    // Solver: experimental (insufficient benchmark evidence).
+    // Solver: experimental (GQA quality degradation with surrogate K-as-Q).
     if (pipeline == "solver") {
-        return {"experimental", "insufficient_benchmark_evidence"};
+        return {"experimental", "solver_gqa_quality_degradation"};
     }
 
     // Baseline: always supported (it's the reference).
@@ -150,15 +150,13 @@ static support_classification classify_support(
 
     // Select pipeline: context + ratio dependent.
     if (pipeline == "select") {
-        // 4K at high ratios: experimental.
-        if (n_ctx <= 4096 && ratio > 4) {
-            return {"experimental", "4k_high_ratio_quality_unproven"};
-        }
-        // 32K: experimental (throughput regresses).
+        // 32K+: experimental (compacted prefix materialization overhead
+        // causes decode throughput regression despite excellent quality).
         if (n_ctx >= 32768) {
             return {"experimental", "32k_throughput_regression"};
         }
-        // 8K-16K at any ratio, or 4K at ratio <= 4: supported.
+        // 4K-16K at any ratio: supported (post solver-bugfix 3572cde3,
+        // 4K/8x quality improved from 0.838 to 0.996).
         return {"supported", ""};
     }
 
