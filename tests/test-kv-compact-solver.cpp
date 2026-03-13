@@ -63,7 +63,7 @@ int main() {
 
     llama_kv_compact_solver_opts opts = {};
     opts.lambda = 1e-6f;
-    opts.nnls_iters = 64;
+    opts.nnls_iters = 2;
     opts.nnls_upper_bound = 20.0f;
 
     std::vector<float> beta;

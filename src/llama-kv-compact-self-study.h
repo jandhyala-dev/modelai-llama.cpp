@@ -13,7 +13,7 @@
 struct llama_kv_compact_self_study_config {
     uint32_t n_generate              = 256;    // continuation tokens to generate
     uint32_t max_queries_per_kv_head = 1024;   // subsample limit after GQA regrouping
-    int      nnls_iters              = 64;     // solver iterations
+    int      nnls_iters              = 2;      // solver iterations (paper: 0 for OMP, 2 for HighestAttnKeys)
     float    lambda                  = 1e-6f;  // solver regularization
     float    temperature             = 0.0f;   // sampling temp (0 = greedy)
 };

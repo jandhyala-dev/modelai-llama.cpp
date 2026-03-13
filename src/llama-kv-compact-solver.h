@@ -26,9 +26,9 @@ struct llama_kv_compact_matrix {
 
 struct llama_kv_compact_solver_opts {
     float lambda = 1e-6f;
-    int   nnls_iters = 64;
-    float nnls_lower_bound = 1e-12f;
-    float nnls_upper_bound = 20.0f;
+    int   nnls_iters = 2;          // paper uses 0 (OMP) or 2 (HighestAttnKeys)
+    float nnls_lower_bound = 0.05f; // paper: e^{-3} ≈ 0.05, prevents near-zero weights
+    float nnls_upper_bound = 20.0f; // paper: e^3 ≈ 20.1
 };
 
 struct llama_kv_compact_quality_metrics {

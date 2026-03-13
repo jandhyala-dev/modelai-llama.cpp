@@ -258,6 +258,18 @@ bool llama_kv_compact_fit_beta(
     compute_exp_scores(queries, full_keys, exp_full, max_full, &target);
     compute_exp_scores(queries, compacted_keys, exp_compact, max_compact, nullptr);
 
+    // Fix max-shift inconsistency: target uses exp(score - max_full), but
+    // exp_compact uses exp(score - max_compact).  Rescale compact rows by
+    // exp(max_compact - max_full) so both sides of the NNLS system use the
+    // same per-query shift (the full-key max).  Paper formulation operates
+    // in the consistent unshifted domain; this rescaling achieves equivalence.
+    for (uint32_t qi = 0; qi < queries.rows; ++qi) {
+        const float scale = std::exp(max_compact[qi] - max_full[qi]);
+        for (uint32_t ki = 0; ki < compacted_keys.rows; ++ki) {
+            exp_compact(qi, ki) *= scale;
+        }
+    }
+
     std::vector<float> weights;
     {
         float lambda = opts.lambda;

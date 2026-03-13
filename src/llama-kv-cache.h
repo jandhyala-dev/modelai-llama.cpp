@@ -185,7 +185,7 @@ public:
             llama_kv_compact_pipeline_stats * stats = nullptr,
             llama_pos p0 = 0,
             uint32_t max_queries = 256,
-            int nnls_iters = 64,
+            int nnls_iters = 2,
             float lambda = 1e-6f);
     bool compacted_prefix_select_from_live_kv(
             llama_seq_id seq_id,
@@ -200,7 +200,7 @@ public:
             llama_kv_compact_pipeline_stats * stats = nullptr,
             llama_pos p0 = 0,
             uint32_t max_queries = 256,
-            int nnls_iters = 64,
+            int nnls_iters = 2,
             float lambda = 1e-6f);
     bool compacted_prefix_self_study_from_live_kv(
             struct llama_context * ctx,

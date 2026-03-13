@@ -174,7 +174,7 @@ struct server_task {
         int32_t     live_suffix_tokens  = 0;         // recent tokens to keep live (default: 0 = compact all)
         llama_pos   p0                  = 0;         // start position
         uint32_t    max_queries         = 256;       // solver/omp param
-        int         nnls_iters          = 64;        // solver/omp param
+        int         nnls_iters          = 2;         // solver/omp param (paper: 0-2)
         float       lambda              = 1e-6f;     // solver/omp regularization
         uint32_t    n_generate          = 256;       // self_study param
         uint32_t    max_queries_per_kv_head = 1024;  // self_study param

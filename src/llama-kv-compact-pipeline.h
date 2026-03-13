@@ -21,7 +21,7 @@ bool llama_kv_compact_fit_from_live_kv(
         llama_kv_compact_pipeline_stats * stats = nullptr,
         llama_pos p0 = 0,
         uint32_t max_queries = 256,
-        int nnls_iters = 64,
+        int nnls_iters = 2,
         float lambda = 1e-6f);
 
 // Selection-only pipeline: keeps earliest target_tokens positions from the
@@ -53,7 +53,7 @@ bool llama_kv_compact_omp_from_live_kv(
         llama_kv_compact_pipeline_stats * stats = nullptr,
         llama_pos p0 = 0,
         uint32_t max_queries = 256,
-        int nnls_iters = 64,
+        int nnls_iters = 2,
         float lambda = 1e-6f);
 
 // Self-study pipeline is declared in llama-kv-compact-self-study.h
