@@ -77,29 +77,33 @@ release_gpu_lock() {
 }
 
 # --- Pre-flight GPU check ---
+# Finds GPU-heavy processes by matching binary names (not shell wrappers).
+# Uses pgrep without -f to match process names, avoiding false positives
+# from parent shells that happen to contain binary names in their argv.
 preflight_gpu_check() {
     local dominated=0
     local warnings=""
 
     # Check for ollama serve (loads models into GPU memory).
     local ollama_pids
-    ollama_pids=$(pgrep -f "ollama serve" 2>/dev/null || true)
+    ollama_pids=$(pgrep -x "ollama" 2>/dev/null || true)
     if [ -n "$ollama_pids" ]; then
-        warnings="${warnings}\n  - ollama serve is running (pids: $ollama_pids). Stop with: brew services stop ollama"
+        warnings="${warnings}\n  - ollama is running (pids: $ollama_pids). Stop with: brew services stop ollama"
         dominated=1
     fi
 
-    # Check for other llama-cli / llama-server instances.
+    # Check for llama-cli / llama-server binaries (exact process name match).
     local llama_pids
-    llama_pids=$(pgrep -f "llama-cli|llama-server" 2>/dev/null || true)
+    llama_pids=$(pgrep -x "llama-cli" 2>/dev/null || true)
+    llama_pids="${llama_pids}$(pgrep -x "llama-server" 2>/dev/null || true)"
     if [ -n "$llama_pids" ]; then
         warnings="${warnings}\n  - llama-cli/server running (pids: $llama_pids)"
         dominated=1
     fi
 
-    # Check for other test-kv-compact binaries (not us).
+    # Check for other test-kv-compact binaries (exact name, exclude our own PID).
     local test_pids
-    test_pids=$(pgrep -f "test-kv-compact" 2>/dev/null | grep -v "^$$\$" || true)
+    test_pids=$(pgrep -x "test-kv-compact-longctx" 2>/dev/null | grep -v "^$$\$" || true)
     if [ -n "$test_pids" ]; then
         warnings="${warnings}\n  - Other test-kv-compact processes (pids: $test_pids)"
         dominated=1
@@ -117,7 +121,29 @@ preflight_gpu_check() {
     fi
 }
 
-MODEL="${1:?Usage: $0 <model.gguf> [ngl]}"
+# --- Preflight-only mode: test GPU checks without running benchmarks ---
+if [ "${1:-}" = "--preflight" ]; then
+    echo "=== Preflight GPU Check ==="
+    SKIP_GPU_LOCK=1  # Don't acquire lock in check-only mode.
+    FORCE_RUN=1      # Don't exit — just report.
+    preflight_gpu_check
+    echo "Lock status:"
+    if [ -d "$LOCK_DIR" ]; then
+        echo "  LOCKED by pid $(cat "$LOCK_DIR/pid" 2>/dev/null || echo unknown), started $(cat "$LOCK_DIR/started" 2>/dev/null || echo unknown)"
+        local_holder=$(cat "$LOCK_DIR/pid" 2>/dev/null || echo "")
+        if [ -n "$local_holder" ] && kill -0 "$local_holder" 2>/dev/null; then
+            echo "  Holder is ALIVE"
+        else
+            echo "  Holder is DEAD (stale lock)"
+        fi
+    else
+        echo "  No lock held"
+    fi
+    echo "Preflight complete."
+    exit 0
+fi
+
+MODEL="${1:?Usage: $0 <model.gguf> [ngl]  (or: $0 --preflight)}"
 NGL="${2:-99}"
 BUILD_DIR="${BUILD_DIR:-build}"
 ARTIFACT_BASE="${ARTIFACT_BASE:-bench-results}"
