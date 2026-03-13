@@ -21,7 +21,7 @@ against the `pipeline=baseline` row's `baseline_decode_tok_s`.
 | 4K | 4x | supported up to 4x, experimental above | Quality fails at 8x (0.838 < 0.85) and 50x (0.825 < 0.85); non-monotonic quality (16x passes at 0.903) |
 | 8K | 50x | supported | Quality 0.965, throughput +89% |
 | 16K | 50x | supported | Quality 0.998, throughput +42% |
-| 32K | — | experimental | Throughput regresses (-22% at 50x) |
+| 32K | 50x | supported | Quality 0.997, throughput +38% (post B5 tensor cache) |
 
 ## Pipeline Classification
 

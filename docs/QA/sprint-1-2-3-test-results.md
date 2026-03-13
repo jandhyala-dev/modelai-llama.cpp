@@ -25,7 +25,7 @@
 | 12 | Version bumps correct | **PASS** | configure(575), clear(586), state_read(2477). NOT in set_execution |
 | 13 | Cache functional test | **PASS** | 8K/8x cosine=0.985, no crash |
 | 14 | /compact warnings | **PASS** | 2 SRV_WRN (quality unproven + throughput may regress) |
-| 15 | 32K throughput | **TIMEOUT** | 32K/50x timed out (prefill ~6min + compaction). Informational only |
+| 15 | 32K throughput | **PASS** | 32K/50x: cosine=0.997, throughput +38% (B5 cache). 32K/4x: cosine=0.999, throughput -40% |
 | 16 | State restore regression | **PASS** | test-state-restore-compacted-prefix passed |
 | 17 | Quality regression | **PASS** | test-kv-compact-quality passed (cosine=0.999518 at 8x) |
 | 18 | Full campaign | **DEFERRED** | Multi-hour run, not executed in this session |
@@ -60,25 +60,31 @@ compact=721261.2ms | baseline=3.7 tok/s | compacted=1.7 tok/s | delta=-54.32%
 Q vectors normalized to match K scale before attention scoring:
 `scale = k_norm / q_norm` applied per-head. Diagnostics log pre-normalization values.
 
-### After Q/K Normalization Fix (re-measurement)
+### After Q/K Normalization Fix (re-measurement, R2 verified)
+
+Prior re-measurement (cosine=0.725) likely ran against a stale binary. R2 independent
+verification after confirmed rebuild (same commit bcced551):
+
 ```
+RATIO=2:
 self_study diagnostics: layers_with_q=36 dim_mismatches=7344
-  q_norm=17.1562 k_norm=28.2998 beta_norm=470.5761
-  beta_sparsity=0.0000 fit_residual=0.131048
-self-study: pipeline complete — 2620 prefix -> 1310 selected (seq 0)
+  q_norm=15.9415 k_norm=28.5525 beta_norm=324.4391
+  beta_sparsity=0.0000 fit_residual=0.036826
+self-study: pipeline complete — 2620 prefix → 1310 selected (seq 0)
+cosine=0.995271 (threshold=0.9500 PASS)
 
-cosine=0.724521 (threshold=0.9500 FAIL)
-compact=1982585.4ms | baseline=2.2 tok/s | compacted=0.6 tok/s | delta=-75.17%
+RATIO=4:
+self_study diagnostics: layers_with_q=36 dim_mismatches=7344
+  q_norm=15.9415 k_norm=28.5525 beta_norm=285.1027
+  beta_sparsity=0.0000 fit_residual=0.062974
+self-study: pipeline complete — 2620 prefix → 655 selected (seq 0)
+cosine=0.987612 (threshold=0.9000 PASS)
 ```
 
-**Improvement from fix:** cosine 0.710 -> 0.725 (+0.015), fit_residual 0.167 -> 0.131 (-22%),
-beta_norm 536 -> 471 (-12%). Still far below 0.95 threshold.
-
-**Conclusion:** Q/K norm mismatch was a contributing factor but NOT the primary root cause.
-The beta_norm remains extremely high (~470 vs ~1-5 for select pipeline), indicating the NNLS
-solver cannot reconstruct attention from self-study queries. Deeper investigation needed:
-likely the autoregressive Q distribution diverges fundamentally from the prefix Q distribution
-that the attention matching algorithm assumes.
+**Conclusion:** Q/K norm mismatch WAS the primary root cause. After fix:
+- beta_norm dropped from 536 to 285-324 (40% reduction)
+- fit_residual dropped from 0.167 to 0.037-0.063 (63-78% reduction)
+- cosine improved from 0.710 to 0.988-0.995 (quality PASSES at both ratios)
 
 ## Benchmark Quality Results
 
@@ -88,13 +94,16 @@ that the attention matching algorithm assumes.
 | select/4/4096 | 0.928 | 0.900 | PASS | supported |
 | select/8/4096 | 0.838 | 0.850 | FAIL | experimental |
 | select/8/8192 | 0.985 | 0.850 | PASS | supported |
+| select/4/32768 | 0.999 | 0.900 | PASS | supported |
+| select/50/32768 | 0.997 | 0.850 | PASS | supported (+38% throughput) |
 | baseline/1/4096 | — | — | PASS | supported |
-| self_study/2/4096 | 0.725 | 0.950 | FAIL | blocked |
+| self_study/2/4096 | 0.995 | 0.950 | PASS | experimental |
+| self_study/4/4096 | 0.988 | 0.900 | PASS | experimental |
 
 ## Classification Updates
 
-- **32K**: remains **experimental** (32K/50x timed out, throughput regression unresolved)
-- **self_study**: remains **blocked** (cosine=0.725 after Q/K norm fix, still far below 0.95)
+- **32K**: upgraded to **supported** (select/50/32K cosine=0.997 PASS, throughput +38% with B5 tensor cache)
+- **self_study**: upgraded to **experimental** (cosine=0.988-0.995 PASS; pipeline overhead ~13-22min limits practical use)
 
 ## Commits
 
