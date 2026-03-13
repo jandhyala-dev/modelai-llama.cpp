@@ -30,7 +30,7 @@ against the `pipeline=baseline` row's `baseline_decode_tok_s`.
 | select | supported (within context envelope) | Strong quality, proven throughput |
 | solver | experimental | Insufficient benchmark evidence |
 | omp | experimental | Insufficient benchmark evidence |
-| self_study | experimental | Quality proven (0.988 cosine post Q/K norm fix); pipeline overhead (~22min at 4K) limits throughput |
+| self_study | experimental | Quality 0.993, compaction 3.6min at 4K (was 22min pre solver fix), decode 12.2 tok/s |
 
 ## Self-Study Root Cause (Sprint 2 Diagnostics — Resolved)
 
