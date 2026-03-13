@@ -60,6 +60,26 @@ compact=721261.2ms | baseline=3.7 tok/s | compacted=1.7 tok/s | delta=-54.32%
 Q vectors normalized to match K scale before attention scoring:
 `scale = k_norm / q_norm` applied per-head. Diagnostics log pre-normalization values.
 
+### After Q/K Normalization Fix (re-measurement)
+```
+self_study diagnostics: layers_with_q=36 dim_mismatches=7344
+  q_norm=17.1562 k_norm=28.2998 beta_norm=470.5761
+  beta_sparsity=0.0000 fit_residual=0.131048
+self-study: pipeline complete — 2620 prefix -> 1310 selected (seq 0)
+
+cosine=0.724521 (threshold=0.9500 FAIL)
+compact=1982585.4ms | baseline=2.2 tok/s | compacted=0.6 tok/s | delta=-75.17%
+```
+
+**Improvement from fix:** cosine 0.710 -> 0.725 (+0.015), fit_residual 0.167 -> 0.131 (-22%),
+beta_norm 536 -> 471 (-12%). Still far below 0.95 threshold.
+
+**Conclusion:** Q/K norm mismatch was a contributing factor but NOT the primary root cause.
+The beta_norm remains extremely high (~470 vs ~1-5 for select pipeline), indicating the NNLS
+solver cannot reconstruct attention from self-study queries. Deeper investigation needed:
+likely the autoregressive Q distribution diverges fundamentally from the prefix Q distribution
+that the attention matching algorithm assumes.
+
 ## Benchmark Quality Results
 
 | Config | Cosine | Threshold | Pass | Support Level |
@@ -69,11 +89,12 @@ Q vectors normalized to match K scale before attention scoring:
 | select/8/4096 | 0.838 | 0.850 | FAIL | experimental |
 | select/8/8192 | 0.985 | 0.850 | PASS | supported |
 | baseline/1/4096 | — | — | PASS | supported |
+| self_study/2/4096 | 0.725 | 0.950 | FAIL | blocked |
 
 ## Classification Updates
 
 - **32K**: remains **experimental** (32K/50x timed out, throughput regression unresolved)
-- **self_study**: remains **blocked** (cosine=0.710 before fix; fix needs re-measurement)
+- **self_study**: remains **blocked** (cosine=0.725 after Q/K norm fix, still far below 0.95)
 
 ## Commits
 
