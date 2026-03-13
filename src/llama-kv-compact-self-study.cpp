@@ -524,16 +524,33 @@ bool llama_kv_compact_self_study_from_live_kv(
             // Subsample to max_queries_per_kv_head
             llama_q_capture_subsample(entry.queries, config.max_queries_per_kv_head);
 
-            // Accumulate attention scores
-            llama_kv_compact_accumulate_attention_scores(
-                    entry.queries, entry.k, aggregate_scores);
-
-            // Accumulate Q/K norms for diagnostics.
+            // Accumulate raw Q/K norms for diagnostics (pre-normalization).
             if (stats) {
                 q_norm_sum += compute_row_norm_mean(entry.queries);
                 k_norm_sum += compute_row_norm_mean(entry.k);
                 n_heads_seen++;
             }
+
+            // Normalize Q to match K scale (fix Q/K norm mismatch in self-study).
+            // OMP uses K-as-surrogate-Q so norms match by construction.
+            // Real Q from autoregressive generation has different norm due to
+            // separate W_q/W_k projections.  Without normalization, the
+            // attention softmax peaks incorrectly and the NNLS solver produces
+            // extreme beta weights (observed: q_norm~16, k_norm~28, beta_norm~356).
+            {
+                float q_norm = compute_row_norm_mean(entry.queries);
+                float k_norm = compute_row_norm_mean(entry.k);
+                if (q_norm > 1e-8f && k_norm > 1e-8f) {
+                    float scale = k_norm / q_norm;
+                    for (size_t i = 0; i < entry.queries.data.size(); ++i) {
+                        entry.queries.data[i] *= scale;
+                    }
+                }
+            }
+
+            // Accumulate attention scores
+            llama_kv_compact_accumulate_attention_scores(
+                    entry.queries, entry.k, aggregate_scores);
         }
     }
     const auto t_query_end = std::chrono::steady_clock::now();
