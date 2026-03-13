@@ -86,6 +86,7 @@ void llama_compacted_prefix_set_input_mask(
         const llama_ubatch & ubatch,
         const llama_hparams & hparams,
         bool causal_attn) {
+    const int64_t t0 = ggml_time_us();
     const bool is_f16 = (dst->type == GGML_TYPE_F16);
     if (!is_f16) {
         require_tensor_type(dst, GGML_TYPE_F32, "mask");
@@ -128,11 +129,17 @@ void llama_compacted_prefix_set_input_mask(
             }
         }
     }
+
+    const int64_t t1 = ggml_time_us();
+    LLAMA_LOG_DEBUG("compact_exec: mask materialization %.1fms (prefix=%zu)\n",
+                    (t1 - t0) / 1000.0, state.logical_positions.size());
 }
 
 void llama_compacted_prefix_set_input_k(
         ggml_tensor * dst,
         const llama_compacted_prefix_store::layer_storage & layer) {
+    const int64_t t0 = ggml_time_us();
+
     require_tensor_type(dst, layer.layout.type_k, "K");
     require_host_or_direct_data(dst, "K");
 
@@ -149,11 +156,17 @@ void llama_compacted_prefix_set_input_k(
             std::memcpy(base + dst_offset, layer.k_data.data() + src_offset, token_bytes);
         }
     }
+
+    const int64_t t1 = ggml_time_us();
+    LLAMA_LOG_DEBUG("compact_exec: K materialization %.1fms (prefix=%u)\n",
+                    (t1 - t0) / 1000.0, (unsigned)layer.n_compacted_tokens);
 }
 
 void llama_compacted_prefix_set_input_v(
         ggml_tensor * dst,
         const llama_compacted_prefix_store::layer_storage & layer) {
+    const int64_t t0 = ggml_time_us();
+
     require_tensor_type(dst, layer.layout.type_v, "V");
     require_host_or_direct_data(dst, "V");
 
@@ -174,12 +187,17 @@ void llama_compacted_prefix_set_input_v(
             std::memcpy(base + dst_offset, layer.v_data.data() + src_offset, token_bytes);
         }
     }
+
+    const int64_t t1 = ggml_time_us();
+    LLAMA_LOG_DEBUG("compact_exec: V materialization %.1fms (prefix=%u)\n",
+                    (t1 - t0) / 1000.0, (unsigned)layer.n_compacted_tokens);
 }
 
 void llama_compacted_prefix_set_input_beta(
         ggml_tensor * dst,
         const llama_compacted_prefix_store::layer_storage & layer,
         uint32_t n_head) {
+    const int64_t t0 = ggml_time_us();
     require_tensor_type(dst, GGML_TYPE_F32, "beta");
     require_host_or_direct_data(dst, "beta");
 
@@ -213,4 +231,8 @@ void llama_compacted_prefix_set_input_beta(
             }
         }
     }
+
+    const int64_t t1 = ggml_time_us();
+    LLAMA_LOG_DEBUG("compact_exec: beta materialization %.1fms (prefix=%u)\n",
+                    (t1 - t0) / 1000.0, (unsigned)layer.n_compacted_tokens);
 }
