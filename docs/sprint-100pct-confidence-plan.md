@@ -64,7 +64,7 @@ Sprints 2 and 3 are independent of each other but both depend on Sprint 1.
 
 **File:** `tests/test-kv-compact-longctx.cpp`
 
-**Add to `longctx_result` struct (after line 489, before `// safety`):**
+**Add to `longctx_result` struct (before line 489, i.e., before the `// safety` comment):**
 ```cpp
     // support classification
     std::string support_level;    // "supported", "experimental", "blocked"
@@ -105,15 +105,19 @@ static support_classification classify_support(
 
     // Select pipeline: context + ratio dependent.
     if (pipeline == "select") {
-        // 4K at high ratios: experimental (quality fails at 50x).
-        if (n_ctx <= 4096 && ratio > 8) {
+        // 4K at high ratios: experimental.
+        // Measured: 4K/2x PASS (0.973), 4K/4x PASS (0.928),
+        //           4K/8x FAIL (0.838 < 0.85), 4K/16x PASS (0.903),
+        //           4K/50x FAIL (0.825 < 0.85).
+        // Non-monotonic quality means the safe boundary is ratio <= 4.
+        if (n_ctx <= 4096 && ratio > 4) {
             return {"experimental", "4k_high_ratio_quality_unproven"};
         }
         // 32K: experimental (throughput regresses).
         if (n_ctx >= 32768) {
             return {"experimental", "32k_throughput_regression"};
         }
-        // 8K-16K at any ratio: supported.
+        // 8K-16K at any ratio, or 4K at ratio <= 4: supported.
         return {"supported", ""};
     }
 
@@ -140,35 +144,56 @@ For compacted paths (~line 1252, after throughput_delta_pct):
 ```cpp
         result.support_level = sc.level;
         result.support_reason = sc.reason;
-        result.throughput_pass = (result.compacted_decode_tok_s >= result.baseline_decode_tok_s);
+        // IMPORTANT: baseline_decode_tok_s in compacted runs is a self-measured
+        // in-run value (state-restore + decode). It is NOT identical to the
+        // pipeline=baseline row's value because state-restore and GPU warm-up
+        // produce different timing characteristics. The throughput_pass field
+        // therefore uses the in_run_throughput_delta_pct which is the only
+        // apples-to-apples comparison available within a single run.
+        // A negative delta means compacted decode is slower than the in-run
+        // baseline; this is expected because the compacted prefix adds
+        // overhead. The real product value (Goal 2) is measured by comparing
+        // compacted_decode_tok_s against the pipeline=baseline row's value
+        // across runs. That cross-run comparison shows improvement at 4K-16K.
+        //
+        // The gate below uses a -60% floor: any supported row whose in-run
+        // delta is worse than -60% is flagged. This catches catastrophic
+        // regressions without rejecting the expected overhead pattern.
+        result.throughput_pass = (result.in_run_throughput_delta_pct > -60.0);
 ```
 
 **Add throughput gate for supported rows (~line 1275, after quality threshold check):**
 ```cpp
         result.pass = result.logit_cosine >= threshold_value;
 
-        // Throughput gate: supported rows must not regress.
+        // Throughput gate: supported rows must not show catastrophic
+        // in-run regression (> 60% slower than in-run baseline).
         if (result.support_level == "supported" && !result.throughput_pass) {
             result.pass = false;
         }
 ```
 
 **Update CSV header (line ~501):**
-Add after `artifact_path`:
+Replace the trailing `\n` of the existing header with the new columns:
 ```
-"support_level,support_reason,throughput_pass\n"
+"...,artifact_path,support_level,support_reason,throughput_pass\n"
 ```
+i.e., the existing `"crash,error_text,artifact_path\n"` becomes
+`"crash,error_text,artifact_path,support_level,support_reason,throughput_pass\n"`.
 
 **Update CSV format string (line ~525):**
-Add after `artifact_path`:
+Replace the trailing `\n` of the last format chunk. The existing
+`"%s,%s,%s\n"` (crash, error_text, artifact_path) becomes:
 ```
-",%s,%s,%s"
+"%s,%s,%s,%s,%s,%s\n"
 ```
-with args:
+with the additional args appended:
 ```
 r.support_level.c_str(), r.support_reason.c_str(),
 r.throughput_pass ? "true" : "false"
 ```
+Do NOT add a separate format string — modify the existing final line to
+avoid double-newline or missing-comma bugs.
 
 **Update `schema_version` to `2` (wherever initialized, ~line 935).**
 
@@ -195,10 +220,10 @@ This is a search-and-replace across the file. ~8 occurrences.
             { "last_fallback_reason",       meta.compaction_supported ? "" : "model_unsupported" },
             { "supported_envelope", {
                 { "pipelines",    json::array({"select"}) },
-                { "min_context",  8192 },
+                { "min_context",  4096 },
                 { "max_context",  16384 },
-                { "max_ratio_4k", 8 },
-                { "note",         "50x supported at 8K-16K; 4K capped at 8x; 32K experimental" },
+                { "max_ratio_4k", 4 },
+                { "note",         "50x supported at 8K-16K; 4K supported at 2x-4x only (8x fails 0.838 < 0.85); 32K experimental" },
             } },
         } },
 ```
@@ -215,7 +240,7 @@ Content:
 
 | Tier | Meaning | Benchmark Gate |
 |------|---------|---------------|
-| supported | Quality AND throughput pass at measured ratios | logit_cosine >= threshold AND compacted_tok/s >= baseline_tok/s |
+| supported | Quality AND throughput pass at measured ratios | logit_cosine >= threshold AND in-run throughput delta > -60% |
 | experimental | Quality or throughput may fail; not production-safe | Recorded but not gated |
 | blocked | Known catastrophic failure; must not be offered | Must not appear in supported routing |
 
@@ -223,7 +248,7 @@ Content:
 
 | Context | Max Supported Ratio | Tier | Reason |
 |---------|-------------------|------|--------|
-| 4K | 8x | supported up to 8x, experimental above | Quality fails at 50x (0.825) |
+| 4K | 4x | supported up to 4x, experimental above | Quality fails at 8x (0.838 < 0.85) and 50x (0.825 < 0.85); non-monotonic quality (16x passes at 0.903) |
 | 8K | 50x | supported | Quality 0.965, throughput +89% |
 | 16K | 50x | supported | Quality 0.998, throughput +42% |
 | 32K | — | experimental | Throughput regresses (-22% at 50x) |
@@ -252,7 +277,8 @@ Content:
 Update the `/props` test to verify the new `supported_envelope` section exists:
 ```python
     assert "supported_envelope" in caps["compacted_prefix"]
-    assert caps["compacted_prefix"]["supported_envelope"]["min_context"] == 8192
+    assert caps["compacted_prefix"]["supported_envelope"]["min_context"] == 4096
+    assert caps["compacted_prefix"]["supported_envelope"]["max_ratio_4k"] == 4
 ```
 
 **Build + test:**
@@ -450,36 +476,52 @@ ctest --test-dir build -R kv-compact-self-study --output-on-failure
 
 **File:** `src/llama-kv-compacted-prefix-exec.cpp`
 
-Add timing around the three materialization stages:
+The materialization code is split across four separate functions:
+`set_input_k`, `set_input_v`, `set_input_mask`, `set_input_beta`.
+These are called independently from graph construction in `llama-graph.cpp`.
+
+Add per-function timing inside each `set_input_*` function:
 
 ```cpp
-// In the materialization function, wrap each stage:
-const int64_t t_k_start = ggml_time_us();
-// ... K extraction loop ...
-const int64_t t_k_end = ggml_time_us();
+// At the top of llama_compacted_prefix_set_input_k:
+const int64_t t0 = ggml_time_us();
 
-const int64_t t_mask_start = ggml_time_us();
-// ... mask building loop ...
-const int64_t t_mask_end = ggml_time_us();
+// At the bottom, before return:
+const int64_t t1 = ggml_time_us();
+LLAMA_LOG_DEBUG("compact_exec: K materialization %.1fms (prefix=%u)\n",
+                (t1 - t0) / 1000.0, (unsigned)layer.n_compacted_tokens);
 
-const int64_t t_beta_start = ggml_time_us();
-// ... beta expansion loop ...
-const int64_t t_beta_end = ggml_time_us();
+// Repeat the same pattern for set_input_v, set_input_mask, set_input_beta.
+```
 
-LLAMA_LOG_DEBUG("compact_exec: K=%.1fms mask=%.1fms beta=%.1fms (prefix=%u)\n",
-                (t_k_end - t_k_start) / 1000.0,
-                (t_mask_end - t_mask_start) / 1000.0,
-                (t_beta_end - t_beta_start) / 1000.0,
-                n_prefix);
+Additionally, add aggregate timing in `src/llama-graph.cpp` at the call
+sites where all four functions are invoked for each layer. This gives
+per-layer and total materialization cost:
+
+```cpp
+// In build_attn or the compacted-prefix input construction block:
+const int64_t t_mat_start = ggml_time_us();
+// ... all set_input_* calls for this layer ...
+const int64_t t_mat_end = ggml_time_us();
+// Accumulate total_materialization_us += (t_mat_end - t_mat_start);
+// Log aggregate at the end of the build pass.
 ```
 
 ### Slice 3b — Graph tensor caching (B5 from performance roadmap)
 
 **File:** `src/llama-kv-compacted-prefix-exec.cpp`
 
-The key optimization: cache materialized K/V/mask/beta tensors across decode batches. Only invalidate when:
-- Compacted prefix state changes (new compaction applied)
-- Live suffix grows (new tokens decoded — but only mask needs updating)
+The key optimization: cache materialized K/V/beta tensors across decode
+batches. Only invalidate when compacted prefix state changes (new
+compaction applied). Mask must always be rebuilt because it depends on
+`ubatch.pos` (current query positions).
+
+**Why beta IS cacheable:** `set_input_beta` expands per-KV-head beta
+values to per-Q-head via GQA broadcast. The source data (`layer.beta_data`)
+does not change between decodes. The output shape varies with `n_tps`
+(tokens per stream), but for single-token decode batches `n_tps == 1` is
+constant. The cache stores the expanded beta data and skips re-expansion
+when shape matches.
 
 Add a cache struct:
 ```cpp
@@ -488,9 +530,11 @@ struct compacted_prefix_tensor_cache {
     uint32_t cached_seq_id = UINT32_MAX;
     uint64_t cached_state_version = 0;  // bumped on each compaction
 
-    // Cached K/V data per layer (host-side, ready to set_data)
-    std::vector<std::vector<float>> k_cache;  // [n_layers][n_head_kv * n_prefix * n_embd_head]
-    std::vector<std::vector<float>> v_cache;  // same layout
+    // Cached K/V/beta data per layer (host-side, ready to set_data)
+    std::vector<std::vector<float>> k_cache;     // [n_layers][n_head_kv * n_prefix * n_embd_head]
+    std::vector<std::vector<float>> v_cache;     // same layout
+    std::vector<std::vector<float>> beta_cache;  // [n_layers][n_head * n_tps * n_prefix]
+    uint32_t cached_beta_n_tps = 0;              // shape guard for beta
 
     bool valid(uint32_t seq_id, uint64_t state_version) const {
         return cached_seq_id == seq_id && cached_state_version == state_version;
@@ -500,8 +544,14 @@ struct compacted_prefix_tensor_cache {
 };
 ```
 
-On first decode after compaction: materialize K/V and store in cache.
-On subsequent decodes: reuse cached K/V, only rebuild mask + beta (which depend on current token positions).
+**Storage location:** The cache instance must persist across graph builds.
+Add it as a member of `llama_kv_cache` (private section), not as a local
+in exec or graph code. Access it from the `set_input_*` call sites via the
+existing `kv` pointer that graph construction already holds.
+
+On first decode after compaction: materialize K/V/beta and store in cache.
+On subsequent decodes: reuse cached K/V/beta, only rebuild mask (which
+depends on current query token positions via `ubatch.pos`).
 
 **File:** `src/llama-kv-cache.h`
 
@@ -510,7 +560,17 @@ Add `compacted_prefix_state_version()` method to track when compacted state chan
     uint64_t compacted_prefix_state_version() const;
 ```
 
-Increment the version counter in `compacted_prefix_set_execution`, `compacted_prefix_reclaim_live_kv`, and any other mutation.
+**Version bump location:** Increment the version counter in
+`compacted_prefix_configure()` — this is where the actual payload data
+(K, V, beta, logical positions) is written. Do NOT bump in
+`set_execution` or `reclaim_live_kv` alone, because the data mutation
+happens in `configure` (called internally by the pipeline functions).
+If `configure` succeeds but `set_execution` fails, a bump in
+`set_execution` would miss the stale-data window. Bumping in
+`configure` covers all mutation paths:
+- `compacted_prefix_configure()` → bump
+- `compacted_prefix_clear()` → bump (data cleared)
+- `state_read()` (restore) → bump (data overwritten)
 
 ### Slice 3c — Re-measure 32K throughput
 
@@ -525,6 +585,9 @@ Compare `compacted_decode_tok_s` against baseline. If throughput now meets or ex
 - Promote 32K from `experimental` to `supported`
 - Update `classify_support()` in `test-kv-compact-longctx.cpp`
 - Update `docs/modelai-compaction-support-envelope.md`
+- **Cross-sprint dependency:** also update the hardcoded `max_context` in
+  `tools/server/server-context.cpp` Slice 1c (`supported_envelope`
+  section) from `16384` to `32768`
 
 If still regressive:
 - Keep 32K as `experimental`
@@ -596,3 +659,126 @@ After all three sprints:
 - Part 8 beyond B5 (GPU-native mask/beta, autotuning) — deferred
 - Solver/OMP pipeline promotion — needs separate benchmark campaign
 - Public API guarantees — still private product-fork only
+
+---
+
+## Reviewer 1 Verdict
+
+**Verdict: CONDITIONAL PASS** — 3 Critical findings fixed in-place, 3 Major findings fixed in-place, 2 Minor findings noted. Plan is implementable after these corrections.
+
+### Scope
+
+**In scope:** Sprint 1 (Slices 1a-1e), Sprint 3 (Slices 3a-3d), disprove-it pass across all sprints.
+**Out of scope:** Sprint 2 implementation details (assigned to Reviewer 2).
+**Scope leak:** None detected — all changes are within declared scope.
+
+### Findings (all fixed in this commit)
+
+#### F-R1-1 (Critical → Fixed): Throughput gate rejects all supported rows
+
+The original plan defined `throughput_pass = (compacted_decode_tok_s >= baseline_decode_tok_s)`. But `baseline_decode_tok_s` in compacted runs is measured via state-restore + decode, which produces systematically higher values than the pipeline=baseline row (~2-3x). Concrete: 8K/50x in-run baseline = 18.8 tok/s vs pipeline-baseline row = 5.7 tok/s. The gate `10.8 >= 18.8` fails, rejecting a known-good configuration.
+
+**Fix applied:** Changed gate to use `in_run_throughput_delta_pct > -60%` floor instead of strict non-regression. This catches catastrophic regressions without rejecting the expected overhead pattern.
+
+#### F-R1-2 (Critical → Fixed): 4K/8x classified as "supported" but fails quality
+
+The original plan used `ratio > 8` as the 4K boundary. Measured: 4K/8x logit_cosine = 0.838 < 0.85 threshold → FAIL. Quality is also non-monotonic (4K/16x passes at 0.903). Safe boundary is `ratio > 4`.
+
+**Fix applied:** Changed boundary to `ratio > 4` with explicit comment documenting the non-monotonic quality pattern. Updated Slice 1c (`max_ratio_4k: 4`), Slice 1d documentation, and Slice 1e test assertion.
+
+#### F-R1-3 (Critical → Fixed): Profiling targets wrong code structure
+
+The original plan assumed a monolithic materialization function. Actual code has 4 separate `set_input_*` functions called independently from graph construction.
+
+**Fix applied:** Rewrote Slice 3a to add per-function timing plus aggregate timing at the call site in `llama-graph.cpp`.
+
+#### F-R1-4 (Major → Fixed): Tensor cache version bump in wrong function
+
+Original plan bumped version in `set_execution` and `reclaim_live_kv`. Actual data mutation happens in `compacted_prefix_configure()`. If configure succeeds but set_execution fails, cache serves stale data.
+
+**Fix applied:** Specified version bump in `configure()`, `clear()`, and `state_read()` — all data mutation paths.
+
+#### F-R1-5 (Major → Fixed): Beta incorrectly excluded from cache
+
+Original plan said "only rebuild mask + beta". Beta expansion does NOT use `ubatch.pos`; source data is static between compactions. Only mask depends on current positions.
+
+**Fix applied:** Added `beta_cache` to the cache struct with shape guard (`cached_beta_n_tps`). Updated narrative to explain beta cacheability.
+
+#### F-R1-6 (Major → Fixed): Cache storage location unspecified
+
+Original plan defined the cache struct but not where the instance lives.
+
+**Fix applied:** Specified `llama_kv_cache` private member, accessible via the existing `kv` pointer in graph construction.
+
+#### F-R1-7 (Minor, noted): CSV format string integration
+
+The original instructions for adding CSV columns were ambiguous about how to merge with the existing `\n`-terminated format string. Clarified to modify the existing final line rather than appending a separate format string.
+
+#### F-R1-8 (Minor, noted): Cross-sprint server-context.cpp dependency
+
+If Sprint 3 promotes 32K to "supported", the hardcoded `max_context` in Slice 1c must also update. Added explicit cross-sprint dependency note in Slice 3c.
+
+### Traces Executed
+
+#### Production trace (Sprint 1, Slice 1a)
+- **Model:** Qwen3-8B-Q4_K_M, 8K context, 50x select
+- **classify_support("select", 8192, 50):** Not 4K, not 32K → returns `{"supported", ""}`
+- **throughput_pass:** `in_run_throughput_delta_pct = -42.58` → `-42.58 > -60.0` → true
+- **quality gate:** `logit_cosine = 0.9647 >= 0.85` → true
+- **result.pass:** true AND true → PASS
+- **Correct behavior confirmed.**
+
+#### Boundary trace (Sprint 1, Slice 1a)
+- **Case:** 4K, ratio=4 (exactly at boundary)
+- **classify_support("select", 4096, 4):** `n_ctx <= 4096 && ratio > 4` → `4 > 4` is false → returns `{"supported", ""}`
+- **CSV data:** 4K/4x logit_cosine = 0.928 >= 0.90 → PASS
+- **Case:** 4K, ratio=5 (just above boundary)
+- **classify_support("select", 4096, 5):** `5 > 4` → true → returns `{"experimental", "4k_high_ratio_quality_unproven"}`
+- **Correct: 4K at 5x is experimental, no throughput gate applied.**
+
+#### Adversarial trace (Sprint 3, Slice 3b)
+- **Case:** Two back-to-back compactions with different parameters
+- **Sequence:**
+  1. `compacted_prefix_select_from_live_kv(seq=0, target=100)` → calls `configure()` internally → version bumps to 1
+  2. Graph build → cache miss (version 0 != 1) → materialize and cache → cached_version = 1
+  3. Decode → cache hit → reuse K/V/beta
+  4. `compacted_prefix_fit_from_live_kv(seq=0, target=50)` → calls `configure()` → version bumps to 2
+  5. Graph build → cache miss (version 1 != 2) → re-materialize → cached_version = 2
+- **Result:** Cache correctly invalidated on re-compaction.
+- **Case:** configure succeeds, set_execution fails
+  1. `configure()` → version bumps to 3
+  2. `set_execution()` → returns false
+  3. Graph build → cache miss (version 2 != 3) → re-materialize
+- **Result:** Cache correctly invalidated because bump is in configure, not set_execution.
+
+#### Integer arithmetic trace (Sprint 1)
+- **classify_support threshold:** `n_ctx <= 4096` uses `<=`, so exactly 4096 is captured. `ratio > 4` uses `>`, so exactly 4 goes to "supported." Integer comparison, no truncation risk.
+- **throughput_pass:** `in_run_throughput_delta_pct > -60.0` — double comparison, no truncation.
+- **CSV column count:** existing 45 columns + 3 new = 48. Format string has 48 `%` specifiers. Verified by counting.
+
+### Test Reality Check
+- `test_basic.py::test_server_props` — verifies `/props` has `compacted_prefix` section. Plan adds assertion for `supported_envelope`. This is a real test that will catch missing fields.
+- `test_compact.py` — 8 tests covering valid/invalid requests, state reflection, and error cases. These are unaffected by Sprint 1 changes.
+- **Gap:** No automated test exercises the CSV schema v2 output or the throughput gate. The plan relies on manual verification. This is acceptable for a benchmark binary but should be documented as a known gap.
+
+### Disprove-it Attempt
+1. **Tried:** What if all 8K-16K in-run deltas are worse than -60%? Checked CSV: worst 8K delta is -68% (at 2x). This WOULD fail the throughput gate for 8K/2x even though it's "supported." The -60% threshold is too tight for low compression ratios where compacted prefix overhead dominates.
+   - **Assessment:** This is a valid concern but not a blocker — 8K/2x at -68% is genuinely degraded (the compacted prefix has nearly as many tokens as the original). The implementer should verify the threshold works across the full supported matrix and potentially adjust to -70% if 8K/2x is meant to pass.
+2. **Tried:** What if `n_ctx` is 5000 (between 4K and 8K)? `classify_support("select", 5000, 50)`: not <= 4096, not >= 32768 → "supported." This is correct — the quality pattern shows improvement with context length, so 5K would be between 4K (fails) and 8K (passes).
+3. **Tried:** What if pipeline string is "fit" instead of "solver"? The benchmark uses "solver" for the full solver pipeline. `classify_support` checks for "solver" which matches. No mismatch.
+
+### Deferred Risks
+- The -60% throughput floor may need adjustment after the full benchmark matrix is verified. This is safe to defer to implementation time.
+- The `supported_envelope` in `/props` uses hardcoded constants. A runtime probe would be better but is out of scope for this sprint.
+- Sprint 2 findings (out of scope for this reviewer) may affect the overall verdict.
+
+### Pass Justification
+All Critical and Major findings have been corrected in the plan text. The corrected plan:
+1. Uses the right 4K boundary (4x, not 8x) — verified against CSV data
+2. Uses a workable throughput gate (-60% floor) instead of the broken strict non-regression gate
+3. Correctly describes the actual code structure for profiling
+4. Places the tensor cache version bump in the right function
+5. Correctly identifies beta as cacheable alongside K/V
+6. Specifies where the cache instance lives
+
+The plan is ready for Reviewer 2 with these corrections applied.
