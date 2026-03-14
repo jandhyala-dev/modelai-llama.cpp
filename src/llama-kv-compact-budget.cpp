@@ -94,11 +94,16 @@ std::vector<uint32_t> llama_kv_compact_allocate_budgets(
         // Fine-tune: add/remove from the head with the largest/smallest budget
         // to hit the exact target.
         while (allocated < opts.total_budget) {
-            uint32_t best = 0;
-            for (uint32_t h = 1; h < n_heads; ++h) {
-                if (weights[h] > weights[best] && budgets[h] < max_budget) {
-                    best = h;
+            uint32_t best = UINT32_MAX;
+            for (uint32_t h = 0; h < n_heads; ++h) {
+                if (budgets[h] < max_budget) {
+                    if (best == UINT32_MAX || weights[h] > weights[best]) {
+                        best = h;
+                    }
                 }
+            }
+            if (best == UINT32_MAX) {
+                break; // all heads at max_budget, cannot allocate further
             }
             budgets[best]++;
             allocated++;

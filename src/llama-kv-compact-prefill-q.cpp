@@ -120,7 +120,7 @@ bool llama_kv_compact_prefill_q_from_live_kv(
 
     // First, remove the existing prefix from KV cache so we can re-decode.
     llama_memory_t mem = llama_get_memory(ctx);
-    llama_memory_seq_rm(mem, seq_id, p0, (llama_pos) n_prefix_tokens_input);
+    llama_memory_seq_rm(mem, seq_id, p0, (llama_pos)(p0 + n_prefix_tokens_input));
 
     for (uint32_t i = 0; i < n_prefix_tokens_input; i += batch_size) {
         const uint32_t cur_batch = std::min(batch_size, n_prefix_tokens_input - i);
@@ -225,7 +225,7 @@ bool llama_kv_compact_prefill_q_with_captured_state(
                     return false;
                 }
             } else {
-                if (li == 0 && head == 0) {
+                if (head == 0) {
                     layers_with_q++;
                 }
                 llama_q_capture_subsample(entry.queries, config.max_queries_per_kv_head);

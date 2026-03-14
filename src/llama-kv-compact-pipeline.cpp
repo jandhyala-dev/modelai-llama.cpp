@@ -595,6 +595,62 @@ bool llama_kv_compact_nonuniform_from_live_kv(
     std::vector<uint32_t> union_local = llama_kv_compact_build_union(
             per_head_selections, total_kv_heads, per_head_mask);
 
+    // Cap union size to target_tokens. If the union is larger (disjoint
+    // per-head selections), truncate by aggregated score ranking to keep
+    // the output within the caller's target.
+    const uint32_t target_cap = std::min(target_tokens, n_prefix_tokens);
+    if (union_local.size() > target_cap) {
+        // Aggregate scores across all heads for union positions.
+        std::vector<float> agg_scores(n_prefix_tokens, 0.0f);
+        head_idx = 0;
+        for (size_t li = 0; li < layouts.size(); ++li) {
+            const auto & layout = layouts[li];
+            for (uint32_t head = 0; head < layout.n_head_kv; ++head, ++head_idx) {
+                auto & hd = layer_data[li][head];
+                std::vector<float> head_scores(n_prefix_tokens, 0.0f);
+                llama_kv_compact_accumulate_attention_scores(
+                        hd.queries, hd.k, head_scores);
+                for (uint32_t ki = 0; ki < n_prefix_tokens; ++ki) {
+                    agg_scores[ki] += head_scores[ki];
+                }
+            }
+        }
+
+        // Re-select from union positions only, ranked by aggregated score.
+        std::sort(union_local.begin(), union_local.end(),
+                  [&](uint32_t a, uint32_t b) {
+                      return agg_scores[a] > agg_scores[b];
+                  });
+        union_local.resize(target_cap);
+        std::sort(union_local.begin(), union_local.end());
+
+        // Rebuild per-head mask for truncated union.
+        per_head_mask = {};  // clear old mask
+        // Build manually using the same logic as build_union.
+        const uint32_t union_size = (uint32_t) union_local.size();
+        per_head_mask.assign(size_t(total_kv_heads) * union_size, false);
+
+        // Build position-to-union-index map.
+        std::vector<uint32_t> pos_to_union;
+        if (!union_local.empty()) {
+            pos_to_union.assign(union_local.back() + 1, UINT32_MAX);
+            for (uint32_t j = 0; j < union_size; ++j) {
+                pos_to_union[union_local[j]] = j;
+            }
+        }
+
+        for (uint32_t h = 0; h < total_kv_heads; ++h) {
+            for (uint32_t idx : per_head_selections[h]) {
+                if (idx < pos_to_union.size()) {
+                    uint32_t j = pos_to_union[idx];
+                    if (j != UINT32_MAX) {
+                        per_head_mask[size_t(h) * union_size + j] = true;
+                    }
+                }
+            }
+        }
+    }
+
     const uint32_t n_selected = (uint32_t) union_local.size();
     if (n_selected == 0) {
         return false;

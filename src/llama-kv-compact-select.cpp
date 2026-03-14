@@ -281,7 +281,19 @@ std::vector<uint32_t> llama_kv_compact_select_omp(
                     }
                 }
                 // Retain at least 1 key even if all fail the threshold.
-                write = std::max(write, size_t(1));
+                // Keep the key with the highest beta (best contributor).
+                if (write == 0) {
+                    size_t best = 0;
+                    for (size_t si = 1; si < selected.size(); ++si) {
+                        if (B[si] > B[best]) {
+                            best = si;
+                        }
+                    }
+                    selected[0] = selected[best];
+                    B[0] = B[best];
+                    mask[selected[0]] = true; // keep it masked (not re-selectable)
+                    write = 1;
+                }
                 if (write < selected.size()) {
                     selected.resize(write);
                     B.resize(write);
