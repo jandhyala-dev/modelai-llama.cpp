@@ -134,12 +134,33 @@ int main(int argc, char ** argv) {
         return fail("failed to restore compacted state");
     }
 
-    const bool use_solver = std::getenv("USE_SOLVER") != nullptr;
-    const bool use_omp    = std::getenv("USE_OMP")    != nullptr;
+    const bool use_solver     = std::getenv("USE_SOLVER")     != nullptr;
+    const bool use_omp        = std::getenv("USE_OMP")        != nullptr;
+    const bool use_nonuniform = std::getenv("USE_NONUNIFORM") != nullptr;
+    const bool use_chunked    = std::getenv("USE_CHUNKED")    != nullptr;
+    const bool use_on_policy  = std::getenv("USE_ON_POLICY")  != nullptr;
 
     llama_kv_compact_pipeline_stats stats = {};
 
-    if (use_omp) {
+    if (use_on_policy) {
+        std::printf("USE_ON_POLICY=1: two-pass on-policy pipeline\n");
+        if (!kv->compacted_prefix_on_policy_from_live_kv(ctx, 0, compacted_tokens, live_suffix_pos0, &stats)) {
+            llama_batch_free(batch);
+            return fail("failed to run on-policy compacted prefix from live KV");
+        }
+    } else if (use_nonuniform) {
+        std::printf("USE_NONUNIFORM=1: nonuniform per-head budget pipeline\n");
+        if (!kv->compacted_prefix_nonuniform_from_live_kv(0, compacted_tokens, live_suffix_pos0, &stats)) {
+            llama_batch_free(batch);
+            return fail("failed to run nonuniform compacted prefix from live KV");
+        }
+    } else if (use_chunked) {
+        std::printf("USE_CHUNKED=1: chunked compaction pipeline\n");
+        if (!kv->compacted_prefix_chunked_from_live_kv(0, compacted_tokens, live_suffix_pos0, &stats)) {
+            llama_batch_free(batch);
+            return fail("failed to run chunked compacted prefix from live KV");
+        }
+    } else if (use_omp) {
         std::printf("USE_OMP=1: OMP selection + solver pipeline\n");
         if (!kv->compacted_prefix_omp_from_live_kv(0, compacted_tokens, live_suffix_pos0, &stats)) {
             llama_batch_free(batch);
@@ -172,11 +193,21 @@ int main(int argc, char ** argv) {
     const std::vector<float> compacted_logits = decode_one_and_capture_logits(ctx, continuation, seed_tokens);
     const float logits_cos = llama_kv_compact_cosine_similarity(baseline_logits, compacted_logits);
 
-    if (stats.n_prefix_tokens != (uint32_t)live_suffix_pos0 || stats.n_selected_tokens != (uint32_t)compacted_tokens) {
+    if (stats.n_prefix_tokens != (uint32_t)live_suffix_pos0) {
         llama_batch_free(batch);
-        return fail("unexpected pipeline stats after compacted fit");
+        return fail("unexpected n_prefix_tokens in pipeline stats");
     }
-    if (use_solver && (stats.query_generation_time_ms <= 0.0 || stats.solver_time_ms <= 0.0)) {
+    // Nonuniform may produce fewer selected tokens (union < target); all others should match exactly.
+    if (!use_nonuniform && stats.n_selected_tokens != (uint32_t)compacted_tokens) {
+        llama_batch_free(batch);
+        return fail("unexpected n_selected_tokens in pipeline stats");
+    }
+    if (use_nonuniform && stats.n_selected_tokens > (uint32_t)compacted_tokens) {
+        llama_batch_free(batch);
+        return fail("nonuniform n_selected_tokens should not exceed target");
+    }
+    if ((use_solver || use_nonuniform || use_chunked || use_on_policy) &&
+            (stats.query_generation_time_ms <= 0.0 || stats.solver_time_ms <= 0.0)) {
         llama_batch_free(batch);
         return fail("solver pipeline timings should be populated");
     }
@@ -207,21 +238,23 @@ int main(int argc, char ** argv) {
         }
 
         llama_kv_compact_pipeline_stats stats_4x = {};
-        if (use_omp) {
-            if (!kv->compacted_prefix_omp_from_live_kv(0, target_4x, live_suffix_pos0, &stats_4x)) {
-                llama_batch_free(batch);
-                return fail("failed to run OMP compacted prefix at 4x");
-            }
+        bool ok_4x = false;
+        if (use_on_policy) {
+            ok_4x = kv->compacted_prefix_on_policy_from_live_kv(ctx, 0, target_4x, live_suffix_pos0, &stats_4x);
+        } else if (use_nonuniform) {
+            ok_4x = kv->compacted_prefix_nonuniform_from_live_kv(0, target_4x, live_suffix_pos0, &stats_4x);
+        } else if (use_chunked) {
+            ok_4x = kv->compacted_prefix_chunked_from_live_kv(0, target_4x, live_suffix_pos0, &stats_4x);
+        } else if (use_omp) {
+            ok_4x = kv->compacted_prefix_omp_from_live_kv(0, target_4x, live_suffix_pos0, &stats_4x);
         } else if (use_solver) {
-            if (!kv->compacted_prefix_fit_from_live_kv(0, target_4x, live_suffix_pos0, &stats_4x)) {
-                llama_batch_free(batch);
-                return fail("failed to fit compacted prefix at 4x");
-            }
+            ok_4x = kv->compacted_prefix_fit_from_live_kv(0, target_4x, live_suffix_pos0, &stats_4x);
         } else {
-            if (!kv->compacted_prefix_select_from_live_kv(0, target_4x, live_suffix_pos0, &stats_4x)) {
-                llama_batch_free(batch);
-                return fail("failed to select compacted prefix at 4x");
-            }
+            ok_4x = kv->compacted_prefix_select_from_live_kv(0, target_4x, live_suffix_pos0, &stats_4x);
+        }
+        if (!ok_4x) {
+            llama_batch_free(batch);
+            return fail("failed to compact at 4x");
         }
         if (!kv->compacted_prefix_set_execution(0, true)) {
             llama_batch_free(batch);
@@ -254,21 +287,23 @@ int main(int argc, char ** argv) {
         }
 
         llama_kv_compact_pipeline_stats stats_8x = {};
-        if (use_omp) {
-            if (!kv->compacted_prefix_omp_from_live_kv(0, target_8x, live_suffix_pos0, &stats_8x)) {
-                llama_batch_free(batch);
-                return fail("failed to run OMP compacted prefix at 8x");
-            }
+        bool ok_8x = false;
+        if (use_on_policy) {
+            ok_8x = kv->compacted_prefix_on_policy_from_live_kv(ctx, 0, target_8x, live_suffix_pos0, &stats_8x);
+        } else if (use_nonuniform) {
+            ok_8x = kv->compacted_prefix_nonuniform_from_live_kv(0, target_8x, live_suffix_pos0, &stats_8x);
+        } else if (use_chunked) {
+            ok_8x = kv->compacted_prefix_chunked_from_live_kv(0, target_8x, live_suffix_pos0, &stats_8x);
+        } else if (use_omp) {
+            ok_8x = kv->compacted_prefix_omp_from_live_kv(0, target_8x, live_suffix_pos0, &stats_8x);
         } else if (use_solver) {
-            if (!kv->compacted_prefix_fit_from_live_kv(0, target_8x, live_suffix_pos0, &stats_8x)) {
-                llama_batch_free(batch);
-                return fail("failed to fit compacted prefix at 8x");
-            }
+            ok_8x = kv->compacted_prefix_fit_from_live_kv(0, target_8x, live_suffix_pos0, &stats_8x);
         } else {
-            if (!kv->compacted_prefix_select_from_live_kv(0, target_8x, live_suffix_pos0, &stats_8x)) {
-                llama_batch_free(batch);
-                return fail("failed to select compacted prefix at 8x");
-            }
+            ok_8x = kv->compacted_prefix_select_from_live_kv(0, target_8x, live_suffix_pos0, &stats_8x);
+        }
+        if (!ok_8x) {
+            llama_batch_free(batch);
+            return fail("failed to compact at 8x");
         }
         if (!kv->compacted_prefix_set_execution(0, true)) {
             llama_batch_free(batch);

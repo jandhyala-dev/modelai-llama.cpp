@@ -5,7 +5,7 @@
 // evaluation (2,086 questions) and LongHealth MC evaluation (400 questions,
 // 60K-token patient records) for paper-aligned accuracy measurement.
 //
-// Pipelines: baseline, select, solver, omp, self_study (6b-15b)
+// Pipelines: baseline, select, solver, omp, self_study, nonuniform, chunked, on_policy
 //
 // Usage:
 //   # Single pipeline run:
@@ -158,6 +158,21 @@ static support_classification classify_support(
         // 4K-16K at any ratio: supported (post solver-bugfix 3572cde3,
         // 4K/8x quality improved from 0.838 to 0.996).
         return {"supported", ""};
+    }
+
+    // Nonuniform: experimental (per-head budget quality depends on head count).
+    if (pipeline == "nonuniform") {
+        return {"experimental", "nonuniform_budget_sensitivity"};
+    }
+
+    // Chunked: experimental (designed for 8K+ contexts, overhead at small ctx).
+    if (pipeline == "chunked") {
+        return {"experimental", "chunked_pipeline_overhead"};
+    }
+
+    // On-policy: experimental (two-pass overhead, best quality but slow).
+    if (pipeline == "on_policy") {
+        return {"experimental", "on_policy_two_pass_overhead"};
     }
 
     return {"experimental", "unknown_pipeline"};
@@ -337,6 +352,15 @@ static bool run_compaction(llama_kv_cache * kv, llama_context * ctx,
     }
     if (pipeline == "solver") {
         return kv->compacted_prefix_fit_from_live_kv(0, target, live_suffix_pos0, stats);
+    }
+    if (pipeline == "nonuniform") {
+        return kv->compacted_prefix_nonuniform_from_live_kv(0, target, live_suffix_pos0, stats);
+    }
+    if (pipeline == "chunked") {
+        return kv->compacted_prefix_chunked_from_live_kv(0, target, live_suffix_pos0, stats);
+    }
+    if (pipeline == "on_policy") {
+        return kv->compacted_prefix_on_policy_from_live_kv(ctx, 0, target, live_suffix_pos0, stats);
     }
     if (pipeline == "self_study") {
         llama_kv_compact_self_study_config cfg;
@@ -869,8 +893,9 @@ int main(int argc, char ** argv) {
     const std::string pipeline = env_pipeline ? env_pipeline : "select";
     if (pipeline != "baseline" && pipeline != "select" &&
         pipeline != "solver"   && pipeline != "omp" &&
-        pipeline != "self_study") {
-        return fail("PIPELINE must be 'baseline', 'select', 'solver', 'omp', or 'self_study'");
+        pipeline != "self_study" && pipeline != "nonuniform" &&
+        pipeline != "chunked" && pipeline != "on_policy") {
+        return fail("PIPELINE must be 'baseline', 'select', 'solver', 'omp', 'self_study', 'nonuniform', 'chunked', or 'on_policy'");
     }
 
     const char * env_ratio = std::getenv("RATIO");

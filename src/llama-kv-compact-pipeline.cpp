@@ -566,7 +566,10 @@ bool llama_kv_compact_nonuniform_from_live_kv(
     // Compute per-head budgets.
     llama_kv_compact_budget_opts budget_opts;
     budget_opts.total_budget = std::min(target_tokens, n_prefix_tokens);
-    budget_opts.min_per_head = std::min(min_per_head, budget_opts.total_budget);
+    // When the total budget is smaller than min_per_head * n_heads, reduce
+    // min_per_head so the allocator can actually satisfy the constraint.
+    budget_opts.min_per_head = std::min(min_per_head,
+                                        std::max(1u, budget_opts.total_budget / total_kv_heads));
     budget_opts.max_per_head = n_prefix_tokens;
 
     const std::vector<uint32_t> budgets = llama_kv_compact_allocate_budgets(all_entropies, budget_opts);
