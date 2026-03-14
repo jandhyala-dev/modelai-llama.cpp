@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "run_id": "20260313-185342-19cf8f20-Ajays-MacBook",
+  "repo": "modelai-llama.cpp",
+  "branch": "modelai-main",
+  "commit_sha": "19cf8f20214c99af63ca223efb7e949695d9e560",
+  "upstream_base_sha": "unknown",
+  "hardware": "Ajays-MacBook",
+  "os": "Darwin",
+  "backend_build": "metal-release",
+  "models": ["qwen2.5-14b-instruct-q4_k_m"],
+  "pipelines": ["baseline", "select"],
+  "contexts": [16384],
+  "ratios": [2, 4, 8],
+  "workloads": ["W1", "W2", "W3"],
+  "artifact_files": {
+    "results_csv": "results.csv",
+    "stdout_log": "stdout.log",
+    "stderr_log": "stderr.log",
+    "env_txt": "env.txt"
+  }
+}
