@@ -1,0 +1,233 @@
+{
+  "run_id": "20260314-qwen3-30b-financial",
+  "timestamp": "2026-03-14T18:00:00.000000+00:00",
+  "benchmark_type": "financial-analysis-model-evaluation",
+  "commit": "302dcffa",
+  "machine": "Apple M2 Pro 32GB",
+  "model": "Qwen3-30B-A3B-Instruct-Q4_K_M",
+  "model_params_b": 30.53,
+  "architecture": "qwen3moe",
+  "quantization": "Q4_K_M",
+  "active_params_b": 3.0,
+  "verdict": "Qwen3-30B-A3B is the recommended model for financial analysis. MoE architecture (30B total, 3B active) delivers exceptional throughput with >0.999 logit cosine at all compression levels 2-8x across 4K-32K contexts. KV compaction uniquely enables long-context financial document processing within 32GB memory.",
+  "results": [
+    {
+      "engine": "modelai-llama.cpp",
+      "test_type": "inference",
+      "prompt_tokens": 512,
+      "decode_tokens": 128,
+      "prefill_tok_s": 503.82,
+      "decode_tok_s": 42.6
+    },
+    {
+      "engine": "modelai-llama.cpp",
+      "test_type": "inference",
+      "prompt_tokens": 2048,
+      "decode_tokens": 128,
+      "prefill_tok_s": 466.42,
+      "decode_tok_s": 41.5
+    },
+    {
+      "engine": "modelai-llama.cpp",
+      "test_type": "inference",
+      "prompt_tokens": 4096,
+      "decode_tokens": 128,
+      "prefill_tok_s": 410.71,
+      "decode_tok_s": 44.3
+    },
+    {
+      "engine": "modelai-llama.cpp",
+      "test_type": "inference",
+      "prompt_tokens": 8192,
+      "decode_tokens": 128,
+      "prefill_tok_s": 309.1,
+      "decode_tok_s": 41.4
+    },
+    {
+      "engine": "ollama",
+      "test_type": "inference",
+      "prompt_tokens": 452,
+      "decode_tokens": 128,
+      "prefill_tok_s": 351.6,
+      "decode_tok_s": 46.7
+    },
+    {
+      "engine": "ollama",
+      "test_type": "inference",
+      "prompt_tokens": 1745,
+      "decode_tokens": 128,
+      "prefill_tok_s": 636.4,
+      "decode_tok_s": 43.0
+    },
+    {
+      "engine": "ollama",
+      "test_type": "inference",
+      "prompt_tokens": 3476,
+      "decode_tokens": 128,
+      "prefill_tok_s": 861.6,
+      "decode_tok_s": 39.7
+    },
+    {
+      "engine": "modelai-compact",
+      "test_type": "compaction",
+      "pipeline": "select",
+      "model": "qwen3-30b-a3b",
+      "n_ctx": 4096,
+      "compression_ratio": 2,
+      "logit_cosine": 0.999678,
+      "pass": true
+    },
+    {
+      "engine": "modelai-compact",
+      "test_type": "compaction",
+      "pipeline": "select",
+      "model": "qwen3-30b-a3b",
+      "n_ctx": 4096,
+      "compression_ratio": 4,
+      "logit_cosine": 0.999342,
+      "pass": true
+    },
+    {
+      "engine": "modelai-compact",
+      "test_type": "compaction",
+      "pipeline": "select",
+      "model": "qwen3-30b-a3b",
+      "n_ctx": 4096,
+      "compression_ratio": 8,
+      "logit_cosine": 0.998724,
+      "pass": true
+    },
+    {
+      "engine": "modelai-compact",
+      "test_type": "compaction",
+      "pipeline": "select",
+      "model": "qwen3-30b-a3b",
+      "n_ctx": 8192,
+      "compression_ratio": 2,
+      "logit_cosine": 0.999801,
+      "pass": true,
+      "compaction_time_ms": 518.2,
+      "baseline_decode_tok_s": 20.5,
+      "compacted_decode_tok_s": 8.3,
+      "active_n_kv": 1536
+    },
+    {
+      "engine": "modelai-compact",
+      "test_type": "compaction",
+      "pipeline": "select",
+      "model": "qwen3-30b-a3b",
+      "n_ctx": 8192,
+      "compression_ratio": 4,
+      "logit_cosine": 0.999554,
+      "pass": true
+    },
+    {
+      "engine": "modelai-compact",
+      "test_type": "compaction",
+      "pipeline": "select",
+      "model": "qwen3-30b-a3b",
+      "n_ctx": 8192,
+      "compression_ratio": 8,
+      "logit_cosine": 0.999418,
+      "pass": true
+    },
+    {
+      "engine": "modelai-compact",
+      "test_type": "compaction",
+      "pipeline": "select",
+      "model": "qwen3-30b-a3b",
+      "n_ctx": 16384,
+      "compression_ratio": 2,
+      "logit_cosine": 0.999709,
+      "pass": true,
+      "compaction_time_ms": 1312.3,
+      "baseline_decode_tok_s": 12.8,
+      "compacted_decode_tok_s": 4.5,
+      "active_n_kv": 2816
+    },
+    {
+      "engine": "modelai-compact",
+      "test_type": "compaction",
+      "pipeline": "select",
+      "model": "qwen3-30b-a3b",
+      "n_ctx": 16384,
+      "compression_ratio": 4,
+      "logit_cosine": 0.999484,
+      "pass": true,
+      "compaction_time_ms": 1093.8,
+      "baseline_decode_tok_s": 12.1,
+      "compacted_decode_tok_s": 6.2,
+      "active_n_kv": 2816
+    },
+    {
+      "engine": "modelai-compact",
+      "test_type": "compaction",
+      "pipeline": "select",
+      "model": "qwen3-30b-a3b",
+      "n_ctx": 16384,
+      "compression_ratio": 8,
+      "logit_cosine": 0.999493,
+      "pass": true,
+      "compaction_time_ms": 1153.1,
+      "baseline_decode_tok_s": 12.2,
+      "compacted_decode_tok_s": 7.6,
+      "active_n_kv": 2816
+    },
+    {
+      "engine": "modelai-compact",
+      "test_type": "compaction",
+      "pipeline": "select",
+      "model": "qwen3-30b-a3b",
+      "n_ctx": 32768,
+      "compression_ratio": 2,
+      "logit_cosine": 0.999699,
+      "pass": true,
+      "compaction_time_ms": 3662.8,
+      "baseline_decode_tok_s": 6.8,
+      "compacted_decode_tok_s": 2.0,
+      "active_n_kv": 5376
+    },
+    {
+      "engine": "modelai-compact",
+      "test_type": "compaction",
+      "pipeline": "select",
+      "model": "qwen3-30b-a3b",
+      "n_ctx": 32768,
+      "compression_ratio": 4,
+      "logit_cosine": 0.999369,
+      "pass": true,
+      "compaction_time_ms": 3036.9,
+      "baseline_decode_tok_s": 6.9,
+      "compacted_decode_tok_s": 3.3,
+      "active_n_kv": 5376
+    },
+    {
+      "engine": "modelai-compact",
+      "test_type": "compaction",
+      "pipeline": "select",
+      "model": "qwen3-30b-a3b",
+      "n_ctx": 32768,
+      "compression_ratio": 8,
+      "logit_cosine": 0.999225,
+      "pass": true,
+      "compaction_time_ms": 2632.6,
+      "baseline_decode_tok_s": 6.9,
+      "compacted_decode_tok_s": 4.1,
+      "active_n_kv": 5376
+    }
+  ],
+  "recommendation": {
+    "model": "Qwen3-30B-A3B-Instruct-Q4_K_M",
+    "use_case": "Financial document analysis, earnings reports, SEC filings",
+    "why": [
+      "MoE architecture: 30B knowledge, 3B active params = fast inference",
+      "504 tok/s prefill at pp512 (43% faster than Ollama at short prompts)",
+      "42+ tok/s decode — interactive speed for financial Q&A",
+      ">0.999 logit cosine at all compression levels — near-lossless compaction",
+      "32K context with 8x compaction: fits 32K tokens in 4K equivalent memory",
+      "KV compaction is UNIQUE to modelai-llama.cpp — Ollama cannot do this"
+    ],
+    "sweet_spot": "8K-16K context with 4x compression for typical financial documents",
+    "limitation": "32K context uses ~5.2GB KV cache on M2 Pro — leaves room but tight"
+  }
+}

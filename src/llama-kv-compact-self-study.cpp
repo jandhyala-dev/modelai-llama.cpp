@@ -265,6 +265,7 @@ bool llama_q_capture_regroup_for_kv_head(
 
     // GQA repetition factor: how many Q heads map to each KV head
     // For non-GQA models: n_rep == 1 (pass-through)
+    GGML_ASSERT(n_head_q % n_head_kv == 0 && "GQA requires n_head_q divisible by n_head_kv");
     const uint32_t n_rep = n_head_q / n_head_kv;
 
     // Q heads for this KV head: [h_kv * n_rep, (h_kv + 1) * n_rep)

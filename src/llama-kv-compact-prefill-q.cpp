@@ -97,6 +97,9 @@ bool llama_kv_compact_prefill_q_from_live_kv(
         return false;
     }
 
+    // llama_batch_get_one assigns positions starting from 0; callers must use p0=0.
+    GGML_ASSERT(p0 == 0 && "prefill-Q pipeline requires p0 == 0 (batch position limitation)");
+
     // Phase 1: Repeat-prefill with Q-capture.
     const auto & hparams = ctx->get_model().hparams;
     const uint32_t n_layer     = hparams.n_layer;

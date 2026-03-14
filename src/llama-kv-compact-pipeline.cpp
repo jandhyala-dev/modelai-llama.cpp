@@ -16,8 +16,9 @@
 
 #include <algorithm>
 #include <cmath>
-#include <limits>
 #include <chrono>
+#include <limits>
+#include <numeric>
 #include <cstring>
 
 namespace {
@@ -819,11 +820,22 @@ bool llama_kv_compact_chunked_from_live_kv(
         chunk_budgets[c] = std::max(chunk_budgets[c], 1u);
         budget_allocated += chunk_budgets[c];
     }
-    // Adjust last chunk to hit exact target.
-    if (budget_allocated > target_tokens && chunk_budgets[n_chunks - 1] > 1) {
-        chunk_budgets[n_chunks - 1] -= std::min(
-            chunk_budgets[n_chunks - 1] - 1,
-            budget_allocated - target_tokens);
+    // Adjust budgets to hit exact target.
+    if (budget_allocated > target_tokens) {
+        // Distribute overshoot across chunks, reducing smallest-budget chunks first.
+        std::vector<uint32_t> order(n_chunks);
+        std::iota(order.begin(), order.end(), 0);
+        std::sort(order.begin(), order.end(), [&](uint32_t a, uint32_t b) {
+            return chunk_budgets[a] < chunk_budgets[b];
+        });
+        uint32_t excess = budget_allocated - target_tokens;
+        for (uint32_t idx : order) {
+            if (excess == 0) break;
+            uint32_t can_reduce = chunk_budgets[idx] - 1;
+            uint32_t reduce = std::min(can_reduce, excess);
+            chunk_budgets[idx] -= reduce;
+            excess -= reduce;
+        }
     } else if (budget_allocated < target_tokens) {
         chunk_budgets[n_chunks - 1] += target_tokens - budget_allocated;
     }
@@ -894,8 +906,11 @@ bool llama_kv_compact_chunked_from_live_kv(
         }
     }
 
-    // Sort all selected indices globally.
+    // Sort all selected indices globally and cap at target.
     std::sort(all_selected_local.begin(), all_selected_local.end());
+    if (all_selected_local.size() > target_tokens) {
+        all_selected_local.resize(target_tokens);
+    }
     const uint32_t n_selected = (uint32_t) all_selected_local.size();
 
     const auto t_query_end = std::chrono::steady_clock::now();
