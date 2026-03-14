@@ -724,16 +724,24 @@ bool llama_kv_compact_nonuniform_from_live_kv(
             }
 
             // Apply per-head mask: set beta=-inf for positions NOT selected by this head.
+            bool head_fully_masked = true;
             for (uint32_t j = 0; j < n_selected; ++j) {
                 if (!per_head_mask[size_t(head_idx) * n_selected + j]) {
                     beta[j] = -std::numeric_limits<float>::infinity();
+                } else {
+                    head_fully_masked = false;
                 }
             }
 
             // V fitting.
             if (layout.n_embd_head_v > 0) {
                 llama_kv_compact_matrix compacted_v;
-                if (!llama_kv_compact_fit_values(
+                if (head_fully_masked) {
+                    // All positions were dropped by union truncation — zero out V
+                    // to prevent NaN from -inf beta propagating through fit_values.
+                    compacted_v.resize(n_selected, layout.n_embd_head_v);
+                    std::fill(compacted_v.data.begin(), compacted_v.data.end(), 0.0f);
+                } else if (!llama_kv_compact_fit_values(
                             hd.queries, hd.k, full_v,
                             compacted_k, beta, solver_opts,
                             compacted_v)) {
@@ -805,7 +813,18 @@ bool llama_kv_compact_chunked_from_live_kv(
     }
 
     // Split prefix into chunks and allocate proportional budgets.
-    const uint32_t n_chunks = (n_prefix_tokens + chunk_size - 1) / chunk_size;
+    uint32_t n_chunks = (n_prefix_tokens + chunk_size - 1) / chunk_size;
+
+    // If more chunks than target tokens, merge chunks so each gets budget >= 1.
+    // This avoids the infeasible case where n_chunks floors at 1 per chunk > target.
+    if (n_chunks > target_tokens) {
+        const uint32_t merged_chunk_size = (n_prefix_tokens + target_tokens - 1) / target_tokens;
+        // Recurse with the merged chunk size so each chunk gets budget >= 1.
+        return llama_kv_compact_chunked_from_live_kv(
+            kv, seq_id, target_tokens, live_suffix_pos0, stats, p0,
+            max_queries, nnls_iters, lambda, merged_chunk_size);
+    }
+
     std::vector<uint32_t> chunk_starts(n_chunks);
     std::vector<uint32_t> chunk_sizes(n_chunks);
     std::vector<uint32_t> chunk_budgets(n_chunks);
@@ -822,7 +841,7 @@ bool llama_kv_compact_chunked_from_live_kv(
     }
     // Adjust budgets to hit exact target.
     if (budget_allocated > target_tokens) {
-        // Distribute overshoot across chunks, reducing smallest-budget chunks first.
+        // Distribute overshoot across chunks, allowing budget=0 for some chunks.
         std::vector<uint32_t> order(n_chunks);
         std::iota(order.begin(), order.end(), 0);
         std::sort(order.begin(), order.end(), [&](uint32_t a, uint32_t b) {
@@ -831,8 +850,7 @@ bool llama_kv_compact_chunked_from_live_kv(
         uint32_t excess = budget_allocated - target_tokens;
         for (uint32_t idx : order) {
             if (excess == 0) break;
-            uint32_t can_reduce = chunk_budgets[idx] - 1;
-            uint32_t reduce = std::min(can_reduce, excess);
+            uint32_t reduce = std::min(chunk_budgets[idx], excess);
             chunk_budgets[idx] -= reduce;
             excess -= reduce;
         }
