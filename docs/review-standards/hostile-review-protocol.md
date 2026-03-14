@@ -354,6 +354,24 @@ When a slice fails and is fixed:
 
 ---
 
+## MANDATORY TESTING-REVIEW LOOP
+
+All testing MUST follow a break-fix-review cycle. No exceptions.
+
+1. **Tests must attempt to break the code.** Happy-path-only testing is not acceptable. Tests must include adversarial inputs, boundary conditions, resource exhaustion, and cross-engine comparisons.
+2. **Every bug found MUST be fixed, committed, and pushed** before the review cycle concludes.
+3. **After fixes, a full adversarial review MUST run again** using this protocol. No partial re-reviews — the fix may have introduced new issues.
+4. **The cycle repeats** (test → break → fix → commit → push → review) until the adversarial review returns PASS with zero Critical or Major findings.
+5. **This rule applies to ALL repositories** in the ModelAI ecosystem (modelai-llama.cpp, modelai, COT Labs). Update review standards in each repo accordingly.
+
+This loop is mandatory for:
+- All benchmark result commits
+- All implementation slice commits
+- All bug fix commits
+- All CI/CD pipeline changes
+
+---
+
 ## NON-NEGOTIABLE RULES
 
 - Do not give credit for "looks correct."
@@ -361,3 +379,4 @@ When a slice fails and is fixed:
 - Do not skip numeric traces on math-heavy logic.
 - Do not skip the disprove-it pass.
 - If there is any plausible correctness bug in the intended production use of the slice, FAIL it.
+- Tests must break things. Every bug must be fixed. Adversarial review must pass. No exceptions.
