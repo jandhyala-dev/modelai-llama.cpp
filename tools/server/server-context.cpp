@@ -2237,6 +2237,15 @@ private:
                         ss_config.lambda                  = cp.lambda;
                         llama_kv_compact_self_study_stats ss_stats;
                         ok = kv->compacted_prefix_self_study_from_live_kv(ctx, seq_id, target_tokens, live_suffix_pos0, ss_config, &ss_stats, cp.p0);
+                    } else if (method == "nonuniform") {
+                        llama_kv_compact_pipeline_stats stats;
+                        ok = kv->compacted_prefix_nonuniform_from_live_kv(seq_id, target_tokens, live_suffix_pos0, &stats, cp.p0, cp.max_queries, cp.nnls_iters, cp.lambda);
+                    } else if (method == "chunked") {
+                        llama_kv_compact_pipeline_stats stats;
+                        ok = kv->compacted_prefix_chunked_from_live_kv(seq_id, target_tokens, live_suffix_pos0, &stats, cp.p0, cp.max_queries, cp.nnls_iters, cp.lambda);
+                    } else if (method == "on_policy") {
+                        llama_kv_compact_pipeline_stats stats;
+                        ok = kv->compacted_prefix_on_policy_from_live_kv(ctx, seq_id, target_tokens, live_suffix_pos0, &stats, cp.p0, cp.max_queries, cp.nnls_iters, cp.lambda, cp.n_generate);
                     }
 
                     if (!ok) {

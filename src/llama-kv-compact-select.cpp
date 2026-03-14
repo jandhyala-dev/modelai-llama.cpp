@@ -11,7 +11,9 @@ using llama_kv_compact_math::dot_row;
 void llama_kv_compact_accumulate_attention_scores(
         const llama_kv_compact_matrix & queries,
         const llama_kv_compact_matrix & keys,
-        std::vector<float> & scores_inout) {
+        std::vector<float> & scores_inout,
+        llama_kv_compact_score_agg agg,
+        uint32_t * n_queries_out) {
     if (queries.cols == 0 || keys.cols != queries.cols || scores_inout.size() != keys.rows) {
         return;
     }
@@ -33,9 +35,32 @@ void llama_kv_compact_accumulate_attention_scores(
             sum += weights[ki];
         }
         const float inv_sum = 1.0f / std::max(sum, 1e-6f);
-        for (uint32_t ki = 0; ki < keys.rows; ++ki) {
-            scores_inout[ki] += weights[ki] * inv_sum;
+        if (agg == LLAMA_KV_COMPACT_SCORE_AGG_RMS) {
+            for (uint32_t ki = 0; ki < keys.rows; ++ki) {
+                const float w = weights[ki] * inv_sum;
+                scores_inout[ki] += w * w;
+            }
+        } else {
+            for (uint32_t ki = 0; ki < keys.rows; ++ki) {
+                scores_inout[ki] += weights[ki] * inv_sum;
+            }
         }
+    }
+
+    if (n_queries_out) {
+        *n_queries_out += queries.rows;
+    }
+}
+
+void llama_kv_compact_finalize_rms_scores(
+        std::vector<float> & scores,
+        uint32_t n_queries) {
+    if (n_queries == 0) {
+        return;
+    }
+    const float inv_n = 1.0f / float(n_queries);
+    for (float & s : scores) {
+        s = std::sqrt(s * inv_n);
     }
 }
 
@@ -234,6 +259,33 @@ std::vector<uint32_t> llama_kv_compact_select_omp(
             }
             if (!omp_solve_nnls(M, target, opts.lower_bound, B)) {
                 B.resize(selected.size(), opts.lower_bound);
+            }
+
+            // OMP key pruning (Appendix C.2): remove keys with log(beta) < threshold.
+            // After NNLS, keys with near-zero weight contribute nothing to the
+            // approximation. Pruning them frees capacity for better candidates.
+            // Guard: always retain at least 1 key to prevent degenerate empty selection.
+            if (opts.beta_prune_log_threshold > -std::numeric_limits<float>::infinity()
+                    && selected.size() > 1) {
+                size_t write = 0;
+                for (size_t si = 0; si < selected.size(); ++si) {
+                    const float log_b = std::log(std::max(B[si], 1e-30f));
+                    if (log_b >= opts.beta_prune_log_threshold) {
+                        if (write != si) {
+                            selected[write] = selected[si];
+                            B[write] = B[si];
+                        }
+                        write++;
+                    } else {
+                        mask[selected[si]] = false; // allow re-selection
+                    }
+                }
+                // Retain at least 1 key even if all fail the threshold.
+                write = std::max(write, size_t(1));
+                if (write < selected.size()) {
+                    selected.resize(write);
+                    B.resize(write);
+                }
             }
         } else {
             B.resize(selected.size(), opts.lower_bound);

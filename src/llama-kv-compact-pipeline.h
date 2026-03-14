@@ -56,6 +56,67 @@ bool llama_kv_compact_omp_from_live_kv(
         int nnls_iters = 2,
         float lambda = 1e-6f);
 
+// Solver pipeline with nonuniform per-head budgets (Algorithm 4).
+//
+// Instead of a single global top-k, each head gets an entropy-proportional
+// budget. The union of per-head selections forms the compacted position set.
+// Heads that did NOT select a union position receive beta=-inf for it,
+// contributing zero attention weight through the softmax.
+//
+// This is the paper's most impactful ablation — heads with peaky attention
+// get more tokens while diffuse heads tolerate aggressive compression.
+bool llama_kv_compact_nonuniform_from_live_kv(
+        llama_kv_cache & kv,
+        llama_seq_id seq_id,
+        uint32_t target_tokens,
+        llama_pos live_suffix_pos0,
+        llama_kv_compact_pipeline_stats * stats = nullptr,
+        llama_pos p0 = 0,
+        uint32_t max_queries = 256,
+        int nnls_iters = 2,
+        float lambda = 1e-6f,
+        uint32_t min_per_head = 4);
+
+// Chunked compaction: split prefix into chunks, compact each independently,
+// merge results. Enables compaction of contexts larger than ~8K tokens
+// where single-block solver has memory/precision issues.
+//
+// Reference: arXiv:2602.16284 Section 3.5
+bool llama_kv_compact_chunked_from_live_kv(
+        llama_kv_cache & kv,
+        llama_seq_id seq_id,
+        uint32_t target_tokens,
+        llama_pos live_suffix_pos0,
+        llama_kv_compact_pipeline_stats * stats = nullptr,
+        llama_pos p0 = 0,
+        uint32_t max_queries = 256,
+        int nnls_iters = 2,
+        float lambda = 1e-6f,
+        uint32_t chunk_size = 8192);
+
+// Approximate on-policy pipeline (Section 3.1 / 4.2).
+//
+// Two-pass approach that captures the first-order effect of layer
+// interaction without O(n_layers) forward passes:
+//   Pass 1: Compact with K-as-Q surrogates (standard solver pipeline)
+//   Pass 2: Generate continuation tokens from the compacted model,
+//           capture Q via cb_eval, re-run solver with real Q
+//
+// This is simpler and cheaper than true sequential on-policy compaction
+// but captures most of the quality benefit.
+bool llama_kv_compact_on_policy_from_live_kv(
+        struct llama_context * ctx,
+        llama_kv_cache & kv,
+        llama_seq_id seq_id,
+        uint32_t target_tokens,
+        llama_pos live_suffix_pos0,
+        llama_kv_compact_pipeline_stats * stats = nullptr,
+        llama_pos p0 = 0,
+        uint32_t max_queries = 256,
+        int nnls_iters = 2,
+        float lambda = 1e-6f,
+        uint32_t n_generate_q = 128);
+
 // Self-study pipeline is declared in llama-kv-compact-self-study.h
 // (llama_kv_compact_self_study_from_live_kv) — requires llama_context
 // for Q-capture generation via cb_eval.

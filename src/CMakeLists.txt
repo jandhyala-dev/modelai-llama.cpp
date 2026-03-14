@@ -22,7 +22,10 @@ add_library(llama
             llama-io.cpp
             llama-kv-compacted-prefix.cpp
             llama-kv-compacted-prefix-exec.cpp
+            llama-kv-compact-budget.cpp
+            llama-kv-compact-on-policy.cpp
             llama-kv-compact-pipeline.cpp
+            llama-kv-compact-prefill-q.cpp
             llama-kv-compact-query.cpp
             llama-kv-compact-select.cpp
             llama-kv-compact-self-study.cpp

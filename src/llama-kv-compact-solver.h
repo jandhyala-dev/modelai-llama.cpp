@@ -29,6 +29,7 @@ struct llama_kv_compact_solver_opts {
     int   nnls_iters = 2;          // paper uses 0 (OMP) or 2 (HighestAttnKeys)
     float nnls_lower_bound = 0.05f; // paper: e^{-3} ≈ 0.05, prevents near-zero weights
     float nnls_upper_bound = 20.0f; // paper: e^3 ≈ 20.1
+    bool  spectral_ridge = false;   // scale lambda by spectral norm of design matrix
 };
 
 struct llama_kv_compact_quality_metrics {

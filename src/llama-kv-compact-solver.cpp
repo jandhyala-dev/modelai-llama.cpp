@@ -146,9 +146,15 @@ bool solve_vector_least_squares(
     return true;
 }
 
-float spectral_step_size(const llama_kv_compact_matrix & m, float lambda) {
+// Compute spectral norm of M^T M via power iteration (8 iterations).
+// Returns the largest eigenvalue of M^T M (= squared largest singular value of M).
+float compute_spectral_norm(const llama_kv_compact_matrix & m) {
     const uint32_t n = m.rows;
     const uint32_t t = m.cols;
+    if (t == 0 || n == 0) {
+        return 1.0f;
+    }
+
     std::vector<float> v(t, 1.0f / std::sqrt(float(std::max<uint32_t>(t, 1))));
     std::vector<float> tmp_n(n, 0.0f);
     std::vector<float> tmp_t(t, 0.0f);
@@ -179,6 +185,7 @@ float spectral_step_size(const llama_kv_compact_matrix & m, float lambda) {
         }
     }
 
+    // Final Rayleigh quotient: v^T (M^T M) v
     std::fill(tmp_n.begin(), tmp_n.end(), 0.0f);
     for (uint32_t r = 0; r < n; ++r) {
         tmp_n[r] = dot_row(m.row(r), v.data(), t);
@@ -196,8 +203,23 @@ float spectral_step_size(const llama_kv_compact_matrix & m, float lambda) {
     for (uint32_t c = 0; c < t; ++c) {
         num += v[c] * tmp_t[c];
     }
-    const float lipschitz = std::max(num + lambda, 1e-6f);
+    return std::max(num, 1e-6f);
+}
+
+float spectral_step_size(const llama_kv_compact_matrix & m, float lambda) {
+    const float spectral_norm = compute_spectral_norm(m);
+    const float lipschitz = std::max(spectral_norm + lambda, 1e-6f);
     return 1.0f / lipschitz;
+}
+
+// Scale lambda by spectral norm of the design matrix for numerically
+// adaptive regularization. Returns lambda * spectral_norm(X^T X),
+// capped to avoid overflow on ill-conditioned matrices.
+float scale_lambda_spectral(const llama_kv_compact_matrix & design, float lambda_base) {
+    const float sn = compute_spectral_norm(design);
+    const float scaled = lambda_base * sn;
+    // Cap at 1.0 to prevent over-regularization on ill-conditioned matrices.
+    return std::min(scaled, 1.0f);
 }
 
 void compute_exp_scores(
@@ -270,9 +292,14 @@ bool llama_kv_compact_fit_beta(
         }
     }
 
+    // Compute effective lambda: optionally scale by spectral norm of the design matrix.
+    const float effective_lambda = opts.spectral_ridge
+        ? scale_lambda_spectral(exp_compact, opts.lambda)
+        : opts.lambda;
+
     std::vector<float> weights;
     {
-        float lambda = opts.lambda;
+        float lambda = effective_lambda;
         bool solved = false;
         for (int attempt = 0; attempt < 5; ++attempt) {
             if (solve_vector_least_squares(exp_compact, target, lambda, weights)) {
@@ -286,7 +313,7 @@ bool llama_kv_compact_fit_beta(
         }
     }
 
-    const float step = spectral_step_size(exp_compact, opts.lambda);
+    const float step = spectral_step_size(exp_compact, effective_lambda);
     std::vector<float> grad(weights.size(), 0.0f);
     for (int iter = 0; iter < opts.nnls_iters; ++iter) {
         std::fill(grad.begin(), grad.end(), 0.0f);
@@ -367,7 +394,7 @@ bool llama_kv_compact_fit_values(
         }
     }
 
-    float lambda = opts.lambda;
+    float lambda = opts.spectral_ridge ? scale_lambda_spectral(x, opts.lambda) : opts.lambda;
     for (int attempt = 0; attempt < 5; ++attempt) {
         if (solve_least_squares_normal_eq(x, y, lambda, compacted_values_out)) {
             return true;

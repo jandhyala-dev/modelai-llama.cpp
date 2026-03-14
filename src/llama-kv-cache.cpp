@@ -831,6 +831,52 @@ bool llama_kv_cache::compacted_prefix_self_study_from_live_kv(
     return ok;
 }
 
+bool llama_kv_cache::compacted_prefix_nonuniform_from_live_kv(
+        llama_seq_id seq_id,
+        uint32_t target_tokens,
+        llama_pos live_suffix_pos0,
+        llama_kv_compact_pipeline_stats * stats,
+        llama_pos p0,
+        uint32_t max_queries,
+        int nnls_iters,
+        float lambda,
+        uint32_t min_per_head) {
+    const bool ok = llama_kv_compact_nonuniform_from_live_kv(*this, seq_id, target_tokens, live_suffix_pos0, stats, p0, max_queries, nnls_iters, lambda, min_per_head);
+    if (ok) { compacted_prefix_last_method = "nonuniform"; }
+    return ok;
+}
+
+bool llama_kv_cache::compacted_prefix_chunked_from_live_kv(
+        llama_seq_id seq_id,
+        uint32_t target_tokens,
+        llama_pos live_suffix_pos0,
+        llama_kv_compact_pipeline_stats * stats,
+        llama_pos p0,
+        uint32_t max_queries,
+        int nnls_iters,
+        float lambda,
+        uint32_t chunk_size) {
+    const bool ok = llama_kv_compact_chunked_from_live_kv(*this, seq_id, target_tokens, live_suffix_pos0, stats, p0, max_queries, nnls_iters, lambda, chunk_size);
+    if (ok) { compacted_prefix_last_method = "chunked"; }
+    return ok;
+}
+
+bool llama_kv_cache::compacted_prefix_on_policy_from_live_kv(
+        struct llama_context * ctx,
+        llama_seq_id seq_id,
+        uint32_t target_tokens,
+        llama_pos live_suffix_pos0,
+        llama_kv_compact_pipeline_stats * stats,
+        llama_pos p0,
+        uint32_t max_queries,
+        int nnls_iters,
+        float lambda,
+        uint32_t n_generate_q) {
+    const bool ok = llama_kv_compact_on_policy_from_live_kv(ctx, *this, seq_id, target_tokens, live_suffix_pos0, stats, p0, max_queries, nnls_iters, lambda, n_generate_q);
+    if (ok) { compacted_prefix_last_method = "on-policy"; }
+    return ok;
+}
+
 bool llama_kv_cache::compacted_prefix_layer_layout_for_solver(int32_t il, llama_compacted_prefix_layer_layout & out) const {
     const auto it = map_layer_ids.find(il);
     if (it == map_layer_ids.end()) {
