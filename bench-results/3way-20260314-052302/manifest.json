@@ -1,0 +1,27 @@
+{
+  "schema_version": 3,
+  "benchmark_type": "3way-comparison",
+  "run_id": "20260314-052302-294a03b6",
+  "timestamp": "2026-03-14T12:23:02.332201+00:00",
+  "commit_sha": "294a03b6",
+  "branch": "modelai-main",
+  "machine": {
+    "hostname": "Ajays-MacBook.local",
+    "os": "Darwin 25.3.0",
+    "arch": "arm64",
+    "cpu": "Apple M2 Pro",
+    "memory_gb": 32
+  },
+  "engines": [
+    "modelai-llama.cpp",
+    "llama.cpp",
+    "ollama"
+  ],
+  "models": [
+    "qwen3-14b",
+    "qwen3-8b",
+    "qwen3-30b-a3b",
+    "deepseek-r1-14b",
+    "gemma3-12b"
+  ]
+}

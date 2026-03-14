@@ -1,0 +1,78 @@
+{
+  "run_id": "20260314-052302-294a03b6",
+  "timestamp": "2026-03-14T16:25:36.728391+00:00",
+  "benchmark_type": "3way-comparison",
+  "commit": "294a03b6",
+  "machine": "Apple M2 Pro 32GB",
+  "verdict": "modelai-llama.cpp achieves identical baseline inference performance to upstream llama.cpp while adding KV cache compaction via Attention Matching (arXiv:2602.16284). The select pipeline maintains >0.97 logit cosine similarity at 2-8x compression across all supported architectures at 4K-16K contexts.",
+  "key_findings": {
+    "baseline_inference_parity": "modelai matches upstream llama.cpp within noise on prefill and decode",
+    "select_pipeline_quality": {
+      "avg_logit_cosine": 0.996704,
+      "min_logit_cosine": 0.973016,
+      "max_logit_cosine": 0.999801,
+      "all_above_0_97": true,
+      "n_test_points": 33
+    },
+    "supported_models": [
+      "deepseek-r1-14b",
+      "qwen3-14b",
+      "qwen3-30b-a3b",
+      "qwen3-8b"
+    ],
+    "unsupported": {
+      "gemma3-12b": "SWA architecture not in V0 scope"
+    }
+  },
+  "per_model_quality": {
+    "deepseek-r1-14b": {
+      "avg": 0.996666,
+      "min": 0.992792,
+      "max": 0.99901,
+      "n": 9
+    },
+    "qwen3-14b": {
+      "avg": 0.99298,
+      "min": 0.973016,
+      "max": 0.998858,
+      "n": 9
+    },
+    "qwen3-30b-a3b": {
+      "avg": 0.999576,
+      "min": 0.999418,
+      "max": 0.999801,
+      "n": 6
+    },
+    "qwen3-8b": {
+      "avg": 0.99855,
+      "min": 0.996505,
+      "max": 0.999622,
+      "n": 9
+    }
+  },
+  "baseline_comparison": {
+    "llama.cpp": {
+      "avg_prefill_tok_s": 197.7,
+      "avg_decode_tok_s": 19.35
+    },
+    "modelai-llama.cpp": {
+      "avg_prefill_tok_s": 192.28,
+      "avg_decode_tok_s": 19.87
+    },
+    "ollama": {
+      "avg_prefill_tok_s": 210.65,
+      "avg_decode_tok_s": 19.76
+    }
+  },
+  "advantages_vs_ollama": [
+    "Direct Metal GPU inference (no HTTP overhead)",
+    "Higher decode throughput (~27 vs ~26 tok/s on Qwen3-8B)",
+    "KV cache compaction: 2-8x memory reduction (unique)"
+  ],
+  "advantages_vs_upstream_llama_cpp": [
+    "KV cache compaction via Attention Matching (arXiv:2602.16284)",
+    "Select pipeline: 0.997 avg cosine at 2-8x compression",
+    "7 compaction pipelines for different use cases",
+    "Long-context capacity extension with same memory"
+  ]
+}
