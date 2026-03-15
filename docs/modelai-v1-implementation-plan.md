@@ -80,7 +80,8 @@ All 6 upstream issues verified safe/compatible. Integration tests added in `test
 | B2: Eliminate dual K/V extraction | DONE | `llama-kv-compact-pipeline.cpp:67-71` |
 | B3: NEON vectorization | DONE | `llama-kv-compact-math.h:16-52` |
 | B4: GPU solver path | DEFERRED | Requires Metal compute shader — out of V1 scope |
-| B5: GPU-resident tensor upload | DONE (Phase 1A) | `llama-kv-cache.cpp:2161-2267` |
+| B5: GPU-resident tensor upload (K/V/beta) | DONE (Phase 1A) | `llama-kv-cache.cpp:2161-2267` |
+| B5: GPU-native mask materialization | BY DESIGN: remains host-backed | Mask tensor is small (n_prefix × 1 float per head) and written directly to `dst->data`. GPU upload overhead would exceed any savings. `require_host_or_direct_data` intentionally retained for mask in `llama-kv-compacted-prefix-exec.cpp`. |
 
 ---
 
@@ -184,11 +185,12 @@ All 6 upstream issues verified safe/compatible. Integration tests added in `test
 
 **File to modify:** `tests/test-kv-compact-pipeline-integration.cpp`
 
-**Test 3.4.1 — M-RoPE model rejected**
+**Test 3.4.1 — M-RoPE / MLA model rejected (head dimension mismatch)**
 
-- Setup: Models using M-RoPE (e.g., Qwen3-VL) must be rejected by the M-RoPE guard at `llama-kv-cache.cpp:1130-1143`
+- Setup: Models using M-RoPE (e.g., Qwen3-VL) or MLA (e.g., DeepSeek-V2/V3) must be rejected by the head dimension guard at `llama-kv-cache.cpp:1130-1143`
 - Assert: `compacted_prefix_runtime_supported()` returns `false`
-- Implementation note: Requires a model with `n_embd_head_v != n_embd_head_k` or M-RoPE flag. If no such model fixture is available, document as manual test with specific model name.
+- Why: Both M-RoPE and MLA architectures result in `n_embd_head_v != n_embd_head_k`, which the guard checks. MLA uses latent key/value dimensions that differ from query dimensions.
+- Implementation note: Requires a model with `n_embd_head_v != n_embd_head_k` or M-RoPE flag. If no such model fixture is available, document as manual test with specific model name (Qwen3-VL for M-RoPE, DeepSeek-V2 for MLA).
 
 **Test 3.4.2 — Flash attention with non-zero beta rejected**
 
@@ -196,6 +198,13 @@ All 6 upstream issues verified safe/compatible. Integration tests added in `test
 - Assert: The non-flash attention path is taken (or compaction is rejected if beta > 0 under flash attention)
 - Why: V0 only supports flash attention with zero-beta. Non-zero beta requires FlashBias (arXiv:2505.12044) which is not implemented.
 - Implementation note: The rejection happens in the graph build path (`llama-graph.cpp`), not in `compacted_prefix_runtime_supported()`. Trace the exact code path and verify the fallback behavior.
+
+**Test 3.4.3 — Hybrid recurrent+attention model rejected**
+
+- Setup: Models using hybrid recurrent+attention architectures (e.g., Mamba, RWKV, Jamba) must be rejected
+- Assert: `compacted_prefix_runtime_supported()` returns `false`
+- Why: Hybrid models interleave attention layers with recurrent (SSM) layers. The compaction algorithm assumes all layers use KV-cached attention. Compacting only the attention layers while leaving recurrent state unchanged would produce incorrect output.
+- Implementation note: No ModelAI target models use hybrid architectures. If no model fixture is available, verify rejection by code review of the guard condition and document as manual test. The guard checks for recurrent layer presence in model architecture metadata.
 
 ---
 
