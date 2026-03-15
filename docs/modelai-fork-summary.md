@@ -154,16 +154,40 @@ See `docs/modelai-v1-implementation-plan.md` (plan commit `2e43e9c8`).
 | M-RoPE edge cases | Unsupported | `compacted_prefix_runtime_supported()` rejects multi-position models (`n_pos_per_embd() > 1`) |
 | Public API guarantees | Unsupported | Internal-only; no stable public API contract yet |
 
-### Tested Models
+### Tested Models (V1 — 15 models, 51 tests each, all pass)
 
-| Model | Quality (2x) | Quality (4x) | Quality (8x) | Status |
-|---|---|---|---|---|
-| Qwen3-8B | >= 0.95 | >= 0.90 | >= 0.85 | Validated |
-| Qwen3-14B | >= 0.95 | >= 0.90 | >= 0.85 | Validated |
-| DeepSeek-R1-14B | >= 0.95 | >= 0.90 | >= 0.85 | Validated |
-| Qwen3-30B-A3B | >= 0.95 | >= 0.90 | >= 0.85 | Validated |
+| Model | Arch | Params | Select 2x Cosine | Peak RSS | Status |
+|---|---|---|---|---|---|
+| stories15M (CI) | LLaMA | 260K | 1.000 | 674 MB | Validated |
+| TinyLlama 1.1B | LLaMA | 1.1B | 1.000 | 674 MB | Validated |
+| Llama3.2-3B | LLaMA | 3B | 0.994 | 2,104 MB | Validated |
+| Mistral-7B | Mistral | 7B | 0.990 | 4,248 MB | Validated |
+| Llama3.1-8B | LLaMA | 8B | 0.995 | 4,812 MB | Validated |
+| Qwen2.5-7B | Qwen2.5 | 7B | 0.984 | 4,347 MB | Validated |
+| Qwen3-8B | Qwen3 | 8B | 0.994 | 5,092 MB | Validated |
+| Gemma2-9B | Gemma2 (iSWA) | 9B | 0.996 | 5,013 MB | Validated |
+| DeepSeek-R1-8B | DeepSeek | 8B | 0.982 | 4,965 MB | Validated |
+| Granite3.1-Dense-8B | Granite | 8B | 0.952 | 4,333 MB | Validated |
+| Qwen2.5-14B | Qwen2.5 | 14B | 0.987 | 8,442 MB | Validated |
+| Qwen2.5-Coder-14B | Qwen2.5 | 14B | 0.997 | 8,179 MB | Validated |
+| DeepSeek-R1-14B | DeepSeek | 14B | 0.994 | 8,210 MB | Validated |
+| Qwen3-14B | Qwen3 | 14B | 0.950 | 8,687 MB | Validated |
+| Qwen3-30B-A3B | Qwen3 MoE | 30B | 0.999 | 15,191 MB | Validated |
 
-Quality thresholds: continuation-logit cosine similarity >= 0.95 at 2x, >= 0.90 at 4x, >= 0.85 at 8x.
+Quality threshold: continuation-logit cosine similarity >= 0.95 at 2x for select pipeline.
+Full benchmark data: `docs/modelai-v1-benchmark-results.md`.
+
+### Incompatible Models (V1)
+
+These models **do not work** with the current modelai-llama.cpp fork:
+
+| Model | Failure | Reason |
+|---|---|---|
+| Gemma3-12B-IT Q4_K_M | LOAD FAIL | Missing Gemma3 hyperparameter key (upstream sync gap) |
+| OpenAI GPT-OSS-20B MXFP4 | LOAD FAIL | Unknown `gptoss` architecture (upstream sync gap) |
+| Phi4-14B Q4_K_M | CRASH | GGML graph hash set undersized for Phi4 (upstream sync gap) |
+
+These are upstream compatibility issues. Fix path: sync with newer upstream llama.cpp version.
 
 ### Known Limitations
 
