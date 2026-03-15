@@ -77,7 +77,7 @@ Replaced host pointer swap with `ggml_backend_tensor_set()` in all three `set_in
 | **Status** | OPEN |
 | **Models affected** | Qwen3-30B-A3B at 4K (all ratios), 8K (4x, 8x) |
 | **Discovered** | 2026-03-14, ModelAI Phase D testing |
-| **Plan reference** | Phase 6.3 |
+| **Plan reference** | Phase 4.1 |
 
 **Symptoms:**
 - `compaction_time_ms`, `baseline_decode_tok_s`, `compacted_decode_tok_s` are null for some test points
@@ -95,7 +95,7 @@ Replaced host pointer swap with `ggml_backend_tensor_set()` in all three `set_in
 | **Status** | OPEN |
 | **Models affected** | All models |
 | **Discovered** | 2026-03-14, ModelAI Phase D testing |
-| **Plan reference** | Phase 3.3 |
+| **Plan reference** | Phase 4.2 |
 
 **Symptoms:**
 - 8K: 518ms
@@ -117,7 +117,7 @@ Replaced host pointer swap with `ggml_backend_tensor_set()` in all three `set_in
 | **Pipeline** | select |
 | **Models affected** | Qwen3-14B only |
 | **Discovered** | 2026-03-14, ModelAI Phase D testing |
-| **Plan reference** | Phase 6 |
+| **Plan reference** | Phase 4.3 |
 
 **Symptoms:**
 - Qwen3-14B at 8K/8x: logit cosine = 0.973 (lowest of 33 test points)

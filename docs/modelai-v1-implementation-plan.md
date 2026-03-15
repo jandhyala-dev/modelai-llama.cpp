@@ -15,6 +15,7 @@
 | 2026-03-14 | v2 | Incorporated Phase D findings, live benchmark critical bug (nonuniform cosine 0.211), 80+ findings from 44 review files. Updated B1/B2/B3 to DONE. Added Phase 1A. |
 | 2026-03-14 | v3 | Code implementation: BUG-I01 FIXED (nonuniform fallback), BUG-I02 FIXED (B5 GPU-resident tensors), BUG-U01 MITIGATED (SWA warning), BUG-U02 investigated. |
 | 2026-03-14 | v4 | **Complete rewrite.** All phases through Phase 7 with explicit tests for each code fix, benchmark test plan, out-of-scope delineation, risk register. Structured for adversarial plan review. |
+| 2026-03-14 | v5 | **Reviewer 2 fixes.** Quality thresholds aligned to fork-summary (0.95/0.90/0.85). Added: Phase 5.3 pipeline allowlist, Phase 7.6 W1-W3, quality metric reconciliation, staging buffer verification test, mock-based guard tests, server CI tests (streaming/props/models/contract-version), statistical methodology, slot isolation method, CUDA/iSWA/old-commit risks. Fixed: Phase 5 numbering, bug tracker plan references, release checklist count (37). |
 
 ---
 
@@ -122,7 +123,8 @@ All 6 upstream issues verified safe/compatible. Integration tests added in `test
 - Assert: `cp_cache.k_bytes[ikv].size() == ggml_nbytes(k_tensor)` for each layer
 - Assert: `cp_cache.v_bytes[ikv].size() == ggml_nbytes(v_tensor)` for each layer
 - Assert: `cp_cache.kq_b_bytes[ikv].size() == ggml_nbytes(kq_b_tensor)` for each layer
-- Why: `aligned_byte_buffer::resize()` does NOT zero-initialize (uses `posix_memalign`). If the byte count is wrong, `ggml_backend_tensor_set` would read past the buffer or write partial data.
+- Assert: All values in the staging buffer are finite after materialization (no NaN/inf from uninitialized memory). Read back staging buffer contents and verify with `std::isfinite()`.
+- Why: `aligned_byte_buffer::resize()` does NOT zero-initialize (uses `posix_memalign`). If the byte count is wrong, `ggml_backend_tensor_set` would read past the buffer or write partial data. The all-finite check catches partial-write bugs where the exec function writes fewer bytes than expected.
 
 ---
 
@@ -205,6 +207,16 @@ All 6 upstream issues verified safe/compatible. Integration tests added in `test
 - Assert: `compacted_prefix_runtime_supported()` returns `false`
 - Why: Hybrid models interleave attention layers with recurrent (SSM) layers. The compaction algorithm assumes all layers use KV-cached attention. Compacting only the attention layers while leaving recurrent state unchanged would produce incorrect output.
 - Implementation note: No ModelAI target models use hybrid architectures. If no model fixture is available, verify rejection by code review of the guard condition and document as manual test. The guard checks for recurrent layer presence in model architecture metadata.
+
+**Test 3.4.4 — Mock-based guard logic unit tests (automated, no model fixture required)**
+
+- Setup: Create a unit test that directly calls `compacted_prefix_runtime_supported()` with synthetic KV cache configurations constructed in-process (not requiring model loading):
+  - `n_swa = 1` → must return `false` (SWA rejection)
+  - `n_swa = 0, swa_type = LLAMA_SWA_TYPE_NONE, n_pos_per_embd = 1` → must return `true`
+  - `n_pos_per_embd = 3` → must return `false` (M-RoPE rejection)
+- Assert: All return values match expected
+- Why: Tests 3.3.1, 3.4.1, and 3.4.3 require model fixtures that may not be available in CI. This mock-based test exercises the guard logic directly with synthetic values, ensuring the automated regression suite covers all rejection paths without model dependencies.
+- Implementation: Add to `tests/test-kv-compact-pipeline-integration.cpp` or a new `tests/test-kv-compact-guards.cpp` if the KV cache constructor can be called with synthetic params.
 
 ---
 
@@ -293,7 +305,7 @@ ctest --test-dir build -L main --output-on-failure
 
 **Files to modify:**
 - `src/llama-kv-compact-pipeline.cpp` — add timing around each stage
-- `include/llama.h` or `src/llama-kv-compact-pipeline.h` — add timing fields to `llama_kv_compact_stats`
+- `src/llama-kv-compact-pipeline.h` — add timing fields to `llama_kv_compact_stats` (internal header only — NOT `include/llama.h` to avoid public API/ABI changes)
 
 **Verification:**
 - Run instrumented pipeline at 4K and 32K
@@ -369,6 +381,29 @@ ctest --test-dir build -L main --output-on-failure
 - Assert: second compaction succeeds
 - Assert: active_n_kv after 4x < active_n_kv after 2x
 
+**Test 5.1.4 — Streaming response path**
+
+- Setup: Start llama-server, POST `/v1/completions` with `stream: true` after compaction
+- Assert: Server sends SSE events correctly (not buffered, correct `data:` prefix)
+- Assert: No crash or hang during streaming with compacted KV
+- Why: CI policy (`docs/modelai-ci-policy.md:73-79`) requires streaming response path testing.
+
+**Test 5.1.5 — GET /props and GET /models endpoints**
+
+- Setup: Start llama-server, POST `/compact`
+- Action: GET `/props`, GET `/v1/models`
+- Assert: `/props` returns valid JSON with compaction state fields
+- Assert: `/v1/models` returns model list (compaction does not break model metadata)
+- Why: CI policy requires /props and /models endpoint validation.
+
+**Test 5.1.6 — ModelAI contract-version field**
+
+- Setup: Start llama-server built with ModelAI fork
+- Action: GET `/props`
+- Assert: Response contains `modelai.contract` field with valid version string
+- Assert: Response contains `modelai.upstream_base_commit` provenance field
+- Why: CI policy requires contract-version provenance verification. ModelAI server depends on these fields.
+
 **Build and run:**
 ```bash
 cd tools/server/tests && python -m pytest unit/test_compact.py -v
@@ -398,7 +433,31 @@ cd tools/server/tests && python -m pytest unit/test_compact.py -v
 
 ---
 
-#### 5.3 Flash Attention Zero-Beta Verification
+#### 5.3 Server-Side Pipeline Allowlist (V1 Beta Safety Gate)
+
+**Problem:** The `/compact` endpoint accepts `method=self_study` (3.6 min at 4K), `method=omp` (23+ min), and other untested pipelines. These are production DoS vectors — a single API call can monopolize the GPU for minutes with no timeout.
+
+**Fix:** Add a server-side method allowlist that restricts `/compact` to `select`-only for V1 beta.
+
+**File to modify:** `tools/server/server-context.cpp` (compact handler)
+
+**Implementation:**
+- Add config flag `LLAMA_COMPACT_ALLOWED_METHODS` (default: `"select"`)
+- In the `/compact` handler, reject methods not in the allowlist with HTTP 400 and descriptive error
+- Log `LLAMA_LOG_WARN` when a disallowed method is requested
+
+**Test:** Add to `tools/server/tests/unit/test_compact.py`:
+- POST `/compact` with `method=solver` → 400 error, message mentions allowlist
+- POST `/compact` with `method=self_study` → 400 error
+- POST `/compact` with `method=select` → succeeds
+
+**Why this is in V1 scope (not deferred):** This is a one-line safety gate, not an optimization. Without it, untested pipelines with multi-minute latency are reachable by any API caller.
+
+**Additionally:** Add `LLAMA_LOG_WARN` in the graph build path when compaction produces beta != 0 under `flash_attn = true`, warning that flash attention is silently falling back to non-flash due to non-zero beta. This prevents a silent performance cliff when users switch from `select` to `solver` pipeline.
+
+---
+
+#### 5.4 Flash Attention Zero-Beta Verification
 
 **Current state:** V0 supports flash attention with zero-beta (PR-6). Non-zero beta under flash attention is NOT supported (requires FlashBias).
 
@@ -410,7 +469,7 @@ cd tools/server/tests && python -m pytest unit/test_compact.py -v
 
 **File to modify:** `tests/test-kv-compact-pipeline-integration.cpp` (or `test-kv-compact-quality.cpp`)
 
-**Test 5.3.1 — Flash attention with select pipeline (zero-beta)**
+**Test 5.4.1 — Flash attention with select pipeline (zero-beta)**
 
 - Setup: Load model with `flash_attn = true`, fill KV to 128 tokens
 - Action: Run select pipeline at 2x (select pipeline uses zero beta by default)
@@ -420,7 +479,7 @@ cd tools/server/tests && python -m pytest unit/test_compact.py -v
 
 ---
 
-#### 5.4 B5 Decode Throughput Verification
+#### 5.5 B5 Decode Throughput Verification
 
 **Goal:** Confirm the B5 fix (GPU-resident tensors) improved decode throughput at 32K context. This is a quantitative verification of the BUG-I02 fix.
 
@@ -449,6 +508,12 @@ PIPELINE=select RATIO=2 N_CTX=32768 ./scripts/bench-kv-compact-workload.sh /path
 **Verification criteria:**
 - After/Before ratio > 2.0x improvement
 - After throughput > 4.0 tok/s (at minimum, no longer 3.4x regression)
+
+**Deterministic generation requirements:**
+- Temperature = 0.0, fixed random seed (e.g., seed=42) for both runs
+- Identical prompt text and tokenization
+- Same model file, same GPU, same build flags
+- This ensures throughput comparison is apples-to-apples
 
 ---
 
@@ -524,12 +589,16 @@ Run select pipeline across all 4 models at all context/ratio combinations. 3 rep
 | DeepSeek-R1-14B Q4_K_M | 4K, 8K, 16K | 2x, 4x, 8x |
 | Qwen3-30B-A3B Q4_K_M | 4K, 8K, 16K, 32K | 2x, 4x, 8x |
 
-**Total test points:** 4 models × 3–4 contexts × 3 ratios × 3 reps = **108–144 runs**
+**Note on DeepSeek-R1-14B:** 32K context excluded because DeepSeek-R1-14B at 32K requires ~18GB (9.3GB model + ~9GB KV) which leaves insufficient headroom on 32GB hardware for stable benchmarking. If 64GB hardware is available, add 32K to the matrix.
 
-**Quality thresholds (per `docs/modelai-ci-policy.md`):**
-- 2x compression: logit cosine >= 0.99
-- 4x compression: logit cosine >= 0.95
-- 8x compression: logit cosine >= 0.90
+**Total test points:** 4 models × 3–4 contexts × 3 ratios × 3 reps = **108–144 runs** (+ 4 warmup runs, 1 per model)
+
+**Quality thresholds (aligned with `test-kv-compact-quality.cpp` and existing benchmark data):**
+- 2x compression: logit cosine >= 0.95
+- 4x compression: logit cosine >= 0.90
+- 8x compression: logit cosine >= 0.85
+
+**Note:** These thresholds match the fork-summary quality tests and are consistent with existing benchmark data (e.g., select/2x/4K = 0.973, select/4x/4K = 0.928). The CI policy (`docs/modelai-ci-policy.md`) uses "perplexity delta" as a complementary metric — see [Quality Metric Reconciliation](#quality-metric-reconciliation) below.
 
 **Metrics per run:**
 1. `logit_cosine` — primary quality metric
@@ -540,7 +609,14 @@ Run select pipeline across all 4 models at all context/ratio combinations. 3 rep
 6. `solver_time_ms` — if solver pipeline
 7. `query_gen_time_ms` — if applicable
 
-**Pass criteria:** ALL test points meet quality threshold for their compression ratio. No null timing data.
+**Statistical methodology:**
+- Record mean ± standard deviation for each test point across 3 reps
+- Flag any test point where the 95% confidence interval (mean ± 1.96 × stddev / sqrt(3)) overlaps the quality threshold
+- Pass/fail uses the **mean** value, not individual runs
+- For flagged marginal points: run 2 additional reps (total 5) to narrow the confidence interval
+- Include 1 warmup run per model (not counted) to avoid Metal shader compilation bias on first run
+
+**Pass criteria:** ALL test point **means** meet quality threshold for their compression ratio. No null timing data.
 
 **Failure handling:** If any test point fails quality threshold:
 1. Investigate root cause
@@ -614,14 +690,47 @@ Per `docs/modelai-ci-policy.md`, workloads W4-W6 have not been measured:
 
 **Pass criteria:** No crashes, no quality degradation below threshold, correct state isolation between slots.
 
+**W5 slot isolation verification method:** After compacting slot 0, compare slot 1's output logits (for a fixed prompt) against the baseline logits recorded BEFORE compaction. Logit cosine must be >= 0.999 (slot 1 should be completely unaffected).
+
 ---
 
-#### 7.6 B5 Decode Throughput Before/After
+#### 7.6 CI Workload Coverage (W1–W3)
 
-Execute the before/after comparison described in Phase 5.4. Record results in benchmark artifacts.
+Per `docs/modelai-ci-policy.md:99-104`, workloads W1-W3 are required but have not been measured:
+
+| Workload | Description | Test Plan |
+|----------|-------------|-----------|
+| W1 | 80K filing → first answer | CLI: load Qwen3-8B, prompt with 80K SEC filing text (from `tests/data/sec-10k-benchmark`), compact at 2x, generate first 128-token answer. Measure: compaction time, decode tok/s, answer coherence. |
+| W2 | 80K filing → 20 follow-up questions | CLI: after W1, run 20 sequential decode batches (simulating follow-up questions). Measure: cumulative decode tok/s, quality stability across turns. |
+| W3 | Executive summary generation | CLI: load Qwen3-8B, prompt with 16K document, compact at 4x, generate 512-token summary. Measure: compaction time, summary coherence, decode tok/s. |
+
+**Model:** Qwen3-8B Q4_K_M (128K context window, fits 80K filing on 32GB)
+
+**Pass criteria:** Compaction completes without error. Decode throughput within 10% of non-compacted baseline. Generated text is coherent (manual review).
+
+**Note:** W1 and W2 require the SEC 10-K filing test data at `tests/data/sec-10k-benchmark`. If not available, use synthetic text of equivalent length.
+
+---
+
+#### 7.7 B5 Decode Throughput Before/After
+
+Execute the before/after comparison described in Phase 5.5. Record results in benchmark artifacts.
 
 **Output format:** CSV row with columns:
 `commit,model,context,ratio,pipeline,baseline_decode_tok_s,compacted_decode_tok_s,improvement_ratio`
+
+---
+
+### Quality Metric Reconciliation
+
+**Canonical quality metric:** Logit cosine similarity (used throughout this plan and in `test-kv-compact-quality.cpp`).
+
+**CI policy discrepancy:** `docs/modelai-ci-policy.md:124` references "quality regression > 1% perplexity delta." This is a complementary metric, not the primary quality gate.
+
+**Resolution:** Phase 6 documentation updates (Phase 6.5) must update `docs/modelai-ci-policy.md` to:
+1. Specify logit cosine similarity as the primary quality metric
+2. Retain perplexity delta as a secondary regression detection metric
+3. Align the per-ratio thresholds with this plan: 2x >= 0.95, 4x >= 0.90, 8x >= 0.85
 
 ---
 
@@ -659,9 +768,9 @@ Per the hostile review protocol's mandatory testing-review loop:
 
 #### Release Checklist Execution
 
-Per `docs/modelai-release-checklist.md`, all 24 items must be checked:
+Per `docs/modelai-release-checklist.md`, all 37 items must be checked (10 pre-release + 8 release + 10 post-release + 9 release notes fields):
 
-**Pre-Release (8 items):**
+**Pre-Release (10 items):**
 - [ ] All Phase 7 benchmark results committed
 - [ ] All tests pass (ctest -L main)
 - [ ] Server tests pass (pytest test_compact.py)
@@ -670,6 +779,8 @@ Per `docs/modelai-release-checklist.md`, all 24 items must be checked:
 - [ ] Adversarial review PASS verdict
 - [ ] Release notes drafted
 - [ ] Binary built and tested
+- [ ] Rollback path verified
+- [ ] ModelAI compatibility smoke tests pass
 
 **Release (8 items):**
 - [ ] Tag created
@@ -681,15 +792,23 @@ Per `docs/modelai-release-checklist.md`, all 24 items must be checked:
 - [ ] Monitoring alerts configured
 - [ ] Stakeholders notified
 
-**Post-Release (8 items):**
-- [ ] Smoke test on production hardware
-- [ ] Benchmark results match pre-release
-- [ ] Error rate baseline established
-- [ ] Metrics archival confirmed
+**Post-Release (10 items):**
+- [ ] ModelAI smoke tests pass against released engine tag
+- [ ] No regression in W1-W6 workloads beyond approved thresholds
+- [ ] Previous release tag available for rollback
+- [ ] CI benchmark artifacts archived and linked from release notes
+- [ ] Release metadata stored (fork SHA, upstream SHA, platforms, model/backend matrix, benchmark refs)
 - [ ] Upstream sync planned
 - [ ] Next milestone scoped
 - [ ] Bug tracker updated
+- [ ] Error rate baseline established
 - [ ] Release retrospective scheduled
+
+**Required Release Notes (9 fields):**
+- [ ] Release tag, fork commit SHA, upstream base SHA
+- [ ] Included milestone range
+- [ ] Supported platform/backend matrix, unsupported matrix
+- [ ] Benchmark summary, known limitations, rollback target
 
 ---
 
@@ -764,7 +883,7 @@ Phase 2: Performance (B1/B2/B3) ────────────────
 **Blockers:**
 - Phase 7 benchmarks require ALL code changes to be complete (Phases 3-5)
 - Release gate requires Phase 7 benchmarks to be complete
-- Phase 5.4 (B5 throughput) requires Qwen3-30B-A3B model and checkout of old commit
+- Phase 5.5 (B5 throughput) requires Qwen3-30B-A3B model and checkout of old commit
 - 128K validation (Phase 7.2) may require extended test time (>1 hour per model)
 
 ---
@@ -774,13 +893,16 @@ Phase 2: Performance (B1/B2/B3) ────────────────
 | Risk | Likelihood | Impact | Mitigation |
 |------|-----------|--------|------------|
 | Q8_0 KV not supported by stories15M fixture | Medium | Phase 3.5 test cannot run in CI | Test with production model manually; document result |
-| Flash attention not available on stories15M | Medium | Phase 5.3 test cannot run in CI | Test with production model manually; document result |
+| Flash attention not available on stories15M | Medium | Phase 5.4 test cannot run in CI | Test with production model manually; document result |
 | 128K OOM on 32GB M2 Pro | Low | Phase 7.2 incomplete | Use Qwen3-8B (5.2GB) which leaves 26GB for KV; reduce batch size |
 | BUG-I04 profiling reveals no single dominant bottleneck | Medium | No clear optimization target | Document all stage timings; defer optimization to PR-7 |
 | BUG-I05 investigation finds algorithmic issue at 8x | Low | Quality threshold may need adjustment | Document as model-specific; investigate if >1 model affected |
 | Adversarial review finds Critical bug in V0 code | Medium | Delays release for break-fix cycle | Budget 2-3 review cycles in timeline; fix immediately |
 | Upstream llama.cpp release breaks fork | Low | Requires emergency upstream sync | upstream-master branch isolates risk; test before merge |
 | SWA warning static guard not thread-safe on non-C++11 compilers | Very Low | Warning may fire multiple times | C++11 is required by llama.cpp; document compiler requirement |
+| CUDA deployment of B5 fix untested | Medium | Compacted prefix materialization via `ggml_backend_tensor_set()` dispatches to CUDA backend. If deployed on CUDA, the upload path is exercised but never tested. | Document as known limitation in release notes. B5 uses `ggml_backend_tensor_set()` which is backend-agnostic — CUDA path is the same API, just different backend. Risk is low but untested. |
+| iSWA partial-compaction quality untested end-to-end | Low | Compacting only the base cache of an iSWA model (while SWA sub-cache is uncompacted) has not been tested for inference quality. The guard returns correct values, but the resulting inference with mixed compacted/uncompacted caches is unverified. | If SWA model fixture becomes available, add e2e quality test. Document as known untested scenario in release notes. |
+| Phase 5.5 old commit (df895bed) may not compile | Low | B5 before/after comparison requires building an older commit | Verify build before starting measurement. If it fails, use the earliest post-B5 commit as "after" and rely on Phase D benchmark data for "before" numbers. |
 
 ---
 
