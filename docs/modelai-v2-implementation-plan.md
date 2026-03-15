@@ -13,7 +13,8 @@
 |------|---------|--------|
 | 2026-03-15 | v1 | Initial V2 plan: 8 phases, GPU solver + production solver + flash+beta + upstream sync + SWA + 50x + 128K |
 | 2026-03-15 | v2 | Full rewrite. Adversarial gap analysis against MIT repo. 13 critical deviations identified. MIT repo as source of truth. |
-| 2026-03-15 | v2.1 | **Phase reorder.** Metal GPU solver moved to Phase 3 (early) so all downstream phases benefit from GPU acceleration. SWA bumped to Phase 9. |
+| 2026-03-15 | v2.1 | Phase reorder. Metal GPU solver moved to Phase 3 (early). SWA bumped to Phase 9. 11 phases total. |
+| 2026-03-15 | v3 | **Review fix.** Address all findings from 2 adversarial reviewers. Add 3 new gaps (GAP-14/15/16). Fix Cholesky/QR trade-off (use Accelerate LAPACK). Fix FA hybrid LSE design. Revise GPU target to <700ms. Add chunk overlap. Port budget swap/annealing solvers. Add select regression gate. Fix DeepSeek target. Acknowledge existing on-policy code. Add query memory budget. Revise timeline to 35-55 days. |
 
 ---
 
@@ -36,9 +37,9 @@ V2 replaces all low-grade fork solver/NNLS/OMP/budget code with **faithful C++ p
 | Goal | V1 State | V2 Target |
 |------|----------|-----------|
 | Production compression ratio | 2-8x (select only) | **10-20x** (solver + nonuniform) |
-| Solver quality on GQA models | -0.17 to 0.91 cosine (broken) | **>= 0.90** cosine (production-grade) |
-| Compaction latency (14B, 4K ctx) | ~2-5s on CPU | **< 500ms** (GPU solver) |
-| Flash attention with compacted prefix | Blocked (falls back to non-FA) | **Supported** (hybrid split) |
+| Solver quality on GQA models | -0.17 to 0.91 cosine (broken) | **>= 0.90** cosine on standard models; DeepSeek-R1 excluded (requires investigation) |
+| Compaction latency (14B, 4K ctx) | ~2-5s on CPU | **< 700ms** (GPU solver) |
+| Flash attention with compacted prefix | Blocked (falls back to non-FA) | **Supported** (hybrid split with LSE extraction) |
 | Model coverage | 15 models (3 incompatible) | **18+ models** (upstream sync) |
 | SWA compaction | Base cache only | **Full iSWA** (base + SWA sub-cache) |
 | 50x compression | Not attempted | **Research capability** (quality-gated) |
@@ -47,6 +48,16 @@ V2 replaces all low-grade fork solver/NNLS/OMP/budget code with **faithful C++ p
 ### Design Principle: MIT Repo Is Source of Truth
 
 The MIT compaction repo (`/Users/ajayjandhyala/dev/whippet/compaction/`) contains the reference implementation for every compaction algorithm. **V2 does not reinvent any algorithm.** Every numerical technique is ported directly from the MIT Python code to C++. Where the fork has diverged, the fork code is replaced.
+
+### Numerical Stability: Cholesky vs QR Trade-Off
+
+The MIT Python code uses `torch.linalg.lstsq` (QR decomposition via LAPACK `xGELS`) which has condition number κ for the solve. The fork's C++ code uses Cholesky normal equations which have condition number κ² (squared). This means Cholesky is less numerically stable for ill-conditioned matrices at high compression.
+
+**V2 mitigation strategy:**
+1. **Primary:** Use macOS Accelerate framework LAPACK `sgels` for true QR-based least squares (available on all Apple Silicon Macs)
+2. **Fallback:** Cholesky with symmetrization (`XtX = 0.5 * (XtX + XtX.T)`) and minimum regularization (λ >= 1e-8) to partially compensate for κ²
+3. **Last resort:** Cholesky with aggressive regularization (Tikhonov) — biases toward zero but numerically stable
+4. At 50x compression where κ can exceed 10^6, QR via LAPACK is essential — Cholesky will produce garbage
 
 ### Honest Quality Assessment at High Compression
 
@@ -76,7 +87,7 @@ From the MIT paper's own benchmarks (Qwen3-4B, QuALITY):
 
 ## Adversarial Gap Analysis: Fork vs MIT Reference
 
-This analysis compares every numerical algorithm in the fork against the MIT reference. All deviations are tagged with severity and remediation phase.
+This analysis compares every numerical algorithm in the fork against the MIT reference. All deviations are tagged with severity and remediation phase. 16 gaps total (13 original + 3 from reviewer findings).
 
 ### GAP-01: NNLS Solver Is Fundamentally Different (CRITICAL)
 
@@ -91,25 +102,27 @@ This analysis compares every numerical algorithm in the fork against the MIT ref
 - No lstsq option, no fallback solver
 - Bounds are **much tighter** — MIT allows weights as small as 1e-12, fork floors at 0.05
 
-**Impact:** NNLS produces different beta values on every model. Root cause of solver quality degradation on GQA models.
+**Impact:** NNLS produces different beta values on every model. One of the primary contributors to solver quality degradation on GQA models (along with GAP-12 and GAP-03).
 
-**Remediation:** Phase 2.1 — Replace fork NNLS with direct lstsq + clamp (MIT default). Add PGD as optional path.
+**Remediation:** Phase 2.1 — Replace fork NNLS with Accelerate LAPACK `sgels` + clamp (matching MIT's QR-based lstsq). Add PGD as optional path.
 
 ### GAP-02: V Fitting Has Only Cholesky Solver (MAJOR)
 
 **MIT** (`algorithms/base.py:240-420`):
-- 3 solvers: `lstsq` (default, `torch.linalg.lstsq`), `cholesky`, `pinv` (`torch.linalg.pinv`)
-- Ridge scaling: `spectral` (λ × ||X||₂²), `frobenius` (λ × ||X||²_F / t), `fixed` (λ raw)
-- Fallback: lstsq NaN → Cholesky with `λ=1e-6`
+- Primary: `torch.linalg.lstsq` (QR-based via LAPACK `xGELS`)
+- Fallback: Cholesky with `λ=1e-6` and symmetrization `XtX = 0.5 * (XtX + XtX.T)`
+- Ridge scaling: `spectral` (λ × ‖X‖₂²), `frobenius` (λ × ‖X‖²_F / t), `fixed` (λ raw)
+- Underdetermined case (n < t): Uses `XXᵀ + λI` formulation instead of `XᵀX + λI`
 
 **Fork** (`llama-kv-compact-solver.cpp:360-405`):
 - Only Cholesky via `solve_least_squares_normal_eq` with lambda escalation (×10, 5 attempts)
-- Ridge scaling: `min(λ × spectral_norm, 1.0)` — **caps at 1.0**, which is incorrect for ill-conditioned matrices where spectral norm >> 1
-- No lstsq or pinv fallback
+- Ridge scaling: `min(λ × spectral_norm, 1.0)` — **caps at 1.0**, incorrect
+- No symmetrization before Cholesky
+- No underdetermined formulation
 
 **Impact:** V fitting fails silently on ill-conditioned matrices. Ridge cap at 1.0 under-regularizes when it matters most.
 
-**Remediation:** Phase 2.2 — Port MIT's 3-solver cascade. Remove ridge lambda cap. Add Frobenius scaling mode.
+**Remediation:** Phase 2.2 — Use Accelerate LAPACK `sgels` as primary. Cholesky with symmetrization as fallback. Remove ridge cap. Add Frobenius scaling. Handle n < t case.
 
 ### GAP-03: Self-Study Query Generation Is Minimal (CRITICAL)
 
@@ -118,18 +131,17 @@ This analysis compares every numerical algorithm in the fork against the MIT ref
 - vLLM batch inference for speed
 - Hook-based Q extraction via `q_proj(hidden_states)` → `q_norm` → RoPE → reshape
 - ~50,000 queries per KV head
-- Chunked prefill for memory efficiency
-- Multiple conversation specs with extraction functions
+- Multiple `ConversationSpec` objects with different question types for semantic diversity
 
 **Fork** (`llama-kv-compact-self-study.cpp:141-240`):
 - Single-model autoregressive generation, ~256 tokens
 - Q-capture via `cb_eval` callback on `Qcur` tensor
 - ~256 × n_rep queries per KV head (at most ~1024 for GQA 4:1)
-- No batch mode, no conversation specs
+- No diversity controls (same distribution for all queries)
 
-**Impact:** 50x fewer queries than MIT. Query diversity is the single most impactful quality factor (paper Figure 4 ablation). This is the primary root cause of solver quality failure.
+**Impact:** 50x fewer queries than MIT, all from one distribution. Query diversity (not just count) is a primary quality factor (paper Figure 4). Simply generating more continuation tokens has diminishing returns — all queries are from the same autoregressive distribution.
 
-**Remediation:** Phase 4 — Increase generation to ~2000 tokens. Add prefill-Q capture as zero-cost supplement. Target ~5,000-10,000 queries per KV head combined.
+**Remediation:** Phase 4 — Increase generation to ~2000 tokens with diversity: (a) vary temperature/top_p across rounds, (b) inject question-word seed tokens, (c) add prefill-Q capture for zero-cost high-quality queries. Target ~5,000-10,000 per KV head.
 
 ### GAP-04: No Progressive OMP Schedule (MAJOR)
 
@@ -142,108 +154,99 @@ This analysis compares every numerical algorithm in the fork against the MIT ref
 
 **Fork** (`llama-kv-compact-select.cpp:169-345`):
 - Fixed `k_choice=1`, `nnls_interval=1` (no progressive schedule)
-- Always solves NNLS every iteration
 
-**Impact:** OMP is ~4x slower than it could be at high token counts (>1500 keys). At 10x+ compression with large contexts, this makes OMP infeasible.
+**Impact:** OMP is ~4x slower than it could be at high token counts.
 
-**Remediation:** Phase 5.1 — Port MIT's progressive schedule. Add schedule parameter to OMP options.
+**Remediation:** Phase 5.1 — Port MIT's progressive schedule.
 
 ### GAP-05: No Drop-Key Refinement (MAJOR)
 
 **MIT** (`algorithms/omp.py:629-702`):
 - After initial selection: check β < `drop_key_beta_cutoff`
 - Drop low-weight keys, mask permanently, re-enter selection loop
-- Max 3 refinement entries to prevent infinite loops
+- Max 3 refinement entries
 
 **Fork** (`llama-kv-compact-select.cpp:264-301`):
-- Beta pruning during OMP loop (removes mid-iteration), different mechanism
-- Threshold: `log(-7.0)` ≈ e^-7 ≈ 0.0009 (in log-domain)
-- No post-selection refinement pass
+- Beta pruning during OMP loop (mid-iteration), different mechanism
 
-**Impact:** Fork's mid-loop pruning is less effective than MIT's post-selection refinement. Key quality at >10x compression is lower.
+**Impact:** Fork's mid-loop pruning is less effective than MIT's post-selection refinement.
 
-**Remediation:** Phase 5.2 — Add MIT's post-selection drop-key refinement phase after OMP loop.
+**Remediation:** Phase 5.2 — Replace mid-loop pruning with MIT's post-selection drop-key refinement.
 
 ### GAP-06: Head Budget Uses Entropy, Not Influence Curves (MAJOR)
 
-**MIT** (`head_budget_optimization/solver.py:220-355`):
-- Greedy budget solver with pre-computed influence curves (ratio → δ log perplexity)
-- Per-model budget JSONs in `head_budgets/` directory (Gemma3, Qwen3, Llama3.1)
-- Step size 0.001 for fine-grained allocation
-- Marginal benefit = δ(current_ratio) - δ(current_ratio + step_size)
+**MIT** (`head_budget_optimization/solver.py`):
+- **6 solver functions:** `solve_greedy`, `solve_swap`, `solve_annealing`, `solve_for_ratios`, `solve_ratio_agnostic_swap`, `solve_ratio_agnostic`
+- The `optimized_agnostic.json` files in the MIT repo were generated by `solve_ratio_agnostic_swap()` (the swap solver), NOT the greedy solver
+- Pre-computed budget JSONs for Gemma3-4B, Gemma3-12B, Llama3.1-8B, Qwen3-4B
 
 **Fork** (`llama-kv-compact-budget.cpp:12-167`):
 - Entropy-proportional: `weight = 1/max(entropy, 1e-3)`
-- Uniform sensitivity curve assumed
 - No influence curve precomputation
-- No per-model budget files
+- No budget files
 
-**Impact:** Entropy is a weak proxy for head sensitivity. Paper Figure 5 shows some heads tolerate 50x while others need 2x. Without influence curves, nonuniform budgets are suboptimal.
+**Impact:** Entropy is a weak proxy. Greedy solver alone cannot reproduce MIT's `optimized_agnostic.json` budgets or generate budgets for new models.
 
-**Remediation:** Phase 5.3 — Port MIT's greedy solver. Ship pre-computed budgets from MIT repo for supported models.
+**Remediation:** Phase 5.3 — Port greedy + swap + `solve_ratio_agnostic_swap` solvers. Ship MIT budget JSONs. Provide budget generation script for new models.
 
-### GAP-07: No On-Policy Sequential Compaction (RESEARCH)
+### GAP-07: On-Policy Implementation Is Simpler Than MIT (MODERATE)
 
 **MIT** (`compaction_methods/per_layer_head_on_policy.py`):
-- Compact layer 0 → generate on-policy queries using compacted Layer 0 → compact Layer 1 → ...
-- Each layer sees compacted earlier layers during query generation
-- More accurate than off-policy (all layers compacted with same queries)
+- Per-layer sequential: compact layer 0 → generate on-policy queries using compacted Layer 0 → compact Layer 1 → ...
+- `_extract_on_policy_queries_for_layer()` has 200+ lines of cache-building logic
 
-**Fork:** Not implemented.
+**Fork** (`llama-kv-compact-on-policy.cpp`, 90 lines):
+- Two-pass approach: Pass 1 = standard solver, Pass 2 = generate continuation + re-run solver with captured Q
+- Does NOT do per-layer sequential compaction
+- Falls back to Pass 1 on Pass 2 failure
 
-**Impact:** Quality improvement at >10x compression. Not critical for 2-8x where off-policy is sufficient.
+**Impact:** Fork's 2-pass approach captures some on-policy benefit but misses per-layer sequential correction that improves quality at >10x.
 
-**Remediation:** Phase 8 (experimental) — Port MIT's on-policy loop after core solver is fixed.
+**Remediation:** Phase 8 — Extend existing 90-line on-policy file to support MIT's per-layer sequential mode. Current 2-pass code is useful and should be kept as fast-path.
 
 ### GAP-08: Chunked Compaction Lacks KV-Based Mode (MODERATE)
 
 **MIT** (`compaction_methods/chunked.py`):
-- **KV-based** (default): Prefill full sequence, construct virtual [prefix + chunk + suffix] in KV space, compact chunk
-- **Text-based**: Split text, re-tokenize chunks independently
-- No RoPE correction needed for KV-based mode
-- Multiple chunking strategies (fixed-size, per-document, per-note)
+- **KV-based** (default): Prefill full sequence, construct virtual [prefix + chunk + suffix] in KV space
+- Chunking strategies: `FixedSizeChunking`, `LongHealthChunking`, `LQAChunking`
+- No chunk overlap in MIT (verified — `overlap_ratio` does not exist in MIT code)
 
 **Fork** (`llama-kv-compact-pipeline.cpp:932-1241`):
-- Basic chunked pipeline: split prefix, per-chunk top-k, merge, single solver pass
-- No KV-based chunking (operates on token positions, not KV states)
-- No RoPE phase handling across boundaries
+- Basic position-based splitting
 
-**Impact:** Quality loss at chunk boundaries for long contexts (>16K). KV-based chunking preserves cross-chunk attention information.
+**Impact:** Quality loss at chunk boundaries for long contexts.
 
-**Remediation:** Phase 6 — Port MIT's KV-based chunking strategy.
+**Note:** Reviewer 2 cited MIT `overlap_ratio=0.1` but this parameter does not exist in the MIT codebase. However, chunk boundary quality IS a legitimate concern. V2 adds optional overlap as an enhancement beyond MIT.
+
+**Remediation:** Phase 6 — Port MIT's KV-based chunking. Add optional overlap at chunk boundaries (fork enhancement, not MIT port) to mitigate boundary quality loss.
 
 ### GAP-09: Missing Prefill-Q Query Extraction (MODERATE)
 
 **MIT** (`query_generation/self_study.py:560-800`):
 - Forward pass hook extracts Q vectors from actual prefill computation
-- `q = q_proj(hidden_states)` → q_norm → RoPE → reshape
-- Zero additional cost — queries are a byproduct of prefill
 
-**Fork:** Not implemented. Prefill-Q pipeline exists in concept but only extracts cache keys as surrogates.
+**Fork** (`llama-kv-compact-prefill-q.cpp`, 347 lines):
+- Prefill-Q infrastructure **exists** but uses cache keys as surrogates, not actual Q extraction from prefill forward pass
 
-**Impact:** Free queries from actual prefill are the highest-quality surrogates.
-
-**Remediation:** Phase 4.2 — Extend Q-capture callback to fire during initial prefill.
+**Remediation:** Phase 4.2 — Extend existing prefill-Q code to capture real Q vectors during initial prefill via `cb_eval` callback.
 
 ### GAP-10: No Attention Bias Pass-Through in Selection (MINOR)
 
 **MIT** (`algorithms/omp.py:63-74`):
-- Accepts `attention_bias` tensor, adds to scores before softmax
-- Used for sliding window masking, causal masking, context prefix offsets
+- Accepts `attention_bias` tensor
 
 **Fork:** Selection functions don't accept attention bias.
 
-**Remediation:** Phase 9 (SWA) — Add attention_bias parameter to selection and OMP functions.
+**Remediation:** Phase 9 (SWA) — Add attention_bias parameter.
 
 ### GAP-11: Missing Query Mixing Configuration (MINOR)
 
 **MIT** (`query_generation/config.py`):
 - `QueryConfig` supports multiple `QueryMethodConfig` with fractional mixing
-- Methods: `self_study`, `random_vectors`, `cache_keys`, `context_prefill`
 
-**Fork:** Fixed pipeline: either cache-key surrogates or self-study. No mixing.
+**Fork:** Fixed pipeline, no mixing.
 
-**Remediation:** Phase 4 — Add query source mixing in pipeline orchestration.
+**Remediation:** Phase 4 — Add query source mixing config.
 
 ### GAP-12: Ridge Lambda Cap at 1.0 Is Incorrect (MAJOR)
 
@@ -254,41 +257,72 @@ return std::min(lambda * sn, 1.0f);  // CAP AT 1.0
 
 **MIT** (`algorithms/base.py`):
 ```python
-lambda_scaled = ridge_lambda * (spectral_norm ** 2)  // NO CAP
+lambda_scaled = ridge_lambda * (spectral_norm ** 2)  // NO CAP, squared
 ```
 
-**Impact:** When spectral norm is large, the cap prevents adequate regularization. The solver produces NaN or garbage.
+**Impact:** Cap prevents adequate regularization. Also scales by spectral_norm, not spectral_norm² (MIT squares it).
 
-**Remediation:** Phase 2.2 — Remove the 1.0 cap. Scale by spectral_norm², not spectral_norm.
+**Remediation:** Phase 2.2 — Remove cap. Scale by spectral_norm².
 
 ### GAP-13: MIT Budget JSONs Not Shipped (MODERATE)
 
 **MIT** (`head_budget_optimization/head_budgets/`):
 - Pre-computed budgets for: `gemma-3-12b-it`, `gemma-3-4b-it`, `Llama-3.1-8B-Instruct`, `Qwen3-4B`, `Qwen3-4B-Instruct-2507`
 - Each has: `optimized_agnostic.json`, `pyramidkv_beta20.json`, `uniform.json`
+- JSON structure: `{"L0H0": 0.0025, "L0H1": 0.0015, ...}` — proportions per head summing to 1.0
 
-**Fork:** No pre-computed budget files.
+**Remediation:** Phase 5.3 — Copy MIT budget JSONs. Generate budgets for Phase 1 new models using ported swap solver.
 
-**Remediation:** Phase 5.3 — Copy MIT budget JSONs into fork. Generate budgets for additional models.
+### GAP-14: Spectral-to-Frobenius Ridge Fallback Missing (MINOR) [NEW — Reviewer 1]
+
+**MIT** (`algorithms/base.py:152-155`):
+```python
+try:
+    lam = ridge_lambda * (torch.linalg.matrix_norm(X, ord=2)**2)
+except Exception:
+    lam = ridge_lambda * ((torch.linalg.matrix_norm(X, ord='fro')**2) / t)
+```
+
+**Fork:** No automatic fallback from spectral to Frobenius on failure.
+
+**Remediation:** Phase 2.2 — Add spectral→Frobenius fallback in ridge scaling.
+
+### GAP-15: OMP Cached Selection Order Missing (MINOR) [NEW — Reviewer 1 + Reviewer 2]
+
+**MIT** (`algorithms/omp.py:243-263`):
+- `cached_selection_order` parameter allows reusing a previously computed OMP selection order for efficient multi-ratio evaluation
+
+**Impact:** Without this, evaluating quality at 2x, 4x, 8x, 16x requires running OMP 4 separate times. With it, run OMP once at max ratio, take prefixes.
+
+**Remediation:** Phase 5.1 — Add `cached_selection_order` to OMP options.
+
+### GAP-16: OMP Quality Parameters Missing (MINOR) [NEW — Reviewer 2]
+
+**MIT** (`algorithms/omp.py:43-68`):
+- `use_abs_corr`: use |correlation| for key selection (default False)
+- `normalize_exp_scores`: L2-normalize columns before correlation (default False)
+- `zerobeta`: zero beta before C2 computation (default False)
+
+**Fork:** None of these parameters exist.
+
+**Remediation:** Phase 5.1 — Add as config parameters to OMP options struct. Match MIT defaults.
 
 ---
 
 ## MIT Source-of-Truth File Mapping
 
-Every V2 solver/algorithm change maps directly to MIT reference code.
-
 | Fork File | MIT Source File | What to Port |
 |-----------|----------------|-------------|
-| `llama-kv-compact-solver.cpp` (NNLS) | `algorithms/base.py:471-605` | lstsq + clamp default, PGD with spectral step, bounds [1e-12, None] |
-| `llama-kv-compact-solver.cpp` (V fit) | `algorithms/base.py:240-420` | 3-solver cascade (lstsq→cholesky→pinv), spectral/frobenius/fixed ridge, no lambda cap |
-| `llama-kv-compact-solver.cpp` (ridge) | `algorithms/base.py:156-188` | spectral = λ × ‖X‖₂², frobenius = λ × ‖X‖²_F / t, fixed = λ |
-| `llama-kv-compact-select.cpp` (OMP) | `algorithms/omp.py:478-718` | Progressive schedule, lazy NNLS, drop-key refinement (max 3 entries) |
-| `llama-kv-compact-budget.cpp` | `head_budget_optimization/solver.py:220-355` | Greedy solver with influence curves, step_size=0.001 |
-| `llama-kv-compact-self-study.cpp` | `query_generation/self_study.py:1-800` | Increase to ~2000 gen tokens, prefill-Q extraction, Q/K norm handling |
-| `llama-kv-compact-pipeline.cpp` (chunked) | `compaction_methods/chunked.py` | KV-based chunking, no RoPE correction needed |
-| `llama-kv-compact-pipeline.cpp` (nonuniform) | `compaction_methods/per_layer_head.py:288-306` | Budget JSON loading, `max_ratio_per_head` cap |
-| `data/head_budgets/` (NEW) | `head_budget_optimization/head_budgets/` | Copy pre-computed budgets for shipped models |
-| `llama-kv-compact-pipeline.cpp` (on-policy) | `compaction_methods/per_layer_head_on_policy.py` | On-policy sequential compaction (experimental) |
+| `llama-kv-compact-solver.cpp` (NNLS) | `algorithms/base.py:471-605` | Accelerate LAPACK `sgels` + clamp (QR-based), PGD, bounds [1e-12, None] |
+| `llama-kv-compact-solver.cpp` (V fit) | `algorithms/base.py:240-420` | `sgels` primary, Cholesky+symmetrization fallback, spectral/frobenius/fixed ridge, no cap, n<t handling |
+| `llama-kv-compact-solver.cpp` (ridge) | `algorithms/base.py:146-161` | spectral = λ × ‖X‖₂² with spectral→frobenius fallback, frobenius = λ × ‖X‖²_F / t, fixed = λ |
+| `llama-kv-compact-select.cpp` (OMP) | `algorithms/omp.py:478-718` | Progressive schedule, lazy NNLS, drop-key refinement, cached_selection_order, use_abs_corr/normalize_exp_scores/zerobeta params |
+| `llama-kv-compact-budget.cpp` | `head_budget_optimization/solver.py` | Greedy + swap + ratio_agnostic_swap solvers, influence curves, smoothing_window |
+| `llama-kv-compact-self-study.cpp` | `query_generation/self_study.py` | Increase to ~2000 gen tokens, diversity via temperature/seed variation, prefill-Q |
+| `llama-kv-compact-pipeline.cpp` (chunked) | `compaction_methods/chunked.py` | KV-based chunking + optional overlap (fork enhancement) |
+| `llama-kv-compact-pipeline.cpp` (nonuniform) | `compaction_methods/per_layer_head.py:288-306` | Budget JSON loading, max_ratio_per_head cap with redistribution |
+| `data/head_budgets/` (NEW) | `head_budget_optimization/head_budgets/` | Copy pre-computed budgets + generation script for new models |
+| `llama-kv-compact-on-policy.cpp` | `compaction_methods/per_layer_head_on_policy.py` | Extend 90-line 2-pass to MIT's per-layer sequential mode |
 
 ---
 
@@ -300,200 +334,197 @@ Every V2 solver/algorithm change maps directly to MIT reference code.
 
 ### 1.1 Upstream Merge Strategy
 
-The upstream-master branch tracks `ggml-org/llama.cpp` master. The merge must:
-
-1. **Identify the target upstream commit** — pick a stable point after Gemma3 arch support, GPT-OSS arch support, and Phi4 graph fix land
-2. **Cherry-pick vs full merge** — full merge preferred for long-term maintainability, but cherry-pick if merge conflicts in KV cache code are intractable
-3. **Preserve all compaction code** — every file in `src/llama-kv-compact-*`, `src/llama-kv-compacted-prefix-*`, and compaction-related changes in `src/llama-kv-cache.*` must survive the merge
-4. **Re-run full V1 test suite** — all 15 models × 51 tests must still pass after merge
+1. **Identify the target upstream commit** — pick a stable point after Gemma3 arch, GPT-OSS arch, and Phi4 graph fix
+2. **Cherry-pick vs full merge** — full merge preferred; cherry-pick if KV cache conflicts are intractable. **Decision criteria for switching to cherry-pick:** if merge conflict resolution exceeds 3 days with no working build, switch to targeted cherry-picks of the 3 model fixes + Metal kernel improvements
+3. **Preserve all compaction code** — every `src/llama-kv-compact-*` and `src/llama-kv-compacted-prefix-*` file must survive
+4. **Re-run full V1 test suite** after merge
 
 ### 1.2 Target Upstream Features
 
-| Feature | Why | Upstream Reference |
-|---------|-----|--------------------|
-| Gemma3 architecture support | Unblocks Gemma3-12B model loading | Merged upstream ~Feb 2026 |
-| GPT-OSS architecture support | Unblocks GPT-OSS-20B model loading | `gptoss` arch registration |
-| Phi4 graph hash set fix | Unblocks Phi4-14B (GGML assertion) | GGML hash set sizing |
-| Fused multiply-add for Q4/Q5/Q6_K | 16-28% faster prompt processing | [PR #20032](https://github.com/ggml-org/llama.cpp/pull/20032) |
-| Metal mul_mv_ext for BF16/Q2_K/Q3_K | Faster Metal kernels | [PR #20250](https://github.com/ggml-org/llama.cpp/pull/20250) |
-| KV cache defrag fixes | Defrag bug can corrupt data | [PR #10873](https://github.com/ggerganov/llama.cpp/pull/10873) |
+| Feature | Why |
+|---------|-----|
+| Gemma3 architecture support | Unblocks Gemma3-12B |
+| GPT-OSS architecture support | Unblocks GPT-OSS-20B |
+| Phi4 graph hash set fix | Unblocks Phi4-14B |
+| Fused multiply-add for Q4/Q5/Q6_K | 16-28% faster pp |
+| Metal mul_mv_ext for BF16/Q2_K/Q3_K | Faster Metal kernels |
 
 ### 1.3 Merge Verification
 
-After merge:
 - [ ] Build succeeds: `cmake -B build -DGGML_METAL=ON && cmake --build build --config Release`
 - [ ] ctest passes: `ctest --test-dir build -L main --output-on-failure`
 - [ ] All 15 V1 models pass 51/51 integration tests
-- [ ] Gemma3-12B loads and passes integration tests
-- [ ] GPT-OSS-20B loads and passes integration tests
-- [ ] Phi4-14B loads and passes integration tests
-- [ ] Select pipeline cosine >= 0.950 on all models
-- [ ] Baseline tok/s within 5% of V1 numbers (no regression from merge)
+- [ ] 3 new models (Gemma3-12B, GPT-OSS-20B, Phi4-14B) load and pass integration tests
+- [ ] **Select pipeline regression gate:** cosine >= 0.950 on all models (must not regress from V1)
+- [ ] Baseline tok/s within 5% of V1 numbers
 
 ### 1.4 Estimated Effort
 
-**High.** Upstream KV cache code has been refactored. Expect 2-5 days of merge conflict resolution and verification.
+**High.** 2-5 days.
 
 ---
 
-## Phase 2: Solver Core — Port MIT Numerical Algorithms (GAP-01, GAP-02, GAP-12)
+## Phase 2: Solver Core — Port MIT Numerical Algorithms (GAP-01, GAP-02, GAP-12, GAP-14)
 
-**Goal:** Replace all fork solver/NNLS code with faithful C++ ports of MIT reference algorithms. This is the foundation for every subsequent phase.
+**Goal:** Replace all fork solver/NNLS code with faithful C++ ports of MIT reference algorithms using macOS Accelerate LAPACK for numerical parity.
 
 **MIT source files:** `algorithms/base.py` (lines 1-605)
 
 ### 2.1 Replace NNLS Implementation (GAP-01)
 
-**Current fork** (`llama-kv-compact-solver.cpp:316-338`): Log-domain gradient descent with bounds [0.05, 20.0], 2 iterations.
+**Current fork:** Log-domain gradient descent with bounds [0.05, 20.0], 2 iterations.
 
-**Replace with MIT algorithm** (`algorithms/base.py:471-605`):
+**Replace with MIT algorithm using Accelerate LAPACK:**
 
-**Mode 1 — Direct Solve (default, `nnls_iters=0`):**
+**Mode 1 — QR-based lstsq (default, `nnls_iters=0`):**
 ```
-B = lstsq(M, y)                    // normal equations via Cholesky
+B = sgels(M, y)                     // Accelerate LAPACK sgels (QR decomposition)
 B = clamp(B, lower_bound, upper_bound)  // lower=1e-12, upper=None
+```
+
+**CPU fallback (no Accelerate):**
+```
+B = cholesky_solve(M^T M + 1e-8*I, M^T y)  // normal equations with min regularization
+XtX = 0.5 * (XtX + XtX.T)                  // symmetrization before Cholesky
+B = clamp(B, lower_bound, upper_bound)
 ```
 
 **Mode 2 — Projected Gradient Descent (optional, `nnls_iters > 0`):**
 ```
-L = spectral_norm(M)²              // power iteration, 3 iterations per MIT
-η = 1/L                            // step size
+L = spectral_norm(M)²              // power iteration, 3 iterations
+η = 1/L
 FOR t = 1 to nnls_iters:
     grad = M^T @ (M @ B - y)
     B = clamp(B - η * grad, lower_bound, upper_bound)
 ```
 
-**Key changes from current fork:**
+**Key changes:**
 - Remove log-domain NNLS entirely
-- Change bounds from [0.05, 20.0] to [1e-12, None] (match MIT defaults)
-- Default to lstsq + clamp (0 iterations), not gradient descent
-- Power iteration uses 3 steps for spectral norm (MIT), not 8 (fork)
-- Step size is `1/L` (spectral norm²), not `1/(spectral_norm + lambda)` (fork)
+- Change bounds from [0.05, 20.0] to [1e-12, None]
+- Use LAPACK `sgels` for QR-based solve (condition number κ, not κ²)
+- Cholesky fallback adds symmetrization step and minimum regularization
 
-### 2.2 Replace V Fitting (C2 Solver) (GAP-02, GAP-12)
+### 2.2 Replace V Fitting (GAP-02, GAP-12, GAP-14)
 
-**Replace with MIT 3-solver cascade** (`algorithms/base.py:240-420`):
+**Replace with LAPACK-based solver cascade:**
 
 ```
-TRY lstsq:
-    C2 = lstsq(X, Y)               // normal equations via Cholesky
+TRY sgels (QR):
+    C2 = sgels(X, Y)                // Accelerate LAPACK (condition κ)
     IF C2 has NaN → GOTO cholesky
 
 TRY cholesky:
-    C2 = cholesky_solve(X^T X + λI, X^T Y)
-    IF fails → GOTO pinv
+    XtX = X^T @ X + λ_eff * I
+    XtX = 0.5 * (XtX + XtX.T)      // SYMMETRIZATION — prevents fp32 asymmetry
+    IF n < t:                       // UNDERDETERMINED case
+        Use XXᵀ + λI formulation instead
+    C2 = cholesky_solve(XtX, X^T Y)
+    IF fails → GOTO aggressive_cholesky
 
-TRY pinv:
-    C2 = pinv(X^T X + λI) @ X^T Y  // pseudoinverse
+TRY aggressive_cholesky:
+    C2 = cholesky_solve(XtX + large_λ * I, X^T Y)  // Tikhonov bias toward zero
+    // NOTE: This biases the solution. At 50x compression this is expected.
 ```
 
-**Ridge scaling modes** (`algorithms/base.py:156-188`):
+**Ridge scaling modes:**
 
-| Mode | Formula | When to use |
-|------|---------|-------------|
-| `spectral` | λ_eff = λ × σ_max(X)² | Default. Adapts to matrix condition |
-| `frobenius` | λ_eff = λ × (‖X‖²_F / t) | Robust to outlier singular values |
-| `fixed` | λ_eff = λ | Direct control |
+| Mode | Formula | Fallback |
+|------|---------|----------|
+| `spectral` | λ_eff = λ × σ_max(X)² | On failure → frobenius |
+| `frobenius` | λ_eff = λ × (‖X‖²_F / t) | — |
+| `fixed` | λ_eff = λ | — |
 
-**Critical fix:** Remove `std::min(..., 1.0f)` cap. Scale by `spectral_norm²`, not `spectral_norm`.
+**Critical fixes:**
+- Remove `std::min(..., 1.0f)` cap
+- Scale by spectral_norm² (not spectral_norm)
+- Add symmetrization before every Cholesky
+- Add spectral→frobenius automatic fallback (GAP-14)
+- Handle underdetermined case n < t
 
-**C++ pinv implementation:** Use Cholesky with aggressive regularization as practical equivalent (no LAPACK SVD available).
+**LAPACK availability:** macOS Accelerate framework provides `sgels` on all Apple Silicon Macs. Link via `-framework Accelerate`. Add `#include <Accelerate/Accelerate.h>` and use `sgels_()` (Fortran interface).
 
 ### 2.3 Max-Shift Rescaling
 
-The fork's rescaling (`llama-kv-compact-solver.cpp:283-293`) is a valid numerical correction for C++ fp32. MIT doesn't need it (PyTorch handles precision). **Keep the fork's rescaling.**
+The fork's rescaling (`llama-kv-compact-solver.cpp:283-293`) is a valid numerical correction for C++ fp32. **Keep it.**
 
 ### 2.4 Testing
 
-- [ ] NNLS lstsq mode: beta values match MIT reference within fp32 tolerance on stories15M
-- [ ] NNLS PGD mode: converges in `nnls_iters` iterations with correct step size
-- [ ] V fitting lstsq → cholesky → pinv cascade: inject NaN to verify fallback chain
-- [ ] Ridge scaling: spectral/frobenius/fixed modes produce correct λ_eff values
+- [ ] NNLS with LAPACK `sgels`: beta values match MIT reference within fp32 tolerance on stories15M
+- [ ] NNLS with Cholesky fallback: symmetrization prevents asymmetry failures
+- [ ] V fitting `sgels` → cholesky → aggressive_cholesky cascade: inject NaN to verify each fallback
+- [ ] Ridge scaling: spectral/frobenius/fixed modes produce correct λ_eff
+- [ ] Spectral→frobenius fallback triggers correctly on spectral norm failure
 - [ ] No lambda cap: verify λ_eff > 1.0 is allowed
-- [ ] Solver cosine on stories15M >= 0.99 (currently 0.996)
-- [ ] Solver cosine on Qwen3-8B > 0.87 (currently 0.874)
-- [ ] Power iteration with 3 iterations matches MIT spectral norm within 1%
+- [ ] Underdetermined case (n < t): verify correct formulation used
+- [ ] **Select pipeline regression:** all 15 V1 models still achieve cosine >= 0.950 at 2x
+- [ ] Solver cosine on stories15M >= 0.99
+- [ ] Solver cosine on Qwen3-8B >= 0.87 (currently 0.874, should improve)
+- [ ] Add degenerate-input reference test: near-duplicate keys producing ill-conditioned XᵀX
 
 ### 2.5 Files Created/Modified
 
 | File | Action |
 |------|--------|
-| `src/llama-kv-compact-solver.cpp` | MAJOR REWRITE — new NNLS, 3-solver V fit, ridge scaling modes |
-| `src/llama-kv-compact-solver.h` | MODIFY — new solver options (solver_mode, ridge_scale_mode) |
-| `tests/test-kv-compact-solver-reference.cpp` | NEW — MIT reference comparison tests |
+| `src/llama-kv-compact-solver.cpp` | MAJOR REWRITE — LAPACK sgels, 3-tier cascade, ridge scaling, symmetrization |
+| `src/llama-kv-compact-solver.h` | MODIFY — solver_mode, ridge_scale_mode, underdetermined flag |
+| `CMakeLists.txt` | MODIFY — link Accelerate framework on macOS |
+| `tests/test-kv-compact-solver-reference.cpp` | NEW — MIT reference comparison + degenerate input tests |
 
 ### 2.6 Estimated Effort
 
-**Medium.** 2-3 days.
+**Medium-High.** 3-5 days (revised from 2-3 — mathematically dense rewrite with LAPACK integration).
 
 ---
 
 ## Phase 3: GPU Solver via Metal Compute Shaders (B4)
 
-**Goal:** Move attention score computation and matrix operations from CPU to GPU, reducing compaction latency from ~2-5s to <500ms for 14B at 4K context.
+**Goal:** Move attention score computation and matrix operations from CPU to GPU, reducing compaction latency from ~2-5s to <700ms for 14B at 4K context.
 
-**Rationale for early placement:** GPU acceleration benefits every subsequent phase — query scoring (Phase 4), OMP selection (Phase 5), chunked compaction (Phase 6), and high compression (Phase 8) all involve heavy attention score computation. Building GPU support early means all downstream work runs faster.
+**Note:** GPU acceleration benefits Phases 4-6 and 8 downstream. However, Phases 4-5 are **algorithmically independent** of GPU and can proceed with CPU-only solver if Phase 3 is delayed. This is an explicit schedule-risk mitigation — see Risk Register.
 
 ### 3.1 What Moves to GPU
 
 | Operation | Current (CPU) | GPU Target | Speedup |
 |-----------|--------------|------------|---------|
-| Attention score matrix: `score[q][k] = dot(Q[q], K[k]) / sqrt(d)` | O(n_q × n_k × d) scalar loops with NEON | Metal compute shader, thousands of threads | **10-15x** |
-| Exp + softmax normalization | Per-row sequential | Per-row parallel reduction | **5-8x** |
-| Matrix multiply (X^T X for normal equations) | Scalar with NEON 4-wide | Metal GEMM or MPS MatrixMultiplication | **10-20x** |
-| K/V extraction from KV cache | `ggml_backend_tensor_get()` per-head → CPU | Direct GPU buffer read (no host roundtrip) | **Eliminates transfer** |
+| Attention scores: `dot(Q[q], K[k]) / sqrt(d)` | Scalar + NEON | Metal compute shader | **10-15x** |
+| Exp + softmax normalization | Sequential | Parallel reduction | **5-8x** |
+| Matrix multiply (XᵀX for normal equations) | NEON 4-wide | Metal GEMM / MPS | **10-20x** |
+| K/V extraction | `ggml_backend_tensor_get()` → CPU | GPU buffer copy | **Eliminates transfer** |
 
 ### 3.2 What Stays on CPU
 
 | Operation | Why |
 |-----------|-----|
-| Cholesky decomposition | Sequential pivot-dependent — GPU parallelism doesn't help |
-| NNLS (lstsq + clamp) | Small problem size (t × t), sequential |
-| Power iteration for spectral norm (3 iters) | Sequential, small matrix |
+| LAPACK `sgels` (QR solve) | Sequential, requires Accelerate framework |
+| Cholesky decomposition | Sequential pivot-dependent |
+| NNLS (lstsq + clamp) | Small problem, sequential |
 | Pipeline orchestration | Control flow |
-| OMP greedy loop | Sequential selection with dependencies |
+| OMP greedy loop | Sequential with dependencies |
 
 ### 3.3 Metal Shader Implementation
 
 New file: `ggml/src/ggml-metal/ggml-kv-compact-solver.metal`
 
-**Shader 1: Attention Score Matrix**
-```metal
-kernel void kv_compact_attention_scores(
-    device const float * queries  [[buffer(0)]],   // [n_q × d]
-    device const float * keys     [[buffer(1)]],   // [n_k × d]
-    device float       * scores   [[buffer(2)]],   // [n_q × n_k]
-    constant uint      & n_q      [[buffer(3)]],
-    constant uint      & n_k      [[buffer(4)]],
-    constant uint      & d        [[buffer(5)]],
-    constant float     & inv_sqrt_d [[buffer(6)]],
-    uint2 gid [[thread_position_in_grid]])
-```
+**Integration note:** llama.cpp compiles Metal shaders as a monolithic file. The new shader may need to be included in the existing `ggml-metal.metal` or establish a new compilation unit via `ggml_metal_library_from_source()`.
 
-**Shader 2: Softmax with Max-Shift** — Per-row softmax with threadgroup max reduction.
+**Shader 1: Attention Score Matrix** — each thread computes one score[qi][ki].
 
-**Shader 3: GEMM for Normal Equations** — X^T X computation. Can leverage Metal Performance Shaders `MPSMatrixMultiplication`.
+**Shader 2: Softmax with Max-Shift** — per-row softmax with threadgroup max reduction.
 
-### 3.4 Host-Side Dispatch
+**Shader 3: GEMM** — XᵀX via Metal Performance Shaders `MPSMatrixMultiplication` (validate fp32 support).
 
-New file: `src/llama-kv-compact-solver-metal.mm` (Objective-C++ for Metal API)
+### 3.4 GPU K/V Extraction
 
-```
-llama_kv_compact_solver_metal_context:
-  - init(device, command_queue)
-  - compute_attention_scores(queries, keys) → scores_buffer
-  - compute_softmax(scores_buffer) → exp_scores_buffer
-  - compute_normal_equations(X, Y) → XtX, XtY
-  - readback_results() → host memory
-```
-
-### 3.5 GPU K/V Extraction
-
-Replace `ggml_backend_tensor_get()` (GPU→CPU copy) with direct GPU buffer access:
 - Allocate Metal buffers for extracted K/V matrices
 - Copy within GPU: KV cache tensor → solver input buffer
-- Solver shaders read directly from these buffers
-- Only final results (beta, compacted V) are read back to CPU for storage
+- Only final results (beta, compacted V) read back to CPU
+
+### 3.5 Buffer Lifecycle
+
+Metal buffer allocation/deallocation:
+- Allocate per-compaction-request (not per-head — amortize allocation)
+- Command buffer per batch of heads (reduce kernel launch overhead)
+- `waitUntilCompleted` for synchronous dispatch (simplicity > async complexity)
 
 ### 3.6 Performance Budget
 
@@ -501,233 +532,284 @@ For Qwen3-14B at 4K context (40 layers × 8 KV heads = 320 invocations):
 
 | Phase | V1 CPU Time | V2 GPU Time | Notes |
 |-------|:-----------:|:-----------:|-------|
-| K/V extraction | ~800ms | ~50ms | Eliminate host roundtrip |
-| Attention scores | ~1200ms | ~80ms | GPU parallel dot products |
-| Softmax | ~200ms | ~20ms | GPU parallel reduction |
-| NNLS (lstsq + clamp) | ~300ms | ~300ms | Stays on CPU (small problem) |
-| Cholesky + V solve | ~200ms | ~200ms | Stays on CPU (sequential) |
+| K/V extraction | ~800ms | ~50ms | GPU buffer copy |
+| Attention scores | ~1200ms | ~80ms | GPU parallel |
+| Softmax | ~200ms | ~20ms | GPU parallel |
+| LAPACK sgels + NNLS | ~300ms | ~300ms | CPU (LAPACK) |
+| Cholesky + V solve | ~200ms | ~200ms | CPU (sequential) |
 | **Total** | **~2700ms** | **~650ms** | **~4x speedup** |
 
-Conservative estimate: **4x speedup** (NNLS/Cholesky remain sequential bottlenecks).
+**Why <700ms not <500ms:** CPU-bound LAPACK/Cholesky (500ms combined) is the floor. The <700ms target accounts for GPU overhead and provides margin. Future optimization: batch 320 head NNLS problems as a single GPU dispatch (stretch goal, not Phase 3 scope).
 
-### 3.7 Testing
+### 3.7 CPU Fallback
 
-- [ ] Metal shader unit tests: attention scores match CPU reference within fp32 tolerance
-- [ ] Full solver pipeline produces identical beta/V to CPU path (cosine >= 0.9999)
+When Metal is unavailable: all operations run on CPU with NEON. No quality difference, only speed difference (~2700ms vs ~650ms). Fallback performance target: < 3000ms.
+
+### 3.8 Testing
+
+- [ ] Metal shader unit tests: attention scores match CPU within fp32 tolerance
+- [ ] Full pipeline cosine >= 0.9999 GPU vs CPU (numerical equivalence)
 - [ ] No memory leaks (Metal buffer lifecycle)
-- [ ] Graceful CPU fallback when Metal is unavailable
-- [ ] Per-stage timing shows GPU phases faster than CPU phases
+- [ ] Graceful CPU fallback when Metal unavailable
+- [ ] Per-stage timing: GPU phases faster than CPU phases
 
-### 3.8 Files Created/Modified
+### 3.9 Files Created/Modified
 
 | File | Action |
 |------|--------|
 | `ggml/src/ggml-metal/ggml-kv-compact-solver.metal` | NEW — Metal compute shaders |
 | `src/llama-kv-compact-solver-metal.h` | NEW — Metal solver API |
-| `src/llama-kv-compact-solver-metal.mm` | NEW — Metal solver implementation |
-| `src/llama-kv-compact-pipeline.cpp` | MODIFY — dispatch to GPU solver when available |
+| `src/llama-kv-compact-solver-metal.mm` | NEW — Objective-C++ implementation |
+| `src/llama-kv-compact-pipeline.cpp` | MODIFY — dispatch to GPU when available |
 | `CMakeLists.txt` | MODIFY — Metal shader compilation |
 | `tests/test-kv-compact-solver-metal.cpp` | NEW — GPU solver tests |
 
-### 3.9 Estimated Effort
+### 3.10 Estimated Effort
 
-**High.** Metal compute shader development + Objective-C++ interop + buffer management. 3-5 days for working prototype, 1-2 more for optimization.
+**High.** 5-8 days (revised from 3-5 — first-time Metal compute + Obj-C++ interop + build integration).
 
 ---
 
 ## Phase 4: Query Generation — Self-Study + Prefill-Q (GAP-03, GAP-09, GAP-11)
 
-**Goal:** Increase query count from ~256 to ~5,000-10,000 per KV head by extending self-study and adding prefill-Q extraction. GPU acceleration from Phase 3 speeds up query scoring.
+**Goal:** Increase query count from ~256 to ~5,000-10,000 per KV head with improved diversity.
 
 **MIT source files:** `query_generation/self_study.py`, `query_generation/config.py`
 
 ### 4.1 Extend Self-Study Generation (GAP-03)
 
-**Current fork** (`llama-kv-compact-self-study.cpp:141-240`): ~256 generated tokens.
+1. Increase `n_generate` from 256 to **2000** (config parameter)
+2. Multiple generation rounds (3-5) with **diversity controls:**
+   - Vary `temperature` across rounds: [0.6, 0.8, 1.0]
+   - Vary seed tokens: use argmax (default), then top-k samples (k=5, k=10)
+   - Inject question-word seeds: "What", "How", "Why" tokens to elicit question-like continuations
+3. Keep existing Q-capture callback mechanism
+4. Subsample to `max_queries_per_kv_head=10000` with uniform stride
 
-**Port from MIT:**
-1. Increase `n_generate` from 256 to **2000** (config parameter, not hardcoded)
-2. Multiple generation rounds: run self-study 3-5 times with different seed tokens for diversity
-3. Keep existing Q-capture callback mechanism (it's correct)
-4. After generation: subsample to `max_queries_per_kv_head=10000` with uniform stride
-
-**Why not 50,000 like MIT?** MIT uses vLLM batch inference with GPUs. We run single-model autoregressive on a Mac. 2000 tokens × 3 rounds × n_rep = ~24,000 queries for GQA 4:1. This is 25x more than V1.
-
-**Q/K Normalization:** The fork's existing `scale = k_norm_mean / q_norm_mean` fix is correct. Keep it.
+**Why not 50,000 like MIT?** MIT uses vLLM batch inference with 2 models. Fork runs single-model autoregressive. 2000 × 3 rounds × GQA n_rep ≈ ~24,000 queries for GQA 4:1.
 
 ### 4.2 Add Prefill-Q Capture (GAP-09)
 
-**New capability:** Capture Q vectors during the initial prefill forward pass.
+Extend existing `llama-kv-compact-prefill-q.cpp` (347 lines):
+1. Install Q-capture callback before initial `llama_decode()`
+2. Capture real Q vectors at every layer during prefill
+3. Combine with self-study Q's (concatenate, then subsample)
 
-1. Install Q-capture callback before initial `llama_decode()` for the input prompt
-2. Extract Q vectors at every layer as a byproduct of normal inference
-3. Store in the same `llama_q_capture_state` structure
-4. After prefill: combine prefill Q's with self-study Q's (concatenate, then subsample)
+**Cost:** Zero additional compute.
 
-**MIT reference:** `query_generation/self_study.py:560-800` — hook-based Q extraction.
+### 4.3 Query Memory Budget
 
-**Cost:** Zero additional compute. Q vectors are computed during prefill anyway.
+For Qwen3-14B (40 layers × 8 KV heads × 128 head_dim × 10,000 queries × 4 bytes):
+- **Per-layer:** 8 heads × 10K × 128 × 4 = ~40 MB
+- **All layers simultaneously:** 40 × 40 MB = ~1.6 GB
 
-### 4.3 Query Source Mixing (GAP-11)
+**Strategy:** Process per-layer, not batch. During Phase 2 solver (per-layer loop), capture queries for current layer only. Peak query memory: ~40 MB (one layer at a time), not 1.6 GB.
+
+### 4.4 Query Source Mixing (GAP-11)
 
 ```cpp
 struct llama_kv_compact_query_config {
-    bool use_prefill_q    = true;   // capture Q during prefill
-    bool use_self_study   = true;   // generate Q via autoregressive continuation
-    bool use_cache_keys   = false;  // legacy: use K as surrogate Q
-    uint32_t n_generate   = 2000;   // self-study generation tokens
-    uint32_t n_rounds     = 3;      // self-study repetitions
-    uint32_t max_per_head = 10000;  // subsample limit per KV head
+    bool use_prefill_q    = true;
+    bool use_self_study   = true;
+    bool use_cache_keys   = false;  // legacy
+    uint32_t n_generate   = 2000;
+    uint32_t n_rounds     = 3;
+    float    temperatures[3] = {0.6f, 0.8f, 1.0f};  // per-round diversity
+    uint32_t max_per_head = 10000;
 };
 ```
 
-### 4.4 Testing
+### 4.5 Testing
 
-- [ ] Self-study generates >= 2000 tokens per round (up from 256)
-- [ ] Prefill-Q captures Q vectors for every layer during initial prompt processing
-- [ ] Combined query count >= 5000 per KV head for GQA 4:1 model
-- [ ] Solver cosine with improved queries: >= 0.90 on Qwen3-8B at 2x (currently 0.874)
-- [ ] Solver cosine with improved queries: >= 0.85 on DeepSeek-R1-8B at 2x (currently -0.025)
-- [ ] GQA regrouping still correct after increasing query count
+- [ ] Self-study generates >= 2000 tokens per round
+- [ ] Prefill-Q captures Q at every layer during initial prompt
+- [ ] Combined query count >= 5000 per KV head for GQA 4:1
+- [ ] Temperature variation produces measurably different Q distributions across rounds
+- [ ] **Cumulative quality after Phases 2-4:** solver cosine >= 0.90 on Qwen3-8B at 2x
+- [ ] **Cumulative quality after Phases 2-4:** solver cosine improvement on DeepSeek-R1-8B (measure, no fixed target — see DeepSeek note below)
+- [ ] **Select pipeline regression:** cosine >= 0.950 on all 15 models (unchanged from V1)
+- [ ] Query memory stays < 100 MB peak (per-layer processing)
 
-### 4.5 Files Created/Modified
+**DeepSeek-R1-8B note:** V1 solver cosine is -0.025 (anti-correlated). The root cause is unclear — possibly NNLS bounds (GAP-01), possibly MLA architecture mismatch. After Phase 2 NNLS fix and Phase 4 query improvements, measure and report actual cosine. Do NOT commit to >= 0.90 until root cause is understood. If quality remains < 0.50, DeepSeek-R1 requires dedicated investigation outside the standard pipeline.
+
+### 4.6 Files Created/Modified
 
 | File | Action |
 |------|--------|
-| `src/llama-kv-compact-self-study.cpp` | MODIFY — increase n_generate, multi-round, prefill-Q |
-| `src/llama-kv-compact-self-study.h` | MODIFY — new config fields |
-| `src/llama-kv-compact-query.cpp` | MODIFY — prefill-Q extraction mode |
-| `src/llama-kv-compact-pipeline.cpp` | MODIFY — query mixing in solver pipeline |
+| `src/llama-kv-compact-self-study.cpp` | MODIFY — n_generate, multi-round, diversity controls |
+| `src/llama-kv-compact-self-study.h` | MODIFY — query config with temperatures |
+| `src/llama-kv-compact-prefill-q.cpp` | MODIFY — real Q capture during prefill |
+| `src/llama-kv-compact-pipeline.cpp` | MODIFY — query mixing |
 
-### 4.6 Estimated Effort
+### 4.7 Estimated Effort
 
-**Medium.** Most infrastructure exists. 2-3 days.
+**Medium.** 2-3 days.
 
 ---
 
-## Phase 5: OMP + Budget — Port MIT Selection and Allocation (GAP-04, GAP-05, GAP-06, GAP-13)
+## Phase 5: OMP + Budget — Port MIT Selection and Allocation (GAP-04, GAP-05, GAP-06, GAP-13, GAP-15, GAP-16)
 
-**Goal:** Replace fork's OMP and budget allocation with MIT reference implementations. GPU from Phase 3 accelerates OMP scoring.
+**Goal:** Replace fork's OMP and budget allocation with MIT reference implementations.
 
 **MIT source files:** `algorithms/omp.py`, `head_budget_optimization/solver.py`
 
-### 5.1 Progressive OMP Schedule (GAP-04)
-
-**Port MIT's DEFAULT_PROGRESSIVE_SCHEDULE:**
+### 5.1 Progressive OMP Schedule + Parameters (GAP-04, GAP-15, GAP-16)
 
 ```cpp
 struct omp_schedule_entry {
-    uint32_t threshold;     // switch after selecting this many keys
-    uint32_t k_choice;      // keys per iteration
-    uint32_t nnls_interval; // NNLS refit frequency
+    uint32_t threshold;
+    uint32_t k_choice;
+    uint32_t nnls_interval;
 };
 
 static const omp_schedule_entry DEFAULT_OMP_SCHEDULE[] = {
-    { 300,       1, 1 },   // 0-300:   standard OMP (exact)
-    { 1500,      2, 2 },   // 301-1500: batch 2, refit every 2
-    { UINT32_MAX, 4, 2 },  // 1501+:   batch 4, refit every 2
+    { 300,       1, 1 },
+    { 1500,      2, 2 },
+    { UINT32_MAX, 4, 2 },
+};
+
+struct llama_kv_compact_omp_opts {
+    // ... existing fields ...
+    const omp_schedule_entry * schedule = DEFAULT_OMP_SCHEDULE;
+    uint32_t schedule_len              = 3;
+    bool     use_abs_corr              = false;   // GAP-16
+    bool     normalize_exp_scores      = false;   // GAP-16
+    bool     zerobeta                  = false;   // GAP-16
+    std::vector<uint32_t> * cached_selection_order = nullptr;  // GAP-15
 };
 ```
 
-**Speed impact:** At >1500 keys, ~8x faster OMP iteration rate.
+**Cached selection order (GAP-15):** Run OMP once at max target size. Cache the full selection order. For smaller ratios (2x, 4x, 8x), take prefixes of the cached order. Eliminates re-running OMP per ratio.
 
 ### 5.2 Drop-Key Refinement (GAP-05)
 
-**Port MIT's post-selection refinement** (`algorithms/omp.py:629-702`):
+Replace mid-loop beta pruning with MIT's post-selection refinement:
 
 ```
 AFTER initial OMP selection of t keys:
-  FOR refinement_pass = 0 to 2:  // max 3 entries
-    dropped = [i for i in selected if beta[i] < drop_key_beta_cutoff]
+  FOR refinement_pass = 0 to 2:  // max 3
+    dropped = [i for i in selected if beta[i] < cutoff]
     IF len(dropped) == 0: BREAK
     mask[dropped] = permanent
     Re-enter OMP loop to fill len(dropped) slots
     Refit NNLS on new selection
+
+// Always do final NNLS solve when nnls_interval > 1
+IF nnls_interval > 1:
+    solve_nnls(selected, target)  // MIT omp.py:706-709
 ```
 
-**Replace** fork's mid-loop beta pruning with MIT's post-selection approach.
+### 5.3 Budget Solver — Port Greedy + Swap + Ratio-Agnostic (GAP-06, GAP-13)
 
-### 5.3 Greedy Budget Solver (GAP-06, GAP-13)
+**Port 3 of MIT's 6 solvers** (the ones needed for production):
 
-**Port from MIT** (`head_budget_optimization/solver.py:220-355`):
+| MIT Solver | Port? | Why |
+|-----------|:-----:|-----|
+| `solve_greedy()` | **Yes** | Fast allocation for runtime use |
+| `solve_swap()` | **Yes** | Handles U-shaped curves, needed for budget generation |
+| `solve_ratio_agnostic_swap()` | **Yes** | Generates `optimized_agnostic.json` budgets for new models |
+| `solve_annealing()` | No | Marginal improvement over swap; expensive |
+| `solve_for_ratios()` | No | Wrapper, trivial to add later |
+| `solve_ratio_agnostic()` | No | Wrapper for ratio_agnostic_swap |
 
+**MIT solver features to port:**
+- `smoothing_window` for influence curves — sliding average for noisy curves (use smoothed for decisions, original for loss evaluation)
+- `max_ratio_per_head` cap with excess redistribution to other heads
+- Global-layer detection (infer from curve keys, skip SWA layers)
+
+**Budget JSON loading:**
+```cpp
+bool llama_kv_compact_load_head_budgets(
+    const char * json_path,
+    std::vector<float> & proportions  // output: per-head proportions
+);
 ```
-allocate_all_heads(min_ratio_per_head)
-WHILE sum(budgets) < target_total:
-    best_head = argmax_h marginal_benefit(h, step_size)
-    budgets[best_head] += step_size
-```
 
-**Ship pre-computed budgets:** Copy MIT repo's `head_budgets/` into `data/head_budgets/`.
+**JSON parsing:** Use a minimal hand-rolled JSON parser (no external deps) or embed a single-header parser. The JSON structure is simple: `{"L0H0": 0.0025, ...}`.
 
-**Fallback for unknown models:** Use existing entropy-proportional allocation.
+**Budget generation for new models:** Ship a Python script (`scripts/generate_head_budgets.py`) that:
+1. Loads a model via the fork's `llama-cli`
+2. Runs single-head compaction sweeps at multiple ratios
+3. Feeds influence curves to the ported swap solver
+4. Outputs `optimized_agnostic.json`
+
+This covers Phase 1's 3 new models (Gemma3-12B, GPT-OSS-20B, Phi4-14B).
 
 ### 5.4 Testing
 
 - [ ] Progressive OMP: phases transition at 300 and 1500 keys
 - [ ] OMP with schedule >= 3x faster than fixed k=1 for 2000+ target keys
-- [ ] Drop-key refinement: max 3 passes (no infinite loop)
+- [ ] Cached selection order: multi-ratio evaluation runs OMP once, not per ratio
+- [ ] Drop-key refinement: max 3 passes, no infinite loop
+- [ ] Final NNLS solve always runs when nnls_interval > 1
 - [ ] Greedy budget matches MIT output on Qwen3-4B with `optimized_agnostic.json`
-- [ ] Pre-computed budget JSONs load correctly
-- [ ] Nonuniform with greedy budgets: cosine >= 0.92 at 4x on Qwen3-8B
+- [ ] Swap solver reproduces MIT's `optimized_agnostic.json` for Qwen3-4B (within tolerance)
+- [ ] Budget generation script produces valid JSON for a new model
+- [ ] **Select pipeline regression:** cosine >= 0.950 on all models
 
 ### 5.5 Files Created/Modified
 
 | File | Action |
 |------|--------|
-| `src/llama-kv-compact-select.cpp` | MAJOR REWRITE — progressive schedule, drop-key refinement |
-| `src/llama-kv-compact-select.h` | MODIFY — schedule struct, refinement options |
-| `src/llama-kv-compact-budget.cpp` | MAJOR REWRITE — greedy solver, JSON loading |
-| `src/llama-kv-compact-budget.h` | MODIFY — influence curve types |
-| `data/head_budgets/` | NEW — copy from MIT repo |
+| `src/llama-kv-compact-select.cpp` | MAJOR REWRITE — progressive schedule, drop-key, cached order, new params |
+| `src/llama-kv-compact-select.h` | MODIFY — schedule struct, OMP params |
+| `src/llama-kv-compact-budget.cpp` | MAJOR REWRITE — greedy + swap + ratio_agnostic_swap, JSON loading, smoothing |
+| `src/llama-kv-compact-budget.h` | MODIFY — influence curve types, solver selection |
+| `data/head_budgets/` | NEW — copy from MIT + generated budgets for new models |
+| `scripts/generate_head_budgets.py` | NEW — budget generation for new models |
 
 ### 5.6 Estimated Effort
 
-**Medium-High.** 3-5 days.
+**High.** 4-6 days (revised from 3-5 — swap/annealing solvers + budget generation script).
 
 ---
 
 ## Phase 6: Chunked Compaction + Long Context (GAP-08)
 
-**Goal:** Port MIT's KV-based chunking for long contexts (>8K). Harden for 128K.
+**Goal:** Port MIT's KV-based chunking for long contexts (>8K). Add optional overlap for boundary quality.
 
-**MIT source files:** `compaction_methods/chunked.py`
+**MIT source files:** `compaction_methods/chunked.py`, `chunking/strategies.py`
 
 ### 6.1 KV-Based Chunking
 
-**Port MIT's KV-based approach:**
-
-1. Run full prefill over entire context (captures all KV states)
+1. Run full prefill over entire context
 2. For each chunk `[start, end)`:
-   - Extract KV states for `[start, end)` from full prefill cache
+   - Extract KV states from full prefill cache
    - Construct virtual context: `[compacted_so_far + chunk_KV + suffix_KV]`
-   - Compact chunk using queries generated over full context
-   - Merge compacted chunk into growing compacted prefix
-3. No RoPE correction needed — KV states have correct positional encoding from original prefill
+   - Compact chunk
+   - Merge into growing compacted prefix
+3. No RoPE correction needed — KV states have correct positional encoding
 
-### 6.2 Chunk Size Selection
+### 6.2 Chunk Configuration
 
 ```cpp
 struct llama_kv_compact_chunk_opts {
     uint32_t chunk_size    = 12288;  // ~12K tokens (MIT default)
     bool     kv_based      = true;   // KV-based vs position-based
+    float    overlap_ratio = 0.1f;   // 10% overlap (fork enhancement, not MIT)
 };
 ```
 
+**Overlap handling (fork enhancement):** MIT does NOT implement chunk overlap. However, chunk boundaries are a real quality concern. V2 adds optional 10% overlap:
+- Overlap region: last 10% of chunk N overlaps first 10% of chunk N+1
+- Merge strategy: for positions in overlap, average the compacted representations from both chunks
+- When `overlap_ratio=0`: matches MIT behavior exactly
+
 ### 6.3 128K with Chunking
 
-128K at 12K chunks = ~11 chunks. Each chunk compacted independently → merge into single compacted prefix. No additional KV memory needed beyond what's already loaded.
+128K at 12K chunks with 10% overlap: ~12 chunks. No additional KV memory beyond what's loaded.
 
 ### 6.4 Testing
 
 - [ ] KV-based chunking matches single-block quality within 0.02 cosine at 8K
+- [ ] Overlap=0.1 improves boundary quality vs overlap=0 (measured on 16K context)
 - [ ] No RoPE discontinuities across chunk boundaries
-- [ ] Chunked compaction at 128K: 11 chunks merge correctly
+- [ ] 128K: chunks merge correctly into single compacted prefix
 - [ ] Decode after chunked compaction produces finite logits
 
 ### 6.5 Estimated Effort
 
-**Medium.** 2-3 days.
+**Medium.** 3-4 days (revised from 2-3 — overlap handling adds complexity).
 
 ---
 
@@ -735,120 +817,146 @@ struct llama_kv_compact_chunk_opts {
 
 **Goal:** Allow flash attention to work with compacted prefixes that have non-zero beta.
 
-### 7.1 Hybrid Attention (Pragmatic Path)
+### 7.1 The LSE Problem
 
-Split the attention computation:
-- **Live KV suffix:** uses flash attention (no beta needed)
-- **Compacted prefix:** uses standard attention with beta (non-FA, as today)
-- **Combine:** weighted sum with proper softmax normalization
+The combination formula `out = (sum_prefix × out_prefix + sum_live × out_live) / (sum_prefix + sum_live)` requires the log-sum-exp (LSE) from both attention blocks. `ggml_flash_attn_ext` (ggml.h:2323) returns only the output tensor — not LSE.
+
+### 7.2 LSE Extraction Approach
+
+**Option A (recommended): Modify Metal FA kernel to output LSE as side-channel**
+
+Add an extra output buffer to `ggml_flash_attn_ext` that stores `LSE[head][query]`. The LSE is computed internally during FA (it's the softmax denominator) — we just need to write it out.
+
+Modification scope: `ggml-metal.metal` flash attention kernel + `ggml-metal.m` dispatch code. The LSE buffer is `[n_head, n_query]` floats — tiny compared to the KV cache.
+
+**Option B (fallback): Compute LSE separately for live suffix**
+
+Run a non-FA attention pass on the live suffix to extract LSE only. Discard the attention output (use FA's output instead). Wastes compute but avoids kernel modification.
+
+**Option C (simplest): Two-pass FlashDecoding-style tiling**
+
+Split QKV into tiles. Each tile produces `(partial_out, partial_LSE)`. Combine across tiles using the online softmax trick. This is architecturally what FlashDecoding already does.
+
+### 7.3 Combination Formula (Log-Domain)
+
+To avoid overflow when partition sums have very different magnitudes:
 
 ```
-out = (sum_prefix × out_prefix + sum_live × out_live) / (sum_prefix + sum_live)
+m = max(LSE_prefix, LSE_live)
+out = (exp(LSE_prefix - m) × out_prefix + exp(LSE_live - m) × out_live) / (exp(LSE_prefix - m) + exp(LSE_live - m))
 ```
 
-**Performance:** At 16K with 2x compaction: FA handles 8K live tokens (fast), non-FA handles 128-512 compacted tokens (small).
-
-### 7.2 FlashBias (Future, V3)
-
-Custom flash attention Metal kernel with additive bias. Defer to V3 or upstream adoption.
-
-### 7.3 Testing
+### 7.4 Testing
 
 - [ ] Hybrid attention cosine >= 0.9999 vs non-FA path
+- [ ] Log-domain combination: no overflow for LSE values differing by >100
 - [ ] pp512 with hybrid >= 90% of pure FA
 - [ ] tg128 with hybrid >= 95% of pure FA
 
-### 7.4 Estimated Effort
+### 7.5 Estimated Effort
 
-**Medium-High.** 3-5 days.
+**High.** 5-8 days (revised from 3-5 — LSE extraction requires Metal kernel modification or alternative approach).
 
 ---
 
 ## Phase 8: High Compression (10-50x) + On-Policy (GAP-07)
 
-**Goal:** Enable 10-20x production compression and 50x research capability using the full MIT algorithm stack from Phases 2-6.
+**Goal:** Enable 10-20x production compression and 50x research capability.
 
-**Dependencies:** Phases 2-6 (solver core, GPU, queries, OMP, chunking) must be complete.
+**Dependencies:** Phases 2-6 must be complete.
 
 ### 8.1 Production 10x Profile
 
 | Component | Method | MIT Source |
 |-----------|--------|-----------|
-| Query generation | Prefill-Q + self-study (2000 × 3 rounds) | `self_study.py` |
-| Key selection | top-k with nonuniform per-head budgets (greedy solver) | `solver.py` |
-| Beta fitting | lstsq + clamp (MIT default) | `base.py:471-605` |
-| V fitting | lstsq → cholesky cascade with spectral ridge | `base.py:240-420` |
+| Query generation | Prefill-Q + self-study (2000 × 3 rounds, varied temperature) | `self_study.py` |
+| Key selection | top-k with nonuniform per-head budgets (swap solver) | `solver.py` |
+| Beta fitting | LAPACK sgels + clamp (MIT default) | `base.py:471-605` |
+| V fitting | sgels → cholesky cascade with spectral ridge | `base.py:240-420` |
 | GPU acceleration | Metal shaders for attention scores + softmax | Phase 3 |
 
-**Expected quality at 10x:** cosine >= 0.88 on standard causal models, >= 0.90 on MoE.
+**Note:** Production 10x uses top-k selection (not OMP) — deliberate speed/quality trade-off. OMP gives ~2-5% better quality at 10x but is significantly slower.
 
 ### 8.2 Research 50x Profile
 
-| Component | Method | MIT Source |
-|-----------|--------|-----------|
-| Query generation | Self-study (2000 × 5 rounds) | `self_study.py` |
-| Key selection | OMP with progressive schedule | `omp.py:478-718` |
-| Budget allocation | Greedy solver with influence curves | `solver.py:220-355` |
-| Refinement | Drop-key post-selection (cutoff=1e-4) | `omp.py:629-702` |
+Uses OMP with progressive schedule, drop-key refinement, greedy+swap budgets. Quality ~15-25% loss. Research-only.
 
-**Quality at 50x:** ~15-25% accuracy loss. Research-only.
+### 8.3 On-Policy — Extend Existing Code (GAP-07)
 
-### 8.3 On-Policy Sequential Compaction (GAP-07, Experimental)
+**Current state:** `llama-kv-compact-on-policy.cpp` (90 lines) implements a 2-pass approach:
+- Pass 1: Standard solver (K-as-Q surrogates)
+- Pass 2: Generate continuation, capture Q, re-run solver
 
-**Port from MIT** (`compaction_methods/per_layer_head_on_policy.py`):
+**Extension for MIT's per-layer sequential mode:**
 
-1. Compact layer 0 with original queries
-2. Materialize compacted layer 0 into KV cache
-3. Forward pass with compacted layer 0 → on-policy queries for layer 1
-4. Compact layer 1 with on-policy queries
-5. Repeat for remaining layers
+```
+FOR layer = 0 to n_layers-1:
+    IF layer == 0:
+        queries = original_queries
+    ELSE:
+        Materialize compacted layers 0..layer-1 into temp cache
+        Forward pass through temp cache → capture Q at layer
+        queries = captured_Q
+    compact(layer, queries)
+```
 
-**Cost:** n_layers × forward_pass_time. ~60-120s for 40-layer 14B. Opt-in only.
+**Estimated cost:** n_layers × forward_pass_time ≈ ~60-120s for 40-layer 14B.
+**With GPU (Phase 3):** attention scores computed on GPU, reducing to ~30-60s.
+**Decision:** Opt-in experimental. Current 2-pass approach is the default.
 
-### 8.4 Testing
+### 8.4 Hyperparameter Sweep
 
-- [ ] 10x compression: cosine >= 0.88 on all 15+ models
+After Phases 2+4 are complete, before Phase 8 integration:
+- Sweep `ridge_lambda` values [1e-8, 1e-6, 1e-4, 1e-2] on 3 models (stories15M, Qwen3-8B, DeepSeek-R1-8B)
+- Sweep `n_generate` values [500, 1000, 2000, 5000]
+- Record cosine at 2x, 4x, 10x for each combination
+- Select optimal hyperparameters for production profile
+
+This step addresses Reviewer 1's concern that the three gap fixes (NNLS, ridge, queries) interact nonlinearly and may require re-tuning.
+
+### 8.5 Testing
+
+- [ ] 10x compression: cosine >= 0.88 on all standard causal models (excluding DeepSeek-R1 until investigated)
 - [ ] 20x compression: cosine >= 0.85 on Qwen3-8B, Qwen3-30B-A3B
-- [ ] 50x compression: cosine measured and documented
+- [ ] 50x compression: cosine measured and documented (no pass/fail threshold)
 - [ ] On-policy at 10x: cosine delta vs off-policy measured on 3 models
+- [ ] Hyperparameter sweep results documented
 
-### 8.5 Estimated Effort
+### 8.6 Estimated Effort
 
-**Medium.** Integration and tuning: 2-3 days. On-policy: +2 days.
+**Medium-High.** 5-7 days (revised from 4-5 — on-policy cache-building complexity + hyperparameter sweep).
 
 ---
 
 ## Phase 9: SWA Full Compaction + Attention Bias (GAP-10)
 
-**Goal:** Extend compaction to the SWA sub-cache and add attention bias pass-through.
+**Goal:** Extend compaction to SWA sub-cache. Add attention bias pass-through.
 
 ### 9.1 SWA Sub-Cache Compaction
 
 - V1: `compacted_prefix_runtime_supported()` rejects SWA caches
-- V2: Compact SWA tokens about to exit the window
+- V2: Compact tokens about to exit the sliding window
 
-**SWA-specific selection:** Compact tokens in `[window_start, window_start + window_size/2]` (oldest half). Use attention scores within window context, not global.
+**SWA-specific:** Compact tokens in `[window_start, window_start + window_size/2]`. Use attention scores within window context.
+
+**SWA token lifecycle:** Compacted SWA tokens are consumed by the current window and then discarded as the window slides. They do NOT persist.
 
 ### 9.2 Attention Bias in Selection (GAP-10)
 
-Port MIT's `attention_bias` parameter:
 ```cpp
 void llama_kv_compact_select_topk(
     const float * scores, uint32_t n,
-    const float * attention_bias,  // NEW: [n] or nullptr
+    const float * attention_bias,  // [n] or nullptr
     uint32_t t,
     std::vector<uint32_t> & selected);
 ```
-
-**Use cases:** SWA windowed masking, causal masking for out-of-order sequences.
 
 ### 9.3 Testing
 
 - [ ] Gemma2-9B: SWA sub-cache compaction succeeds
 - [ ] Gemma2-9B: quality >= 0.90 cosine after SWA compaction
-- [ ] Attention bias correctly masks positions outside window
-- [ ] iSWA: both base and SWA caches compacted independently
-- [ ] Non-iSWA models: behavior unchanged from V1
+- [ ] Attention bias correctly masks positions
+- [ ] Non-iSWA models: behavior unchanged
 
 ### 9.4 Estimated Effort
 
@@ -858,7 +966,7 @@ void llama_kv_compact_select_topk(
 
 ## Phase 10: 128K Context Validation
 
-**Goal:** Validate compaction quality and performance at 128K context on models that fit in 32GB.
+**Goal:** Validate compaction quality and performance at 128K on models that fit in 32GB.
 
 ### 10.1 Hardware Constraints
 
@@ -868,7 +976,6 @@ void llama_kv_compact_select_topk(
 | 7B | ~5.2 GB | ~9.6 GB | **Yes** |
 | 8B | ~6.6 GB | ~11.5 GB | **Tight** |
 | 14B | ~10+ GB | ~19+ GB | No (swap) |
-| 30B MoE | ~10+ GB | ~27+ GB | No (see Phase 11) |
 
 ### 10.2 128K Integration Tests
 
@@ -878,20 +985,11 @@ void llama_kv_compact_select_topk(
 | Qwen2.5-7B | 128K | 2x, 4x, 8x, 16x | select + solver | >= 0.90 |
 | Qwen3-8B | 128K | 2x, 4x, 8x | select + solver | >= 0.85 |
 
-**Performance targets:**
-- Compaction latency (select): < 2s on 3B, < 5s on 7B
-- Post-compaction decode: faster than uncompacted baseline
-- Serialization round-trip: cosine >= 0.99
+**Performance:** Compaction latency (select) < 2s on 3B, < 5s on 7B.
 
-**Chunked compaction at 128K:**
-- [ ] 11 chunks (~12K each) merge correctly
-- [ ] Quality within 0.02 cosine of single-block at 8K
-- [ ] Decode produces finite, coherent logits
+**Chunked:** 11 chunks merge correctly. Quality within 0.02 of single-block at 8K.
 
-**Server integration:**
-- [ ] `/compact` succeeds at 128K
-- [ ] `/props` reports correct `active_n_kv`
-- [ ] Memory stays within 32GB for 3B-7B models
+**Server:** `/compact` succeeds at 128K. Memory stays within 32GB for 3B-7B.
 
 ### 10.3 Estimated Effort
 
@@ -905,42 +1003,43 @@ void llama_kv_compact_select_topk(
 
 ### 11.1 Qwen3-30B-A3B at 128K — Capstone Stress Test
 
-**Why this model:** MoE with 30B total / 3B active. Best V1 cosines (select 0.999, solver 0.906). With 8-16x compaction, KV drops from ~10GB to ~0.6-1.25GB.
+**Why:** MoE 30B/3B active. Best V1 cosines (select 0.999, solver 0.906). With 8-16x compaction, KV → ~0.6-1.25GB.
 
-**Protocol — run with extreme care:**
+**Protocol:**
+1. Close all applications. Monitor `vm_stat 1`.
+2. Start smallest: 128K + 16x (KV → ~0.6GB, total ~17.9GB)
+3. If no swap: proceed to 8x, 4x, 2x
+4. Abort on swap activity
 
-1. Close all other applications. Kill Ollama, browsers.
-2. Monitor memory: `vm_stat 1` in separate terminal
-3. Start smallest: 128K context, 16x compaction (KV → ~0.6GB, total ~17.9GB)
-4. If RSS < 28GB and no swap: proceed to 8x, 4x, 2x
-5. **Abort immediately** if swap pages increase
+| Test | Ratio | Expected KV | Total RAM | Feasible? |
+|------|:-----:|:-----------:|:---------:|:---------:|
+| D | 16x | ~0.6 GB | ~17.9 GB | **Yes** |
+| A | 8x | ~1.25 GB | ~18.5 GB | **Likely** |
+| B | 4x | ~2.5 GB | ~19.8 GB | **Probably** |
+| C | 2x | ~5.0 GB | ~22.3 GB | **Tight** |
 
-| Test | Context | Ratio | Expected KV After | Total RAM | Feasible? |
-|------|---------|:-----:|:-----------------:|:---------:|:---------:|
-| D | 128K | 16x | ~0.6 GB | ~17.9 GB | **Yes** |
-| A | 128K | 8x | ~1.25 GB | ~18.5 GB | **Likely** |
-| B | 128K | 4x | ~2.5 GB | ~19.8 GB | **Probably** |
-| C | 128K | 2x | ~5.0 GB | ~22.3 GB | **Tight** |
+### 11.2 Server Endpoint Updates
 
-**Success criteria:**
-- [ ] At least one ratio completes without swap
-- [ ] Post-compaction decode produces finite logits
-- [ ] Quality: select cosine >= 0.85
-- [ ] Serialization round-trip works at 128K
+V2 adds new solver capabilities that the `/compact` endpoint should expose:
 
-**Headline result if successful:**
-> "Run a 30B model with 128K context on a 32GB laptop — only possible with KV compaction."
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `solver_mode` | string | `"select"` | Pipeline: select, solver, omp, nonuniform |
+| `ridge_scale` | string | `"spectral"` | Ridge scaling: spectral, frobenius, fixed |
+| `query_source` | string | `"prefill_q+self_study"` | Query generation mode |
+| `n_generate` | int | 2000 | Self-study generation tokens |
 
-### 11.2 Documentation Updates
+All parameters are optional with V1 defaults. No breaking changes to existing API contract.
+
+### 11.3 Documentation Updates
 
 | Document | Change |
 |----------|--------|
 | `docs/modelai-fork-summary.md` | V2 support matrix, GPU solver, solver quality, SWA |
 | `docs/modelai-v2-benchmark-results.md` | NEW — full model matrix at 2x-50x |
-| `docs/modelai-performance-roadmap.md` | Update B4 to DONE |
 | `CLAUDE.md` | Update support matrix to V2 |
 
-### 11.3 Estimated Effort
+### 11.4 Estimated Effort
 
 **Medium.** 2-3 days.
 
@@ -951,32 +1050,32 @@ void llama_kv_compact_select_topk(
 ```
 Phase 1: Upstream Sync
     |
-    +--→ Phase 2: Solver Core (MIT port — NNLS, V fit, ridge)
+    +--→ Phase 2: Solver Core (LAPACK + MIT port)
     |        |
-    |        +--→ Phase 3: GPU Solver (Metal) ← EARLY: accelerates all downstream
+    |        +--→ Phase 3: GPU Solver (Metal) ← accelerates downstream
     |        |        |
-    |        |        +--→ Phase 4: Query Generation (self-study + prefill-Q)
+    |        |        +--→ Phase 4: Query Generation
     |        |        |        |
-    |        |        |        +--→ Phase 5: OMP + Budget (progressive, greedy solver)
+    |        |        |        +--→ Phase 5: OMP + Budget
     |        |        |                 |
-    |        |        |                 +--→ Phase 8: High Compression (10-50x) + On-Policy
+    |        |        |                 +--→ Phase 8: High Compression + On-Policy
     |        |        |
-    |        |        +--→ Phase 6: Chunked Compaction (KV-based)
+    |        |        +--→ Phase 6: Chunked Compaction
     |        |                 |
     |        |                 +--→ Phase 10: 128K Validation
     |        |
-    |        +--→ Phase 7: Flash Attention Hybrid (independent of GPU solver)
+    |        +--→ Phase 7: Flash Attention Hybrid (independent of GPU)
+    |        |
+    |        +-- Phases 4, 5 CAN proceed with CPU solver if Phase 3 is delayed
     |
     +--→ Phase 9: SWA + Attention Bias (independent of solver)
     |
-    +--- All above --→ Phase 11: Capstone + Docs
+    +--- All above --→ Phase 11: Capstone + Docs + Server
 ```
 
-**Critical path:** Phases 1 → 2 → 3 → 4 → 5 → 8 (solver quality + GPU acceleration).
+**Critical path:** 1 → 2 → 3 → 4 → 5 → 8
 
-**Parallelizable after Phase 1:**
-- Phase 7 (flash hybrid) is independent of Phases 3-6
-- Phase 9 (SWA) is independent of Phases 2-8
+**Schedule risk mitigation:** If Phase 3 (Metal) slips, Phases 4 and 5 proceed with CPU-only solver. GPU is a speed improvement, not a correctness requirement. This breaks the critical path dependency on Phase 3.
 
 ---
 
@@ -984,13 +1083,15 @@ Phase 1: Upstream Sync
 
 | Risk | Likelihood | Impact | Mitigation |
 |------|:----------:|:------:|------------|
-| Upstream merge conflicts in KV cache code | HIGH | HIGH | Cherry-pick strategy as fallback |
-| MIT NNLS port quality doesn't match Python | MEDIUM | HIGH | Reference test: C++ output vs MIT Python on same inputs |
-| Self-study query count still insufficient | LOW | MEDIUM | Prefill-Q supplements; more rounds |
-| Metal compute shader bugs | MEDIUM | MEDIUM | CPU fallback always available |
-| FlashBias kernel too complex | HIGH | MEDIUM | Hybrid path is the pragmatic alternative |
-| 128K testing reveals quality cliff | MEDIUM | MEDIUM | Chunked compaction is the mitigation |
-| Pre-computed budget JSONs don't cover all models | LOW | LOW | Entropy fallback for unknown models |
+| Upstream merge conflicts in KV cache code | HIGH | HIGH | Cherry-pick fallback; decision criteria defined (3 days) |
+| Phase 3 (Metal) slips, blocking critical path | HIGH | MEDIUM | Phases 4-5 proceed with CPU solver (explicit parallel path) |
+| LAPACK sgels not available on target platform | LOW | HIGH | Cholesky+symmetrization fallback always available |
+| MIT NNLS port quality doesn't match Python | MEDIUM | HIGH | Reference test: C++ vs MIT Python on identical inputs |
+| Self-study query diversity insufficient | MEDIUM | MEDIUM | Prefill-Q supplements; temperature variation; more rounds |
+| Phase 7 LSE extraction fails | MEDIUM | MEDIUM | Option B (separate non-FA LSE pass) as fallback |
+| DeepSeek-R1-8B quality remains negative | HIGH | LOW | Excluded from blanket target; dedicated investigation track |
+| Pre-computed budgets don't cover new models | LOW | LOW | Budget generation script; entropy fallback |
+| Hyperparameter interaction after gap fixes | MEDIUM | MEDIUM | Explicit sweep step in Phase 8.4 |
 
 ---
 
@@ -998,15 +1099,16 @@ Phase 1: Upstream Sync
 
 V2 is complete when:
 
-1. **Solver core matches MIT:** NNLS, V fitting, and ridge scaling produce values within fp32 tolerance of MIT Python reference on identical inputs
-2. **GPU solver works:** compaction latency < 500ms for 14B at 4K on M3 Pro
-3. **Solver quality fixed:** cosine >= 0.90 at 2x on all validated models (currently -0.17 to 0.91)
+1. **Solver core matches MIT:** NNLS and V fitting use LAPACK `sgels` (QR-based) with Cholesky+symmetrization fallback, producing values within fp32 tolerance of MIT Python on identical inputs
+2. **GPU solver works:** compaction latency **< 700ms** for 14B at 4K on M3 Pro (CPU fallback < 3000ms)
+3. **Solver quality fixed:** cosine >= 0.90 at 2x on all standard causal models (Llama, Qwen, Mistral); DeepSeek-R1 measured and reported separately
 4. **10x production compression:** cosine >= 0.88 on standard causal models
-5. **Flash attention hybrid:** decode performance within 10% of pure FA
+5. **Flash attention hybrid:** decode performance within 10% of pure FA, with valid LSE combination
 6. **18+ models validated:** Gemma3-12B, GPT-OSS-20B, Phi4-14B added via upstream sync
 7. **SWA compaction:** base + SWA sub-cache on iSWA models
 8. **128K validated:** compaction works at 128K on 3B-8B models with quality >= 0.85
-9. **128K 30B capstone:** Qwen3-30B-A3B at 128K completes at least one compaction ratio without swap
+9. **128K 30B capstone:** Qwen3-30B-A3B at 128K completes at least one ratio without swap
+10. **Select pipeline regression:** V1 select cosine >= 0.950 maintained on all models throughout all phases
 
 ---
 
@@ -1015,14 +1117,14 @@ V2 is complete when:
 | Phase | Effort | Calendar |
 |-------|:------:|:--------:|
 | Phase 1: Upstream Sync | High | 2-5 days |
-| Phase 2: Solver Core (MIT port) | Medium | 2-3 days |
-| Phase 3: GPU Solver (Metal) | High | 3-5 days |
+| Phase 2: Solver Core (LAPACK + MIT port) | Medium-High | 3-5 days |
+| Phase 3: GPU Solver (Metal) | High | 5-8 days |
 | Phase 4: Query Generation | Medium | 2-3 days |
-| Phase 5: OMP + Budget | Medium-High | 3-5 days |
-| Phase 6: Chunked Compaction | Medium | 2-3 days |
-| Phase 7: Flash Attention Hybrid | Medium-High | 3-5 days |
-| Phase 8: High Compression + On-Policy | Medium | 4-5 days |
+| Phase 5: OMP + Budget (+ swap solver) | High | 4-6 days |
+| Phase 6: Chunked Compaction (+ overlap) | Medium | 3-4 days |
+| Phase 7: Flash Attention Hybrid (+ LSE) | High | 5-8 days |
+| Phase 8: High Compression + On-Policy + Sweep | Medium-High | 5-7 days |
 | Phase 9: SWA + Attention Bias | Medium | 2-3 days |
 | Phase 10: 128K Validation | Medium | 2-3 days |
-| Phase 11: Capstone + Docs | Medium | 2-3 days |
-| **Total** | | **27-43 days** |
+| Phase 11: Capstone + Docs + Server | Medium | 2-3 days |
+| **Total** | | **35-55 days** |
