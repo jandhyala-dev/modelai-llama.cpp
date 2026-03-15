@@ -5,12 +5,15 @@
 **Upstream base:** `0cd4f472` (upstream-master)
 **Date:** 2026-03-15
 **Owner:** Ajay Jandhyala — ajay@model-ai.app (COT Labs / ModelAI)
+**MIT reference repo:** `/Users/ajayjandhyala/dev/whippet/compaction/` (2 commits, up to date)
 
 ## Revision History
 
 | Date | Version | Change |
 |------|---------|--------|
 | 2026-03-15 | v1 | Initial V2 plan: 8 phases, GPU solver + production solver + flash+beta + upstream sync + SWA + 50x + 128K |
+| 2026-03-15 | v2 | Full rewrite. Adversarial gap analysis against MIT repo. 13 critical deviations identified. MIT repo as source of truth. |
+| 2026-03-15 | v2.1 | **Phase reorder.** Metal GPU solver moved to Phase 3 (early) so all downstream phases benefit from GPU acceleration. SWA bumped to Phase 9. |
 
 ---
 
@@ -28,18 +31,22 @@
 
 ### What V2 Targets
 
-V2 extends compaction from the 2-8x select-only production path to a **10-20x production-quality solver pipeline** with GPU acceleration, flash attention compatibility, and broader model support.
+V2 replaces all low-grade fork solver/NNLS/OMP/budget code with **faithful C++ ports of the MIT reference implementation**, then extends coverage to GPU acceleration, flash attention, SWA, and 128K contexts.
 
 | Goal | V1 State | V2 Target |
 |------|----------|-----------|
 | Production compression ratio | 2-8x (select only) | **10-20x** (solver + nonuniform) |
 | Solver quality on GQA models | -0.17 to 0.91 cosine (broken) | **>= 0.90** cosine (production-grade) |
 | Compaction latency (14B, 4K ctx) | ~2-5s on CPU | **< 500ms** (GPU solver) |
-| Flash attention with compacted prefix | Blocked (falls back to non-FA) | **Supported** (FlashBias or hybrid) |
+| Flash attention with compacted prefix | Blocked (falls back to non-FA) | **Supported** (hybrid split) |
 | Model coverage | 15 models (3 incompatible) | **18+ models** (upstream sync) |
 | SWA compaction | Base cache only | **Full iSWA** (base + SWA sub-cache) |
 | 50x compression | Not attempted | **Research capability** (quality-gated) |
-| 128K context validation | Not tested | **Planned** (deferred implementation) |
+| 128K context validation | Not tested | **Validated** on 3B-14B models |
+
+### Design Principle: MIT Repo Is Source of Truth
+
+The MIT compaction repo (`/Users/ajayjandhyala/dev/whippet/compaction/`) contains the reference implementation for every compaction algorithm. **V2 does not reinvent any algorithm.** Every numerical technique is ported directly from the MIT Python code to C++. Where the fork has diverged, the fork code is replaced.
 
 ### Honest Quality Assessment at High Compression
 
@@ -63,8 +70,225 @@ From the MIT paper's own benchmarks (Qwen3-4B, QuALITY):
 - Public API guarantees — V3
 - Multi-slot compaction — V3
 - CUDA/Vulkan backend support — V3 (V2 is Metal-only for GPU solver)
-- On-policy sequential compaction (compact layer l, use for layer l+1) — research track
 - Training-based compression (Cartridges, KV-Distill) — not applicable
+
+---
+
+## Adversarial Gap Analysis: Fork vs MIT Reference
+
+This analysis compares every numerical algorithm in the fork against the MIT reference. All deviations are tagged with severity and remediation phase.
+
+### GAP-01: NNLS Solver Is Fundamentally Different (CRITICAL)
+
+**MIT** (`algorithms/base.py:471-605`):
+- Default: `torch.linalg.lstsq(M, y)` + clamp to `[lower_bound, upper_bound]` (zero iterations)
+- Optional PGD: spectral norm via power iteration → step size `η = 1/L` → gradient descent with projection
+- Bounds: `lower_bound=1e-12`, `upper_bound=None`
+- Fallback: lstsq NaN → Cholesky with `λ=1e-6`
+
+**Fork** (`llama-kv-compact-solver.cpp:316-338`):
+- Gradient descent in **log-domain** with bounds `[0.05, 20.0]` (≈ e^±3), 2 iterations
+- No lstsq option, no fallback solver
+- Bounds are **much tighter** — MIT allows weights as small as 1e-12, fork floors at 0.05
+
+**Impact:** NNLS produces different beta values on every model. Root cause of solver quality degradation on GQA models.
+
+**Remediation:** Phase 2.1 — Replace fork NNLS with direct lstsq + clamp (MIT default). Add PGD as optional path.
+
+### GAP-02: V Fitting Has Only Cholesky Solver (MAJOR)
+
+**MIT** (`algorithms/base.py:240-420`):
+- 3 solvers: `lstsq` (default, `torch.linalg.lstsq`), `cholesky`, `pinv` (`torch.linalg.pinv`)
+- Ridge scaling: `spectral` (λ × ||X||₂²), `frobenius` (λ × ||X||²_F / t), `fixed` (λ raw)
+- Fallback: lstsq NaN → Cholesky with `λ=1e-6`
+
+**Fork** (`llama-kv-compact-solver.cpp:360-405`):
+- Only Cholesky via `solve_least_squares_normal_eq` with lambda escalation (×10, 5 attempts)
+- Ridge scaling: `min(λ × spectral_norm, 1.0)` — **caps at 1.0**, which is incorrect for ill-conditioned matrices where spectral norm >> 1
+- No lstsq or pinv fallback
+
+**Impact:** V fitting fails silently on ill-conditioned matrices. Ridge cap at 1.0 under-regularizes when it matters most.
+
+**Remediation:** Phase 2.2 — Port MIT's 3-solver cascade. Remove ridge lambda cap. Add Frobenius scaling mode.
+
+### GAP-03: Self-Study Query Generation Is Minimal (CRITICAL)
+
+**MIT** (`query_generation/self_study.py:1-800`):
+- Two-phase: Model A generates questions, Model B generates answers
+- vLLM batch inference for speed
+- Hook-based Q extraction via `q_proj(hidden_states)` → `q_norm` → RoPE → reshape
+- ~50,000 queries per KV head
+- Chunked prefill for memory efficiency
+- Multiple conversation specs with extraction functions
+
+**Fork** (`llama-kv-compact-self-study.cpp:141-240`):
+- Single-model autoregressive generation, ~256 tokens
+- Q-capture via `cb_eval` callback on `Qcur` tensor
+- ~256 × n_rep queries per KV head (at most ~1024 for GQA 4:1)
+- No batch mode, no conversation specs
+
+**Impact:** 50x fewer queries than MIT. Query diversity is the single most impactful quality factor (paper Figure 4 ablation). This is the primary root cause of solver quality failure.
+
+**Remediation:** Phase 4 — Increase generation to ~2000 tokens. Add prefill-Q capture as zero-cost supplement. Target ~5,000-10,000 queries per KV head combined.
+
+### GAP-04: No Progressive OMP Schedule (MAJOR)
+
+**MIT** (`algorithms/omp.py:50-55`, DEFAULT_PROGRESSIVE_SCHEDULE):
+```python
+[(300, k_choice=1, nnls_interval=1),
+ (1500, k_choice=2, nnls_interval=2),
+ (None, k_choice=4, nnls_interval=2)]
+```
+
+**Fork** (`llama-kv-compact-select.cpp:169-345`):
+- Fixed `k_choice=1`, `nnls_interval=1` (no progressive schedule)
+- Always solves NNLS every iteration
+
+**Impact:** OMP is ~4x slower than it could be at high token counts (>1500 keys). At 10x+ compression with large contexts, this makes OMP infeasible.
+
+**Remediation:** Phase 5.1 — Port MIT's progressive schedule. Add schedule parameter to OMP options.
+
+### GAP-05: No Drop-Key Refinement (MAJOR)
+
+**MIT** (`algorithms/omp.py:629-702`):
+- After initial selection: check β < `drop_key_beta_cutoff`
+- Drop low-weight keys, mask permanently, re-enter selection loop
+- Max 3 refinement entries to prevent infinite loops
+
+**Fork** (`llama-kv-compact-select.cpp:264-301`):
+- Beta pruning during OMP loop (removes mid-iteration), different mechanism
+- Threshold: `log(-7.0)` ≈ e^-7 ≈ 0.0009 (in log-domain)
+- No post-selection refinement pass
+
+**Impact:** Fork's mid-loop pruning is less effective than MIT's post-selection refinement. Key quality at >10x compression is lower.
+
+**Remediation:** Phase 5.2 — Add MIT's post-selection drop-key refinement phase after OMP loop.
+
+### GAP-06: Head Budget Uses Entropy, Not Influence Curves (MAJOR)
+
+**MIT** (`head_budget_optimization/solver.py:220-355`):
+- Greedy budget solver with pre-computed influence curves (ratio → δ log perplexity)
+- Per-model budget JSONs in `head_budgets/` directory (Gemma3, Qwen3, Llama3.1)
+- Step size 0.001 for fine-grained allocation
+- Marginal benefit = δ(current_ratio) - δ(current_ratio + step_size)
+
+**Fork** (`llama-kv-compact-budget.cpp:12-167`):
+- Entropy-proportional: `weight = 1/max(entropy, 1e-3)`
+- Uniform sensitivity curve assumed
+- No influence curve precomputation
+- No per-model budget files
+
+**Impact:** Entropy is a weak proxy for head sensitivity. Paper Figure 5 shows some heads tolerate 50x while others need 2x. Without influence curves, nonuniform budgets are suboptimal.
+
+**Remediation:** Phase 5.3 — Port MIT's greedy solver. Ship pre-computed budgets from MIT repo for supported models.
+
+### GAP-07: No On-Policy Sequential Compaction (RESEARCH)
+
+**MIT** (`compaction_methods/per_layer_head_on_policy.py`):
+- Compact layer 0 → generate on-policy queries using compacted Layer 0 → compact Layer 1 → ...
+- Each layer sees compacted earlier layers during query generation
+- More accurate than off-policy (all layers compacted with same queries)
+
+**Fork:** Not implemented.
+
+**Impact:** Quality improvement at >10x compression. Not critical for 2-8x where off-policy is sufficient.
+
+**Remediation:** Phase 8 (experimental) — Port MIT's on-policy loop after core solver is fixed.
+
+### GAP-08: Chunked Compaction Lacks KV-Based Mode (MODERATE)
+
+**MIT** (`compaction_methods/chunked.py`):
+- **KV-based** (default): Prefill full sequence, construct virtual [prefix + chunk + suffix] in KV space, compact chunk
+- **Text-based**: Split text, re-tokenize chunks independently
+- No RoPE correction needed for KV-based mode
+- Multiple chunking strategies (fixed-size, per-document, per-note)
+
+**Fork** (`llama-kv-compact-pipeline.cpp:932-1241`):
+- Basic chunked pipeline: split prefix, per-chunk top-k, merge, single solver pass
+- No KV-based chunking (operates on token positions, not KV states)
+- No RoPE phase handling across boundaries
+
+**Impact:** Quality loss at chunk boundaries for long contexts (>16K). KV-based chunking preserves cross-chunk attention information.
+
+**Remediation:** Phase 6 — Port MIT's KV-based chunking strategy.
+
+### GAP-09: Missing Prefill-Q Query Extraction (MODERATE)
+
+**MIT** (`query_generation/self_study.py:560-800`):
+- Forward pass hook extracts Q vectors from actual prefill computation
+- `q = q_proj(hidden_states)` → q_norm → RoPE → reshape
+- Zero additional cost — queries are a byproduct of prefill
+
+**Fork:** Not implemented. Prefill-Q pipeline exists in concept but only extracts cache keys as surrogates.
+
+**Impact:** Free queries from actual prefill are the highest-quality surrogates.
+
+**Remediation:** Phase 4.2 — Extend Q-capture callback to fire during initial prefill.
+
+### GAP-10: No Attention Bias Pass-Through in Selection (MINOR)
+
+**MIT** (`algorithms/omp.py:63-74`):
+- Accepts `attention_bias` tensor, adds to scores before softmax
+- Used for sliding window masking, causal masking, context prefix offsets
+
+**Fork:** Selection functions don't accept attention bias.
+
+**Remediation:** Phase 9 (SWA) — Add attention_bias parameter to selection and OMP functions.
+
+### GAP-11: Missing Query Mixing Configuration (MINOR)
+
+**MIT** (`query_generation/config.py`):
+- `QueryConfig` supports multiple `QueryMethodConfig` with fractional mixing
+- Methods: `self_study`, `random_vectors`, `cache_keys`, `context_prefill`
+
+**Fork:** Fixed pipeline: either cache-key surrogates or self-study. No mixing.
+
+**Remediation:** Phase 4 — Add query source mixing in pipeline orchestration.
+
+### GAP-12: Ridge Lambda Cap at 1.0 Is Incorrect (MAJOR)
+
+**Fork** (`llama-kv-compact-solver.cpp:218-223`):
+```cpp
+return std::min(lambda * sn, 1.0f);  // CAP AT 1.0
+```
+
+**MIT** (`algorithms/base.py`):
+```python
+lambda_scaled = ridge_lambda * (spectral_norm ** 2)  // NO CAP
+```
+
+**Impact:** When spectral norm is large, the cap prevents adequate regularization. The solver produces NaN or garbage.
+
+**Remediation:** Phase 2.2 — Remove the 1.0 cap. Scale by spectral_norm², not spectral_norm.
+
+### GAP-13: MIT Budget JSONs Not Shipped (MODERATE)
+
+**MIT** (`head_budget_optimization/head_budgets/`):
+- Pre-computed budgets for: `gemma-3-12b-it`, `gemma-3-4b-it`, `Llama-3.1-8B-Instruct`, `Qwen3-4B`, `Qwen3-4B-Instruct-2507`
+- Each has: `optimized_agnostic.json`, `pyramidkv_beta20.json`, `uniform.json`
+
+**Fork:** No pre-computed budget files.
+
+**Remediation:** Phase 5.3 — Copy MIT budget JSONs into fork. Generate budgets for additional models.
+
+---
+
+## MIT Source-of-Truth File Mapping
+
+Every V2 solver/algorithm change maps directly to MIT reference code.
+
+| Fork File | MIT Source File | What to Port |
+|-----------|----------------|-------------|
+| `llama-kv-compact-solver.cpp` (NNLS) | `algorithms/base.py:471-605` | lstsq + clamp default, PGD with spectral step, bounds [1e-12, None] |
+| `llama-kv-compact-solver.cpp` (V fit) | `algorithms/base.py:240-420` | 3-solver cascade (lstsq→cholesky→pinv), spectral/frobenius/fixed ridge, no lambda cap |
+| `llama-kv-compact-solver.cpp` (ridge) | `algorithms/base.py:156-188` | spectral = λ × ‖X‖₂², frobenius = λ × ‖X‖²_F / t, fixed = λ |
+| `llama-kv-compact-select.cpp` (OMP) | `algorithms/omp.py:478-718` | Progressive schedule, lazy NNLS, drop-key refinement (max 3 entries) |
+| `llama-kv-compact-budget.cpp` | `head_budget_optimization/solver.py:220-355` | Greedy solver with influence curves, step_size=0.001 |
+| `llama-kv-compact-self-study.cpp` | `query_generation/self_study.py:1-800` | Increase to ~2000 gen tokens, prefill-Q extraction, Q/K norm handling |
+| `llama-kv-compact-pipeline.cpp` (chunked) | `compaction_methods/chunked.py` | KV-based chunking, no RoPE correction needed |
+| `llama-kv-compact-pipeline.cpp` (nonuniform) | `compaction_methods/per_layer_head.py:288-306` | Budget JSON loading, `max_ratio_per_head` cap |
+| `data/head_budgets/` (NEW) | `head_budget_optimization/head_budgets/` | Copy pre-computed budgets for shipped models |
+| `llama-kv-compact-pipeline.cpp` (on-policy) | `compaction_methods/per_layer_head_on_policy.py` | On-policy sequential compaction (experimental) |
 
 ---
 
@@ -108,38 +332,132 @@ After merge:
 
 ### 1.4 Estimated Effort
 
-**High.** Upstream KV cache code has been refactored (`llama_kv_cells_unified`, SWA changes). Expect 2-5 days of merge conflict resolution and verification.
+**High.** Upstream KV cache code has been refactored. Expect 2-5 days of merge conflict resolution and verification.
 
 ---
 
-## Phase 2: GPU Solver via Metal Compute Shaders (B4)
+## Phase 2: Solver Core — Port MIT Numerical Algorithms (GAP-01, GAP-02, GAP-12)
 
-**Goal:** Move the attention score computation and matrix operations from CPU to GPU, reducing compaction latency from ~2-5s to <500ms for 14B models at 4K context.
+**Goal:** Replace all fork solver/NNLS code with faithful C++ ports of MIT reference algorithms. This is the foundation for every subsequent phase.
 
-### 2.1 What Moves to GPU
+**MIT source files:** `algorithms/base.py` (lines 1-605)
+
+### 2.1 Replace NNLS Implementation (GAP-01)
+
+**Current fork** (`llama-kv-compact-solver.cpp:316-338`): Log-domain gradient descent with bounds [0.05, 20.0], 2 iterations.
+
+**Replace with MIT algorithm** (`algorithms/base.py:471-605`):
+
+**Mode 1 — Direct Solve (default, `nnls_iters=0`):**
+```
+B = lstsq(M, y)                    // normal equations via Cholesky
+B = clamp(B, lower_bound, upper_bound)  // lower=1e-12, upper=None
+```
+
+**Mode 2 — Projected Gradient Descent (optional, `nnls_iters > 0`):**
+```
+L = spectral_norm(M)²              // power iteration, 3 iterations per MIT
+η = 1/L                            // step size
+FOR t = 1 to nnls_iters:
+    grad = M^T @ (M @ B - y)
+    B = clamp(B - η * grad, lower_bound, upper_bound)
+```
+
+**Key changes from current fork:**
+- Remove log-domain NNLS entirely
+- Change bounds from [0.05, 20.0] to [1e-12, None] (match MIT defaults)
+- Default to lstsq + clamp (0 iterations), not gradient descent
+- Power iteration uses 3 steps for spectral norm (MIT), not 8 (fork)
+- Step size is `1/L` (spectral norm²), not `1/(spectral_norm + lambda)` (fork)
+
+### 2.2 Replace V Fitting (C2 Solver) (GAP-02, GAP-12)
+
+**Replace with MIT 3-solver cascade** (`algorithms/base.py:240-420`):
+
+```
+TRY lstsq:
+    C2 = lstsq(X, Y)               // normal equations via Cholesky
+    IF C2 has NaN → GOTO cholesky
+
+TRY cholesky:
+    C2 = cholesky_solve(X^T X + λI, X^T Y)
+    IF fails → GOTO pinv
+
+TRY pinv:
+    C2 = pinv(X^T X + λI) @ X^T Y  // pseudoinverse
+```
+
+**Ridge scaling modes** (`algorithms/base.py:156-188`):
+
+| Mode | Formula | When to use |
+|------|---------|-------------|
+| `spectral` | λ_eff = λ × σ_max(X)² | Default. Adapts to matrix condition |
+| `frobenius` | λ_eff = λ × (‖X‖²_F / t) | Robust to outlier singular values |
+| `fixed` | λ_eff = λ | Direct control |
+
+**Critical fix:** Remove `std::min(..., 1.0f)` cap. Scale by `spectral_norm²`, not `spectral_norm`.
+
+**C++ pinv implementation:** Use Cholesky with aggressive regularization as practical equivalent (no LAPACK SVD available).
+
+### 2.3 Max-Shift Rescaling
+
+The fork's rescaling (`llama-kv-compact-solver.cpp:283-293`) is a valid numerical correction for C++ fp32. MIT doesn't need it (PyTorch handles precision). **Keep the fork's rescaling.**
+
+### 2.4 Testing
+
+- [ ] NNLS lstsq mode: beta values match MIT reference within fp32 tolerance on stories15M
+- [ ] NNLS PGD mode: converges in `nnls_iters` iterations with correct step size
+- [ ] V fitting lstsq → cholesky → pinv cascade: inject NaN to verify fallback chain
+- [ ] Ridge scaling: spectral/frobenius/fixed modes produce correct λ_eff values
+- [ ] No lambda cap: verify λ_eff > 1.0 is allowed
+- [ ] Solver cosine on stories15M >= 0.99 (currently 0.996)
+- [ ] Solver cosine on Qwen3-8B > 0.87 (currently 0.874)
+- [ ] Power iteration with 3 iterations matches MIT spectral norm within 1%
+
+### 2.5 Files Created/Modified
+
+| File | Action |
+|------|--------|
+| `src/llama-kv-compact-solver.cpp` | MAJOR REWRITE — new NNLS, 3-solver V fit, ridge scaling modes |
+| `src/llama-kv-compact-solver.h` | MODIFY — new solver options (solver_mode, ridge_scale_mode) |
+| `tests/test-kv-compact-solver-reference.cpp` | NEW — MIT reference comparison tests |
+
+### 2.6 Estimated Effort
+
+**Medium.** 2-3 days.
+
+---
+
+## Phase 3: GPU Solver via Metal Compute Shaders (B4)
+
+**Goal:** Move attention score computation and matrix operations from CPU to GPU, reducing compaction latency from ~2-5s to <500ms for 14B at 4K context.
+
+**Rationale for early placement:** GPU acceleration benefits every subsequent phase — query scoring (Phase 4), OMP selection (Phase 5), chunked compaction (Phase 6), and high compression (Phase 8) all involve heavy attention score computation. Building GPU support early means all downstream work runs faster.
+
+### 3.1 What Moves to GPU
 
 | Operation | Current (CPU) | GPU Target | Speedup |
 |-----------|--------------|------------|---------|
 | Attention score matrix: `score[q][k] = dot(Q[q], K[k]) / sqrt(d)` | O(n_q × n_k × d) scalar loops with NEON | Metal compute shader, thousands of threads | **10-15x** |
 | Exp + softmax normalization | Per-row sequential | Per-row parallel reduction | **5-8x** |
-| Matrix multiply (X^T X for normal equations) | Scalar with NEON 4-wide | Metal GEMM | **10-20x** |
+| Matrix multiply (X^T X for normal equations) | Scalar with NEON 4-wide | Metal GEMM or MPS MatrixMultiplication | **10-20x** |
 | K/V extraction from KV cache | `ggml_backend_tensor_get()` per-head → CPU | Direct GPU buffer read (no host roundtrip) | **Eliminates transfer** |
 
-### 2.2 What Stays on CPU
+### 3.2 What Stays on CPU
 
 | Operation | Why |
 |-----------|-----|
 | Cholesky decomposition | Sequential pivot-dependent — GPU parallelism doesn't help |
-| NNLS projected gradient (50 iterations) | Small problem size (t × t where t = compacted tokens), sequential convergence |
-| Power iteration for spectral norm (8 iterations) | Sequential, small matrix |
+| NNLS (lstsq + clamp) | Small problem size (t × t), sequential |
+| Power iteration for spectral norm (3 iters) | Sequential, small matrix |
 | Pipeline orchestration | Control flow |
+| OMP greedy loop | Sequential selection with dependencies |
 
-### 2.3 Implementation Plan
-
-**2.3.1 Metal Shader: Attention Score Matrix**
+### 3.3 Metal Shader Implementation
 
 New file: `ggml/src/ggml-metal/ggml-kv-compact-solver.metal`
 
+**Shader 1: Attention Score Matrix**
 ```metal
 kernel void kv_compact_attention_scores(
     device const float * queries  [[buffer(0)]],   // [n_q × d]
@@ -150,37 +468,13 @@ kernel void kv_compact_attention_scores(
     constant uint      & d        [[buffer(5)]],
     constant float     & inv_sqrt_d [[buffer(6)]],
     uint2 gid [[thread_position_in_grid]])
-{
-    // Each thread computes one score[qi][ki]
-    uint qi = gid.y;
-    uint ki = gid.x;
-    if (qi >= n_q || ki >= n_k) return;
-
-    float sum = 0.0f;
-    for (uint i = 0; i < d; i++) {
-        sum += queries[qi * d + i] * keys[ki * d + i];
-    }
-    scores[qi * n_k + ki] = sum * inv_sqrt_d;
-}
 ```
 
-**2.3.2 Metal Shader: Softmax with Max-Shift**
+**Shader 2: Softmax with Max-Shift** — Per-row softmax with threadgroup max reduction.
 
-Per-row softmax with shared-memory max reduction.
+**Shader 3: GEMM for Normal Equations** — X^T X computation. Can leverage Metal Performance Shaders `MPSMatrixMultiplication`.
 
-**2.3.3 Metal Shader: GEMM for Normal Equations**
-
-X^T X computation for the least-squares system. Can leverage Metal Performance Shaders (MPS) `MPSMatrixMultiplication` for this.
-
-**2.3.4 GPU K/V Extraction**
-
-Replace `ggml_backend_tensor_get()` (GPU→CPU copy) with direct GPU buffer access:
-- Allocate Metal buffers for extracted K/V matrices
-- Copy within GPU: KV cache tensor → solver input buffer
-- Solver shaders read directly from these buffers
-- Only final results (beta, compacted V) are read back to CPU for storage
-
-**2.3.5 Host-Side Dispatch**
+### 3.4 Host-Side Dispatch
 
 New file: `src/llama-kv-compact-solver-metal.mm` (Objective-C++ for Metal API)
 
@@ -193,7 +487,15 @@ llama_kv_compact_solver_metal_context:
   - readback_results() → host memory
 ```
 
-### 2.4 Performance Budget
+### 3.5 GPU K/V Extraction
+
+Replace `ggml_backend_tensor_get()` (GPU→CPU copy) with direct GPU buffer access:
+- Allocate Metal buffers for extracted K/V matrices
+- Copy within GPU: KV cache tensor → solver input buffer
+- Solver shaders read directly from these buffers
+- Only final results (beta, compacted V) are read back to CPU for storage
+
+### 3.6 Performance Budget
 
 For Qwen3-14B at 4K context (40 layers × 8 KV heads = 320 invocations):
 
@@ -202,14 +504,13 @@ For Qwen3-14B at 4K context (40 layers × 8 KV heads = 320 invocations):
 | K/V extraction | ~800ms | ~50ms | Eliminate host roundtrip |
 | Attention scores | ~1200ms | ~80ms | GPU parallel dot products |
 | Softmax | ~200ms | ~20ms | GPU parallel reduction |
-| NNLS (50 iters) | ~300ms | ~300ms | Stays on CPU (small problem) |
+| NNLS (lstsq + clamp) | ~300ms | ~300ms | Stays on CPU (small problem) |
 | Cholesky + V solve | ~200ms | ~200ms | Stays on CPU (sequential) |
 | **Total** | **~2700ms** | **~650ms** | **~4x speedup** |
 
-Conservative estimate: **4x speedup** (not 10x — NNLS/Cholesky remain sequential bottlenecks).
-At 8K context: CPU ~8-12s → GPU ~2-3s.
+Conservative estimate: **4x speedup** (NNLS/Cholesky remain sequential bottlenecks).
 
-### 2.5 Testing
+### 3.7 Testing
 
 - [ ] Metal shader unit tests: attention scores match CPU reference within fp32 tolerance
 - [ ] Full solver pipeline produces identical beta/V to CPU path (cosine >= 0.9999)
@@ -217,7 +518,7 @@ At 8K context: CPU ~8-12s → GPU ~2-3s.
 - [ ] Graceful CPU fallback when Metal is unavailable
 - [ ] Per-stage timing shows GPU phases faster than CPU phases
 
-### 2.6 Files Created/Modified
+### 3.8 Files Created/Modified
 
 | File | Action |
 |------|--------|
@@ -228,436 +529,420 @@ At 8K context: CPU ~8-12s → GPU ~2-3s.
 | `CMakeLists.txt` | MODIFY — Metal shader compilation |
 | `tests/test-kv-compact-solver-metal.cpp` | NEW — GPU solver tests |
 
-### 2.7 Estimated Effort
+### 3.9 Estimated Effort
 
-**High.** Metal compute shader development + Objective-C++ interop + buffer management. Expect 3-5 days for a working prototype, 1-2 more for optimization and testing.
-
----
-
-## Phase 3: Production Solver Pipeline
-
-**Goal:** Fix the GQA quality degradation that makes the solver pipeline unusable on most production models (cosine -0.17 to 0.91 → target >= 0.90 on all models).
-
-### 3.1 Root Cause Analysis
-
-The V1 solver uses **cache-key-as-query surrogates**: it takes keys from the KV cache and uses them as pseudo-queries to compute attention scores. This fails on GQA models because:
-
-1. **Key space ≠ query space** — GQA models have fewer KV heads than query heads (4:1 ratio on Qwen3). Keys are optimized for shared attention, not for representing individual query patterns.
-2. **No GQA regrouping** — the surrogate doesn't account for the query-head-to-KV-head mapping.
-3. **Small surrogate count** — V1 uses ~256 surrogates vs the paper's ~50,000 self-study queries.
-
-### 3.2 Fix Path: Improved Query Generation
-
-Three approaches, in order of implementation priority:
-
-**3.2.1 Self-Study Query Generation (Paper Method)**
-
-The paper's recommended approach: run a second forward pass through the model with random input tokens to capture actual query vectors from each attention head.
-
-- File: `src/llama-kv-compact-self-study.cpp` (exists, needs quality fixes)
-- Change: Increase query count from ~256 to ~5,000-10,000 per head
-- Change: Proper GQA regrouping — map query heads to KV heads before scoring
-- Reference: `compaction/query_generation/self_study.py` lines 1-800
-- **Cost:** Requires a model forward pass (~1-3s for 14B). This is the dominant cost, not the solver math.
-- **Quality:** Paper shows self-study is the single most impactful quality factor (Figure 4 ablation)
-
-**3.2.2 Prefill-Q Query Extraction**
-
-Extract actual queries from the original prefill computation (before compaction). Zero additional cost — queries are a byproduct of the prefill.
-
-- File: `src/llama-kv-compact-query.cpp` (exists, prefill_q pipeline exists)
-- Change: Store prefill queries in a buffer during initial prompt processing
-- Change: Use these real queries for solver fitting
-- **Cost:** Zero additional compute (queries already computed during prefill)
-- **Quality:** Limited to queries from the original prompt — doesn't generalize to future queries
-- **Best for:** Same-session compaction where future queries are similar to past queries
-
-**3.2.3 Hybrid: Prefill-Q + Self-Study Supplement**
-
-Use prefill queries as the base, supplement with a shorter self-study run (~1,000 queries) for generalization.
-
-- **Cost:** ~500ms additional (shorter self-study)
-- **Quality:** Best of both — real query signal + generalization coverage
-
-### 3.3 Nonuniform Per-Head Budgets
-
-Currently all heads get the same compression ratio. The paper shows some heads tolerate 50x while others need 2x.
-
-- File: `src/llama-kv-compact-budget.cpp` (exists, uniform only)
-- Change: Implement head sensitivity curve precomputation per Algorithm 4 (Section 3.4)
-- Change: Per-head budget allocation based on attention entropy
-- Reference: `compaction/compaction_methods/per_layer_head.py`
-- **Impact:** Critical for 10x+ compression. Without this, aggressive compression destroys high-sensitivity heads.
-
-### 3.4 Ridge Scaling
-
-Current: fixed `lambda=1e-6` with 10x escalation on failure.
-Paper: spectral/Frobenius normalization of the regularization parameter.
-
-- File: `src/llama-kv-compact-solver.cpp` (spectral ridge exists but disabled by default)
-- Change: Enable spectral ridge by default, tune lambda per model family
-- **Impact:** Minor quality improvement, major numerical stability at extreme ratios.
-
-### 3.5 Quality Targets
-
-After Phase 3, the solver pipeline must achieve:
-
-| Model | 2x Cosine | 4x Cosine | 10x Cosine |
-|-------|:---------:|:---------:|:----------:|
-| All standard causal | >= 0.95 | >= 0.92 | >= 0.90 |
-| GQA models (Qwen, Llama) | >= 0.95 | >= 0.92 | >= 0.88 |
-| MoE models (Qwen3-30B-A3B) | >= 0.97 | >= 0.95 | >= 0.92 |
-
-If these targets are not met, the solver remains experimental (not added to production allowlist).
-
-### 3.6 Testing
-
-- [ ] Solver cosine >= 0.90 on all 15 V1 models at 2x (currently as low as -0.17)
-- [ ] Solver cosine >= 0.88 on GQA models at 10x
-- [ ] Self-study query generation produces >= 5,000 queries per head
-- [ ] GQA regrouping correctly maps query heads to KV heads
-- [ ] Nonuniform budgets: high-sensitivity heads get more tokens than low-sensitivity heads
-- [ ] Timing: total solver pipeline < 5s on 14B at 4K (with GPU solver from Phase 2)
-
-### 3.7 Estimated Effort
-
-**Medium-High.** Self-study quality fixes are the critical path. 3-5 days.
+**High.** Metal compute shader development + Objective-C++ interop + buffer management. 3-5 days for working prototype, 1-2 more for optimization.
 
 ---
 
-## Phase 4: Flash Attention + Beta
+## Phase 4: Query Generation — Self-Study + Prefill-Q (GAP-03, GAP-09, GAP-11)
 
-**Goal:** Allow flash attention to work with compacted prefixes that have non-zero beta, eliminating the non-FA fallback path.
+**Goal:** Increase query count from ~256 to ~5,000-10,000 per KV head by extending self-study and adding prefill-Q extraction. GPU acceleration from Phase 3 speeds up query scoring.
 
-**Status: BLOCKED on upstream.** The flash-attention path in llama.cpp does not support additive `kq_b` (the beta bias). There are two possible resolution paths.
+**MIT source files:** `query_generation/self_study.py`, `query_generation/config.py`
 
-### 4.1 Path A: FlashBias Implementation (Preferred)
+### 4.1 Extend Self-Study Generation (GAP-03)
 
-FlashBias ([arXiv:2505.12044](https://arxiv.org/abs/2505.12044), NeurIPS 2025) extends flash attention with efficient additive bias support.
+**Current fork** (`llama-kv-compact-self-study.cpp:141-240`): ~256 generated tokens.
 
-**What's needed:**
-1. Implement FlashBias Metal kernel that accepts an additive bias tensor alongside Q, K, V
-2. Integrate with llama.cpp's attention graph building (`src/llama-graph.cpp`)
-3. The bias tensor is the compacted prefix's beta values, shaped `[n_compacted_tokens]` per head
+**Port from MIT:**
+1. Increase `n_generate` from 256 to **2000** (config parameter, not hardcoded)
+2. Multiple generation rounds: run self-study 3-5 times with different seed tokens for diversity
+3. Keep existing Q-capture callback mechanism (it's correct)
+4. After generation: subsample to `max_queries_per_kv_head=10000` with uniform stride
 
-**Difficulty: VERY HIGH.** This requires writing a custom flash attention Metal kernel from scratch or modifying the existing one. The existing Metal FA kernel is already complex (~500 lines of Metal shader code).
+**Why not 50,000 like MIT?** MIT uses vLLM batch inference with GPUs. We run single-model autoregressive on a Mac. 2000 tokens × 3 rounds × n_rep = ~24,000 queries for GQA 4:1. This is 25x more than V1.
 
-**Alternative:** Wait for upstream llama.cpp to adopt FlashBias. Monitor [flash-attention Issue #1219](https://github.com/Dao-AILab/flash-attention/issues/1219).
+**Q/K Normalization:** The fork's existing `scale = k_norm_mean / q_norm_mean` fix is correct. Keep it.
 
-### 4.2 Path B: Hybrid Attention (Pragmatic)
+### 4.2 Add Prefill-Q Capture (GAP-09)
+
+**New capability:** Capture Q vectors during the initial prefill forward pass.
+
+1. Install Q-capture callback before initial `llama_decode()` for the input prompt
+2. Extract Q vectors at every layer as a byproduct of normal inference
+3. Store in the same `llama_q_capture_state` structure
+4. After prefill: combine prefill Q's with self-study Q's (concatenate, then subsample)
+
+**MIT reference:** `query_generation/self_study.py:560-800` — hook-based Q extraction.
+
+**Cost:** Zero additional compute. Q vectors are computed during prefill anyway.
+
+### 4.3 Query Source Mixing (GAP-11)
+
+```cpp
+struct llama_kv_compact_query_config {
+    bool use_prefill_q    = true;   // capture Q during prefill
+    bool use_self_study   = true;   // generate Q via autoregressive continuation
+    bool use_cache_keys   = false;  // legacy: use K as surrogate Q
+    uint32_t n_generate   = 2000;   // self-study generation tokens
+    uint32_t n_rounds     = 3;      // self-study repetitions
+    uint32_t max_per_head = 10000;  // subsample limit per KV head
+};
+```
+
+### 4.4 Testing
+
+- [ ] Self-study generates >= 2000 tokens per round (up from 256)
+- [ ] Prefill-Q captures Q vectors for every layer during initial prompt processing
+- [ ] Combined query count >= 5000 per KV head for GQA 4:1 model
+- [ ] Solver cosine with improved queries: >= 0.90 on Qwen3-8B at 2x (currently 0.874)
+- [ ] Solver cosine with improved queries: >= 0.85 on DeepSeek-R1-8B at 2x (currently -0.025)
+- [ ] GQA regrouping still correct after increasing query count
+
+### 4.5 Files Created/Modified
+
+| File | Action |
+|------|--------|
+| `src/llama-kv-compact-self-study.cpp` | MODIFY — increase n_generate, multi-round, prefill-Q |
+| `src/llama-kv-compact-self-study.h` | MODIFY — new config fields |
+| `src/llama-kv-compact-query.cpp` | MODIFY — prefill-Q extraction mode |
+| `src/llama-kv-compact-pipeline.cpp` | MODIFY — query mixing in solver pipeline |
+
+### 4.6 Estimated Effort
+
+**Medium.** Most infrastructure exists. 2-3 days.
+
+---
+
+## Phase 5: OMP + Budget — Port MIT Selection and Allocation (GAP-04, GAP-05, GAP-06, GAP-13)
+
+**Goal:** Replace fork's OMP and budget allocation with MIT reference implementations. GPU from Phase 3 accelerates OMP scoring.
+
+**MIT source files:** `algorithms/omp.py`, `head_budget_optimization/solver.py`
+
+### 5.1 Progressive OMP Schedule (GAP-04)
+
+**Port MIT's DEFAULT_PROGRESSIVE_SCHEDULE:**
+
+```cpp
+struct omp_schedule_entry {
+    uint32_t threshold;     // switch after selecting this many keys
+    uint32_t k_choice;      // keys per iteration
+    uint32_t nnls_interval; // NNLS refit frequency
+};
+
+static const omp_schedule_entry DEFAULT_OMP_SCHEDULE[] = {
+    { 300,       1, 1 },   // 0-300:   standard OMP (exact)
+    { 1500,      2, 2 },   // 301-1500: batch 2, refit every 2
+    { UINT32_MAX, 4, 2 },  // 1501+:   batch 4, refit every 2
+};
+```
+
+**Speed impact:** At >1500 keys, ~8x faster OMP iteration rate.
+
+### 5.2 Drop-Key Refinement (GAP-05)
+
+**Port MIT's post-selection refinement** (`algorithms/omp.py:629-702`):
+
+```
+AFTER initial OMP selection of t keys:
+  FOR refinement_pass = 0 to 2:  // max 3 entries
+    dropped = [i for i in selected if beta[i] < drop_key_beta_cutoff]
+    IF len(dropped) == 0: BREAK
+    mask[dropped] = permanent
+    Re-enter OMP loop to fill len(dropped) slots
+    Refit NNLS on new selection
+```
+
+**Replace** fork's mid-loop beta pruning with MIT's post-selection approach.
+
+### 5.3 Greedy Budget Solver (GAP-06, GAP-13)
+
+**Port from MIT** (`head_budget_optimization/solver.py:220-355`):
+
+```
+allocate_all_heads(min_ratio_per_head)
+WHILE sum(budgets) < target_total:
+    best_head = argmax_h marginal_benefit(h, step_size)
+    budgets[best_head] += step_size
+```
+
+**Ship pre-computed budgets:** Copy MIT repo's `head_budgets/` into `data/head_budgets/`.
+
+**Fallback for unknown models:** Use existing entropy-proportional allocation.
+
+### 5.4 Testing
+
+- [ ] Progressive OMP: phases transition at 300 and 1500 keys
+- [ ] OMP with schedule >= 3x faster than fixed k=1 for 2000+ target keys
+- [ ] Drop-key refinement: max 3 passes (no infinite loop)
+- [ ] Greedy budget matches MIT output on Qwen3-4B with `optimized_agnostic.json`
+- [ ] Pre-computed budget JSONs load correctly
+- [ ] Nonuniform with greedy budgets: cosine >= 0.92 at 4x on Qwen3-8B
+
+### 5.5 Files Created/Modified
+
+| File | Action |
+|------|--------|
+| `src/llama-kv-compact-select.cpp` | MAJOR REWRITE — progressive schedule, drop-key refinement |
+| `src/llama-kv-compact-select.h` | MODIFY — schedule struct, refinement options |
+| `src/llama-kv-compact-budget.cpp` | MAJOR REWRITE — greedy solver, JSON loading |
+| `src/llama-kv-compact-budget.h` | MODIFY — influence curve types |
+| `data/head_budgets/` | NEW — copy from MIT repo |
+
+### 5.6 Estimated Effort
+
+**Medium-High.** 3-5 days.
+
+---
+
+## Phase 6: Chunked Compaction + Long Context (GAP-08)
+
+**Goal:** Port MIT's KV-based chunking for long contexts (>8K). Harden for 128K.
+
+**MIT source files:** `compaction_methods/chunked.py`
+
+### 6.1 KV-Based Chunking
+
+**Port MIT's KV-based approach:**
+
+1. Run full prefill over entire context (captures all KV states)
+2. For each chunk `[start, end)`:
+   - Extract KV states for `[start, end)` from full prefill cache
+   - Construct virtual context: `[compacted_so_far + chunk_KV + suffix_KV]`
+   - Compact chunk using queries generated over full context
+   - Merge compacted chunk into growing compacted prefix
+3. No RoPE correction needed — KV states have correct positional encoding from original prefill
+
+### 6.2 Chunk Size Selection
+
+```cpp
+struct llama_kv_compact_chunk_opts {
+    uint32_t chunk_size    = 12288;  // ~12K tokens (MIT default)
+    bool     kv_based      = true;   // KV-based vs position-based
+};
+```
+
+### 6.3 128K with Chunking
+
+128K at 12K chunks = ~11 chunks. Each chunk compacted independently → merge into single compacted prefix. No additional KV memory needed beyond what's already loaded.
+
+### 6.4 Testing
+
+- [ ] KV-based chunking matches single-block quality within 0.02 cosine at 8K
+- [ ] No RoPE discontinuities across chunk boundaries
+- [ ] Chunked compaction at 128K: 11 chunks merge correctly
+- [ ] Decode after chunked compaction produces finite logits
+
+### 6.5 Estimated Effort
+
+**Medium.** 2-3 days.
+
+---
+
+## Phase 7: Flash Attention + Beta Hybrid
+
+**Goal:** Allow flash attention to work with compacted prefixes that have non-zero beta.
+
+### 7.1 Hybrid Attention (Pragmatic Path)
 
 Split the attention computation:
 - **Live KV suffix:** uses flash attention (no beta needed)
 - **Compacted prefix:** uses standard attention with beta (non-FA, as today)
-- **Combine:** weighted sum of the two attention outputs
+- **Combine:** weighted sum with proper softmax normalization
 
-**What's needed:**
-1. Modify attention graph to split Q into two paths at the compacted prefix boundary
-2. FA path handles live KV (the majority of computation at long contexts)
-3. Non-FA path handles compacted prefix (small — typically 128-512 tokens)
-4. Merge attention outputs with proper softmax normalization
+```
+out = (sum_prefix × out_prefix + sum_live × out_live) / (sum_prefix + sum_live)
+```
 
-**Difficulty: MEDIUM-HIGH.** Requires attention graph surgery but no new Metal kernels.
+**Performance:** At 16K with 2x compaction: FA handles 8K live tokens (fast), non-FA handles 128-512 compacted tokens (small).
 
-**Performance benefit:** At 16K context with 2x compaction to 8K:
-- FA handles 8K live tokens (fast)
-- Non-FA handles 128-512 compacted tokens (small, fast enough)
-- vs current: non-FA handles all 8K+ tokens (slow)
+### 7.2 FlashBias (Future, V3)
 
-### 4.3 Recommendation
+Custom flash attention Metal kernel with additive bias. Defer to V3 or upstream adoption.
 
-**Implement Path B (Hybrid) first.** It's achievable without upstream support and gives most of the performance benefit. Path A (FlashBias) is a future optimization.
+### 7.3 Testing
 
-### 4.4 Testing
+- [ ] Hybrid attention cosine >= 0.9999 vs non-FA path
+- [ ] pp512 with hybrid >= 90% of pure FA
+- [ ] tg128 with hybrid >= 95% of pure FA
 
-- [ ] Hybrid attention produces identical logits to non-FA path (cosine >= 0.9999)
-- [ ] Performance: pp512 with hybrid path >= 90% of pure FA performance
-- [ ] Performance: tg128 with hybrid path >= 95% of pure FA performance
-- [ ] Quality: select pipeline cosine unchanged from V1 values
+### 7.4 Estimated Effort
 
-### 4.5 Estimated Effort
-
-Path B (Hybrid): **Medium-High.** 3-5 days. Attention graph modification is delicate.
-Path A (FlashBias): **Very High.** 2-4 weeks. Metal kernel development.
+**Medium-High.** 3-5 days.
 
 ---
 
-## Phase 5: SWA Full Compaction
+## Phase 8: High Compression (10-50x) + On-Policy (GAP-07)
 
-**Goal:** Extend compaction to the SWA (Sliding Window Attention) sub-cache, currently rejected by `compacted_prefix_runtime_supported()`.
+**Goal:** Enable 10-20x production compression and 50x research capability using the full MIT algorithm stack from Phases 2-6.
 
-### 5.1 Current State
+**Dependencies:** Phases 2-6 (solver core, GPU, queries, OMP, chunking) must be complete.
 
-- V1: `compacted_prefix_runtime_supported()` rejects SWA caches (`n_swa > 0`)
-- Gemma2-9B (iSWA): compaction works on base cache, SWA sub-cache rejected
-- This is correct behavior — SWA tokens expire naturally (sliding window eviction)
+### 8.1 Production 10x Profile
 
-### 5.2 Why Compact SWA?
-
-SWA tokens that are still within the window are actively used for attention. Compacting them could:
-1. Allow higher effective compression on iSWA models
-2. Reduce active KV count for the SWA portion
-3. Enable compaction on models where SWA layers dominate
-
-### 5.3 Challenges
-
-1. **SWA eviction interaction** — the sliding window naturally evicts old tokens. Compacted tokens in the SWA cache must respect the window boundary.
-2. **Different attention patterns** — SWA layers attend locally (within window), not globally. Compaction selects tokens based on global attention patterns. Need SWA-specific selection.
-3. **Window-aligned compaction** — compact only tokens that are about to exit the window, not the full SWA cache.
-
-### 5.4 Implementation
-
-1. New function: `compacted_prefix_runtime_supported_swa()` — separate guard for SWA compaction
-2. SWA-specific selection: compact tokens in the `[window_start, window_start + window_size/2]` range (oldest half of window)
-3. SWA-specific quality metric: attention pattern match within window context, not global
-4. Integration with iSWA models: compact base cache (existing) + compact SWA sub-cache (new)
-
-### 5.5 Testing
-
-- [ ] Gemma2-9B: SWA sub-cache compaction succeeds (currently rejected)
-- [ ] Gemma2-9B: Quality after SWA compaction >= 0.90 cosine
-- [ ] SWA window boundary correctly respected
-- [ ] iSWA model: both base and SWA caches compacted independently
-- [ ] Non-iSWA models: behavior unchanged from V1
-
-### 5.6 Dependencies
-
-- Phase 1 (Upstream Sync) — may need newer SWA code from upstream
-- Gemma3-12B availability — need a working Gemma3 load to test full iSWA path
-
-### 5.7 Estimated Effort
-
-**Medium.** 2-3 days. The main complexity is the SWA-specific selection logic.
-
----
-
-## Phase 6: High Compression (10-50x)
-
-**Goal:** Enable 10-20x production compression and 50x research capability using the full paper algorithm.
-
-**Dependencies:** Phase 2 (GPU solver) and Phase 3 (production solver) must be complete first.
-
-### 6.1 Chunked Compaction
-
-For contexts > 8K tokens, the paper uses KV-based chunking (~12K tokens/chunk):
-
-1. Split the prefix into chunks of ~12K tokens
-2. Compact each chunk independently
-3. Handle RoPE phase alignment across chunk boundaries
-4. Merge compacted chunks into a single compacted prefix
-
-- Reference: Section 3.5 and Appendix C.3 of the paper
-- File: `src/llama-kv-compact-pipeline.cpp` — chunked pipeline exists but needs production hardening
-- **Impact:** Required for compacting long contexts (16K+) at high ratios
-
-### 6.2 OMP Key Selection
-
-Orthogonal Matching Pursuit produces better key selection than top-k at >10x compression:
-
-1. V1 has OMP implemented but it's slow (~23 minutes for 2x on 14B at 4K)
-2. OMP-fast variant (k=4, tau=2) per paper: ~104s on H200, proportionally slower on M3 Pro
-3. With GPU solver (Phase 2): OMP scoring moves to GPU, reducing to ~10-30s
-4. OMP quality advantage only manifests at >10x — at 2-8x, top-k is adequate
-
-- File: `src/llama-kv-compact-select.cpp` — OMP exists, needs GPU acceleration
-- **Decision:** OMP remains experimental/opt-in. top-k + nonuniform budgets is the production path for 10x.
-
-### 6.3 50x Compression Profile
-
-Based on the paper, 50x requires:
-
-| Component | Required | Status |
-|-----------|----------|--------|
-| Self-study queries (~50K/head) | Yes | Phase 3.2.1 |
-| OMP-fast key selection | Yes | Phase 6.2 |
-| Nonuniform per-head budgets | Yes | Phase 3.3 |
-| Chunked compaction | Yes | Phase 6.1 |
-| Ridge scaling | Yes | Phase 3.4 |
-
-**Quality at 50x:** expect 15-25% accuracy loss on benchmarks. This is a **research capability**, not a production default. Exposed via `LLAMA_COMPACT_ALLOWED_METHODS=solver,omp` environment variable.
-
-### 6.4 Production 10x Profile
-
-The default production path at 10x:
-
-| Component | Method |
-|-----------|--------|
-| Query generation | Prefill-Q + short self-study supplement |
-| Key selection | top-k with nonuniform per-head budgets |
-| Beta fitting | GPU-accelerated NNLS (Phase 2) |
-| V fitting | GPU-accelerated least-squares (Phase 2) |
+| Component | Method | MIT Source |
+|-----------|--------|-----------|
+| Query generation | Prefill-Q + self-study (2000 × 3 rounds) | `self_study.py` |
+| Key selection | top-k with nonuniform per-head budgets (greedy solver) | `solver.py` |
+| Beta fitting | lstsq + clamp (MIT default) | `base.py:471-605` |
+| V fitting | lstsq → cholesky cascade with spectral ridge | `base.py:240-420` |
+| GPU acceleration | Metal shaders for attention scores + softmax | Phase 3 |
 
 **Expected quality at 10x:** cosine >= 0.88 on standard causal models, >= 0.90 on MoE.
 
-### 6.5 Testing
+### 8.2 Research 50x Profile
+
+| Component | Method | MIT Source |
+|-----------|--------|-----------|
+| Query generation | Self-study (2000 × 5 rounds) | `self_study.py` |
+| Key selection | OMP with progressive schedule | `omp.py:478-718` |
+| Budget allocation | Greedy solver with influence curves | `solver.py:220-355` |
+| Refinement | Drop-key post-selection (cutoff=1e-4) | `omp.py:629-702` |
+
+**Quality at 50x:** ~15-25% accuracy loss. Research-only.
+
+### 8.3 On-Policy Sequential Compaction (GAP-07, Experimental)
+
+**Port from MIT** (`compaction_methods/per_layer_head_on_policy.py`):
+
+1. Compact layer 0 with original queries
+2. Materialize compacted layer 0 into KV cache
+3. Forward pass with compacted layer 0 → on-policy queries for layer 1
+4. Compact layer 1 with on-policy queries
+5. Repeat for remaining layers
+
+**Cost:** n_layers × forward_pass_time. ~60-120s for 40-layer 14B. Opt-in only.
+
+### 8.4 Testing
 
 - [ ] 10x compression: cosine >= 0.88 on all 15+ models
 - [ ] 20x compression: cosine >= 0.85 on Qwen3-8B, Qwen3-30B-A3B
-- [ ] 50x compression: cosine measured and documented (no pass/fail threshold)
-- [ ] Chunked compaction at 16K context: quality matches single-block at same ratio
-- [ ] OMP selection at 10x outperforms top-k at 10x (measured quality delta)
+- [ ] 50x compression: cosine measured and documented
+- [ ] On-policy at 10x: cosine delta vs off-policy measured on 3 models
 
-### 6.6 Estimated Effort
+### 8.5 Estimated Effort
 
-**Medium.** Most components exist. 2-3 days to integrate and tune. OMP GPU acceleration is the hardest part.
+**Medium.** Integration and tuning: 2-3 days. On-policy: +2 days.
 
 ---
 
-## Phase 7: 128K Context Validation
+## Phase 9: SWA Full Compaction + Attention Bias (GAP-10)
 
-**Goal:** Implement and validate compaction quality and performance at 128K context. Test on models that fit in 32GB (3B-7B). Document hardware requirements for 14B+ at 128K.
+**Goal:** Extend compaction to the SWA sub-cache and add attention bias pass-through.
 
-### 7.1 Hardware Constraints
+### 9.1 SWA Sub-Cache Compaction
+
+- V1: `compacted_prefix_runtime_supported()` rejects SWA caches
+- V2: Compact SWA tokens about to exit the window
+
+**SWA-specific selection:** Compact tokens in `[window_start, window_start + window_size/2]` (oldest half). Use attention scores within window context, not global.
+
+### 9.2 Attention Bias in Selection (GAP-10)
+
+Port MIT's `attention_bias` parameter:
+```cpp
+void llama_kv_compact_select_topk(
+    const float * scores, uint32_t n,
+    const float * attention_bias,  // NEW: [n] or nullptr
+    uint32_t t,
+    std::vector<uint32_t> & selected);
+```
+
+**Use cases:** SWA windowed masking, causal masking for out-of-order sequences.
+
+### 9.3 Testing
+
+- [ ] Gemma2-9B: SWA sub-cache compaction succeeds
+- [ ] Gemma2-9B: quality >= 0.90 cosine after SWA compaction
+- [ ] Attention bias correctly masks positions outside window
+- [ ] iSWA: both base and SWA caches compacted independently
+- [ ] Non-iSWA models: behavior unchanged from V1
+
+### 9.4 Estimated Effort
+
+**Medium.** 2-3 days.
+
+---
+
+## Phase 10: 128K Context Validation
+
+**Goal:** Validate compaction quality and performance at 128K context on models that fit in 32GB.
+
+### 10.1 Hardware Constraints
 
 | Model Size | KV @ 128K | Total RAM | Testable on 32GB Mac? |
 |:----------:|:---------:|:---------:|:---------------------:|
 | 3B | ~2.6 GB | ~4.5 GB | **Yes** |
 | 7B | ~5.2 GB | ~9.6 GB | **Yes** |
-| 8B | ~6.6 GB | ~11.5 GB | **Tight — test with care** |
-| 14B | ~10+ GB | ~19+ GB | No (swap, meaningless results) |
-| 30B MoE | ~10+ GB | ~27+ GB | No |
+| 8B | ~6.6 GB | ~11.5 GB | **Tight** |
+| 14B | ~10+ GB | ~19+ GB | No (swap) |
+| 30B MoE | ~10+ GB | ~27+ GB | No (see Phase 11) |
 
-### 7.2 Implementation: 128K Integration Tests
-
-New test file: `tests/test-kv-compact-128k.cpp`
-
-Tests run on 3B and 7B models at 128K context with select and solver pipelines:
-
-**7.2.1 Quality at 128K**
-
-| Model | Context | Ratios | Pipeline | Target Cosine | Memory Risk |
-|-------|---------|--------|----------|:-------------:|:-----------:|
-| Llama3.2-3B | 128K | 2x, 4x, 8x, 16x | select | >= 0.90 | Safe (~4.5GB) |
-| Qwen2.5-7B | 128K | 2x, 4x, 8x, 16x | select | >= 0.90 | Safe (~9.6GB) |
-| Qwen3-8B | 128K | 2x, 4x, 8x | select | >= 0.85 | Tight (~11.5GB) — monitor RSS |
-| Qwen3-14B | 128K | 2x, 4x | select | >= 0.85 | Very tight (~19GB) — monitor RSS, kill if swap detected |
-
-**7.2.2 Performance at 128K**
-
-| Test | Measurement | Target |
-|------|-------------|--------|
-| Compaction latency (select) | Time to compact 128K → 64K (2x) | < 2s on 3B, < 5s on 7B |
-| Compaction latency (solver) | Time to compact 128K → 64K (2x) | < 5s on 3B with GPU solver |
-| Post-compaction decode tok/s | Decode 128 tokens after compaction | Faster than uncompacted baseline |
-| Memory savings | Peak RSS with 8x compaction vs none | Measurable reduction in active KV |
-| Serialization round-trip | Save/restore compacted 128K state | Cosine >= 0.99 |
-
-**7.2.3 Chunked Compaction at 128K**
-
-128K context requires chunked compaction (single-block won't fit in solver memory). Tests must verify:
-
-- [ ] Chunked compaction at 128K produces quality within 0.02 cosine of single-block at 8K
-- [ ] RoPE phase alignment correct across chunk boundaries (no position discontinuities)
-- [ ] Chunk merging produces a single contiguous compacted prefix
-- [ ] Decode after chunked compaction produces finite, coherent logits
-
-**7.2.4 Stress Tests**
-
-- [ ] Compact 128K → 8K (16x) on Llama3.2-3B: quality and stability
-- [ ] Compact 128K → 16K (8x) on Qwen2.5-7B: quality and stability
-- [ ] Multiple compaction cycles: compact, decode, compact again — no memory leaks
-- [ ] Serialization at 128K: save state, clear, restore, verify cosine
-
-### 7.3 Server Integration at 128K
-
-Test `/compact` endpoint with 128K context via llama-server:
-
-- [ ] `/compact` succeeds at 128K with `method=select`, `ratio=2`
-- [ ] `/props` reports correct `active_n_kv` after 128K compaction
-- [ ] `/metrics` shows compaction timing at 128K
-- [ ] Streaming decode after 128K compaction produces valid SSE chunks
-- [ ] Memory stays within 32GB envelope for 3B-7B models
-
-### 7.4 14B+ at 128K (Future Hardware)
-
-When 64GB+ hardware is available (M4 Max, cloud instance, or provisioned server):
+### 10.2 128K Integration Tests
 
 | Model | Context | Ratios | Pipeline | Target Cosine |
 |-------|---------|--------|----------|:-------------:|
-| Qwen3-14B | 128K | 2x, 4x, 8x | select + solver | >= 0.90 |
-| DeepSeek-R1-14B | 128K | 2x, 4x | select | >= 0.90 |
+| Llama3.2-3B | 128K | 2x, 4x, 8x, 16x | select + solver | >= 0.90 |
+| Qwen2.5-7B | 128K | 2x, 4x, 8x, 16x | select + solver | >= 0.90 |
+| Qwen3-8B | 128K | 2x, 4x, 8x | select + solver | >= 0.85 |
 
-These tests are **written and ready to run** but need 64GB+ to run without swap pressure.
+**Performance targets:**
+- Compaction latency (select): < 2s on 3B, < 5s on 7B
+- Post-compaction decode: faster than uncompacted baseline
+- Serialization round-trip: cosine >= 0.99
 
-Qwen3-30B-A3B at 128K is tested separately in Phase 8 (see below).
+**Chunked compaction at 128K:**
+- [ ] 11 chunks (~12K each) merge correctly
+- [ ] Quality within 0.02 cosine of single-block at 8K
+- [ ] Decode produces finite, coherent logits
 
-### 7.5 Estimated Effort
+**Server integration:**
+- [ ] `/compact` succeeds at 128K
+- [ ] `/props` reports correct `active_n_kv`
+- [ ] Memory stays within 32GB for 3B-7B models
 
-**Medium.** 2-3 days. Test code + chunked compaction hardening + server integration at 128K.
+### 10.3 Estimated Effort
+
+**Medium.** 2-3 days.
 
 ---
 
-## Phase 8: Final Validation, Qwen3-30B-A3B 128K Stress Test, and Documentation
+## Phase 11: Capstone — Qwen3-30B-A3B at 128K + Final Documentation
 
-**Goal:** Stress-test the full V2 stack with the largest feasible model at 128K, update all docs, run comprehensive benchmarks.
+**Goal:** Stress-test full V2 stack with largest feasible model at 128K. Update all docs.
 
-### 8.1 Qwen3-30B-A3B at 128K — Capstone Stress Test
+### 11.1 Qwen3-30B-A3B at 128K — Capstone Stress Test
 
-This is the final validation after all Phases 1-7 are complete. Qwen3-30B-A3B is the most demanding model that can potentially fit on 32GB (17.3GB weights + KV cache).
-
-**Why this model:** MoE architecture with 30B total / 3B active. It achieved the best V1 select cosine (0.999) and the best solver cosine (0.906). If any model can handle 128K with compaction on 32GB, this is it — because compaction reduces the KV cache that would otherwise make it impossible.
+**Why this model:** MoE with 30B total / 3B active. Best V1 cosines (select 0.999, solver 0.906). With 8-16x compaction, KV drops from ~10GB to ~0.6-1.25GB.
 
 **Protocol — run with extreme care:**
 
-1. Close all other applications. Kill Ollama, browsers, anything consuming memory.
-2. Monitor memory continuously: `vm_stat 1` in a separate terminal
-3. Start with the smallest test first: 128K context, 8x compaction (reduces KV from ~10GB to ~1.25GB)
-4. If RSS stays under 28GB and no swap activity: proceed to 4x, then 2x
-5. **Abort immediately** if swap pages start increasing — results under swap are meaningless
+1. Close all other applications. Kill Ollama, browsers.
+2. Monitor memory: `vm_stat 1` in separate terminal
+3. Start smallest: 128K context, 16x compaction (KV → ~0.6GB, total ~17.9GB)
+4. If RSS < 28GB and no swap: proceed to 8x, 4x, 2x
+5. **Abort immediately** if swap pages increase
 
-| Test | Context | Ratio | Expected KV After Compaction | Total RAM Needed | Feasible? |
-|------|---------|:-----:|:----------------------------:|:----------------:|:---------:|
-| A | 128K | 8x | ~1.25 GB | ~18.5 GB | **Likely yes** |
+| Test | Context | Ratio | Expected KV After | Total RAM | Feasible? |
+|------|---------|:-----:|:-----------------:|:---------:|:---------:|
+| D | 128K | 16x | ~0.6 GB | ~17.9 GB | **Yes** |
+| A | 128K | 8x | ~1.25 GB | ~18.5 GB | **Likely** |
 | B | 128K | 4x | ~2.5 GB | ~19.8 GB | **Probably** |
 | C | 128K | 2x | ~5.0 GB | ~22.3 GB | **Tight** |
-| D | 128K | 16x | ~0.6 GB | ~17.9 GB | **Yes (best shot)** |
 
 **Success criteria:**
-- [ ] At least one compaction ratio completes without swap
-- [ ] Post-compaction decode produces finite, coherent logits
-- [ ] Quality: select cosine >= 0.85 (relaxed threshold for extreme conditions)
-- [ ] Serialization round-trip works at 128K compacted state
-- [ ] Compaction latency documented (GPU solver if available from Phase 2)
+- [ ] At least one ratio completes without swap
+- [ ] Post-compaction decode produces finite logits
+- [ ] Quality: select cosine >= 0.85
+- [ ] Serialization round-trip works at 128K
 
-**If Qwen3-30B-A3B at 128K works on 32GB Mac with compaction, this is the headline result:**
+**Headline result if successful:**
 > "Run a 30B model with 128K context on a 32GB laptop — only possible with KV compaction."
 
-### 8.2 Documentation Updates
+### 11.2 Documentation Updates
 
 | Document | Change |
 |----------|--------|
-| `docs/modelai-fork-summary.md` | V2 support matrix, GPU solver, production solver quality, SWA compaction |
-| `docs/modelai-v2-benchmark-results.md` | NEW — full model matrix at 2x, 4x, 10x, 20x with solver pipeline |
-| `docs/modelai-performance-roadmap.md` | Update B4 to DONE, mark Phase 5 items as DONE |
-| `docs/modelai-compaction-support-envelope.md` | Expand support tiers: 10-20x supported, 50x experimental |
-| `docs/modelai-v1-benchmark-results.md` | Add V1→V2 comparison section |
-| `CLAUDE.md` | Update V0 Support Matrix to V2 Support Matrix |
+| `docs/modelai-fork-summary.md` | V2 support matrix, GPU solver, solver quality, SWA |
+| `docs/modelai-v2-benchmark-results.md` | NEW — full model matrix at 2x-50x |
+| `docs/modelai-performance-roadmap.md` | Update B4 to DONE |
+| `CLAUDE.md` | Update support matrix to V2 |
 
-### 8.3 Benchmark Plan
+### 11.3 Estimated Effort
 
-**8.3.1 Solver Quality Matrix**
-
-Run solver pipeline on all 18+ models at 2x, 4x, 10x, 20x. Compare to V1 select-only baseline.
-
-**8.3.2 GPU Solver Performance**
-
-Measure compaction latency (CPU vs GPU) across model sizes and context lengths.
-
-**8.3.3 Flash Attention Hybrid**
-
-Measure decode performance with hybrid FA path vs pure non-FA path.
-
-**8.3.4 SWA Compaction**
-
-Measure quality and performance on Gemma2-9B and Gemma3-12B with full SWA compaction.
-
-**8.3.5 128K Context Results**
-
-Full quality and performance data at 128K for all tested models (3B, 7B, 8B, 14B, 30B MoE).
-
-### 8.4 Estimated Effort
-
-**Medium.** 2-3 days for stress test + docs + benchmarks.
+**Medium.** 2-3 days.
 
 ---
 
@@ -666,26 +951,32 @@ Full quality and performance data at 128K for all tested models (3B, 7B, 8B, 14B
 ```
 Phase 1: Upstream Sync
     |
-    +--→ Phase 2: GPU Solver (B4)
+    +--→ Phase 2: Solver Core (MIT port — NNLS, V fit, ridge)
     |        |
-    |        +--→ Phase 3: Production Solver
+    |        +--→ Phase 3: GPU Solver (Metal) ← EARLY: accelerates all downstream
     |        |        |
-    |        |        +--→ Phase 6: High Compression (10-50x)
+    |        |        +--→ Phase 4: Query Generation (self-study + prefill-Q)
+    |        |        |        |
+    |        |        |        +--→ Phase 5: OMP + Budget (progressive, greedy solver)
+    |        |        |                 |
+    |        |        |                 +--→ Phase 8: High Compression (10-50x) + On-Policy
+    |        |        |
+    |        |        +--→ Phase 6: Chunked Compaction (KV-based)
+    |        |                 |
+    |        |                 +--→ Phase 10: 128K Validation
     |        |
-    |        +--→ Phase 4: Flash Attention + Beta
+    |        +--→ Phase 7: Flash Attention Hybrid (independent of GPU solver)
     |
-    +--→ Phase 5: SWA Full Compaction
+    +--→ Phase 9: SWA + Attention Bias (independent of solver)
     |
-    +--→ Phase 7: 128K Validation (3B-7B local, 14B+ future hardware)
-    |
-    +--- All above --→ Phase 8: Documentation & Benchmarks
+    +--- All above --→ Phase 11: Capstone + Docs
 ```
 
-Phases 2-5 can partially parallelize after Phase 1 completes:
-- Phase 2 (GPU solver) and Phase 5 (SWA) are independent
-- Phase 3 (production solver) depends on Phase 2
-- Phase 4 (flash+beta) depends on Phase 2
-- Phase 6 (high compression) depends on Phases 2 + 3
+**Critical path:** Phases 1 → 2 → 3 → 4 → 5 → 8 (solver quality + GPU acceleration).
+
+**Parallelizable after Phase 1:**
+- Phase 7 (flash hybrid) is independent of Phases 3-6
+- Phase 9 (SWA) is independent of Phases 2-8
 
 ---
 
@@ -693,13 +984,13 @@ Phases 2-5 can partially parallelize after Phase 1 completes:
 
 | Risk | Likelihood | Impact | Mitigation |
 |------|:----------:|:------:|------------|
-| Upstream merge conflicts in KV cache code | HIGH | HIGH | Cherry-pick strategy as fallback; preserve compaction code in separate files |
-| Metal compute shader bugs (Phase 2) | MEDIUM | MEDIUM | CPU fallback always available; extensive unit tests |
-| Self-study query quality still poor on GQA | MEDIUM | HIGH | Prefill-Q as alternative; if neither works, solver remains experimental |
-| FlashBias kernel too complex (Phase 4A) | HIGH | MEDIUM | Hybrid path (Phase 4B) is the pragmatic alternative |
-| SWA compaction degrades quality (Phase 5) | LOW | LOW | SWA compaction is opt-in; base-cache-only remains default |
-| 50x quality too poor for any use case | MEDIUM | LOW | 50x is documented as research; 10-20x is the production target |
-| 128K testing reveals context-length quality cliff | MEDIUM | MEDIUM | Chunked compaction (Phase 6.1) is the mitigation |
+| Upstream merge conflicts in KV cache code | HIGH | HIGH | Cherry-pick strategy as fallback |
+| MIT NNLS port quality doesn't match Python | MEDIUM | HIGH | Reference test: C++ output vs MIT Python on same inputs |
+| Self-study query count still insufficient | LOW | MEDIUM | Prefill-Q supplements; more rounds |
+| Metal compute shader bugs | MEDIUM | MEDIUM | CPU fallback always available |
+| FlashBias kernel too complex | HIGH | MEDIUM | Hybrid path is the pragmatic alternative |
+| 128K testing reveals quality cliff | MEDIUM | MEDIUM | Chunked compaction is the mitigation |
+| Pre-computed budget JSONs don't cover all models | LOW | LOW | Entropy fallback for unknown models |
 
 ---
 
@@ -707,13 +998,15 @@ Phases 2-5 can partially parallelize after Phase 1 completes:
 
 V2 is complete when:
 
-1. **GPU solver works:** compaction latency < 500ms for 14B at 4K on M3 Pro
-2. **Solver quality fixed:** cosine >= 0.90 at 2x on all validated models (currently -0.17 to 0.91)
-3. **10x production compression:** cosine >= 0.88 on standard causal models
-4. **Flash attention hybrid:** decode performance within 10% of pure FA
-5. **18+ models validated:** Gemma3-12B, GPT-OSS-20B, Phi4-14B added via upstream sync
-6. **SWA compaction:** base + SWA sub-cache compaction on iSWA models
-7. **128K validated:** compaction works at 128K on 3B-7B models with quality >= 0.90
+1. **Solver core matches MIT:** NNLS, V fitting, and ridge scaling produce values within fp32 tolerance of MIT Python reference on identical inputs
+2. **GPU solver works:** compaction latency < 500ms for 14B at 4K on M3 Pro
+3. **Solver quality fixed:** cosine >= 0.90 at 2x on all validated models (currently -0.17 to 0.91)
+4. **10x production compression:** cosine >= 0.88 on standard causal models
+5. **Flash attention hybrid:** decode performance within 10% of pure FA
+6. **18+ models validated:** Gemma3-12B, GPT-OSS-20B, Phi4-14B added via upstream sync
+7. **SWA compaction:** base + SWA sub-cache on iSWA models
+8. **128K validated:** compaction works at 128K on 3B-8B models with quality >= 0.85
+9. **128K 30B capstone:** Qwen3-30B-A3B at 128K completes at least one compaction ratio without swap
 
 ---
 
@@ -722,11 +1015,14 @@ V2 is complete when:
 | Phase | Effort | Calendar |
 |-------|:------:|:--------:|
 | Phase 1: Upstream Sync | High | 2-5 days |
-| Phase 2: GPU Solver | High | 3-5 days |
-| Phase 3: Production Solver | Medium-High | 3-5 days |
-| Phase 4: Flash + Beta (Hybrid) | Medium-High | 3-5 days |
-| Phase 5: SWA Compaction | Medium | 2-3 days |
-| Phase 6: High Compression | Medium | 2-3 days |
-| Phase 7: 128K Validation (3B-14B) | Medium | 2-3 days |
-| Phase 8: 30B-A3B Stress Test + Docs | Medium | 2-3 days |
-| **Total** | | **18-32 days** |
+| Phase 2: Solver Core (MIT port) | Medium | 2-3 days |
+| Phase 3: GPU Solver (Metal) | High | 3-5 days |
+| Phase 4: Query Generation | Medium | 2-3 days |
+| Phase 5: OMP + Budget | Medium-High | 3-5 days |
+| Phase 6: Chunked Compaction | Medium | 2-3 days |
+| Phase 7: Flash Attention Hybrid | Medium-High | 3-5 days |
+| Phase 8: High Compression + On-Policy | Medium | 4-5 days |
+| Phase 9: SWA + Attention Bias | Medium | 2-3 days |
+| Phase 10: 128K Validation | Medium | 2-3 days |
+| Phase 11: Capstone + Docs | Medium | 2-3 days |
+| **Total** | | **27-43 days** |
