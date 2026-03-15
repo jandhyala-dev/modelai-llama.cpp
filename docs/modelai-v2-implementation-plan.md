@@ -503,67 +503,126 @@ The default production path at 10x:
 
 ---
 
-## Phase 7: 128K Context Validation (Deferred Implementation)
+## Phase 7: 128K Context Validation
 
-**Goal:** Validate compaction quality and performance at 128K context. **Implementation is deferred** — this phase writes the full test plan and identifies hardware requirements.
+**Goal:** Implement and validate compaction quality and performance at 128K context. Test on models that fit in 32GB (3B-7B). Document hardware requirements for 14B+ at 128K.
 
-### 7.1 Why Deferred
+### 7.1 Hardware Constraints
 
-128K context on a 14B model requires:
-- Model weights: ~8.5 GB
-- KV cache at 128K: ~10+ GB
-- Total: ~19+ GB minimum
+| Model Size | KV @ 128K | Total RAM | Testable on 32GB Mac? |
+|:----------:|:---------:|:---------:|:---------------------:|
+| 3B | ~2.6 GB | ~4.5 GB | **Yes** |
+| 7B | ~5.2 GB | ~9.6 GB | **Yes** |
+| 8B | ~6.6 GB | ~11.5 GB | **Tight — test with care** |
+| 14B | ~10+ GB | ~19+ GB | No (swap, meaningless results) |
+| 30B MoE | ~10+ GB | ~27+ GB | No |
 
-On 32GB Apple Silicon, only 3B-7B models fit at 128K. 14B models would swap to disk, producing meaningless benchmarks.
+### 7.2 Implementation: 128K Integration Tests
 
-### 7.2 Hardware Requirements
+New test file: `tests/test-kv-compact-128k.cpp`
 
-| Model Size | KV @ 128K | Total RAM | Platform |
-|:----------:|:---------:|:---------:|----------|
-| 3B | ~2.6 GB | ~4.5 GB | 32GB Mac (feasible) |
-| 7B | ~5.2 GB | ~9.6 GB | 32GB Mac (feasible) |
-| 8B | ~6.6 GB | ~11.5 GB | 32GB Mac (tight) |
-| 14B | ~10+ GB | ~19+ GB | 64GB Mac or cloud |
-| 30B MoE | ~10+ GB | ~27+ GB | 64GB+ or cloud |
+Tests run on 3B and 7B models at 128K context with select and solver pipelines:
 
-### 7.3 Test Plan (For Future Execution)
+**7.2.1 Quality at 128K**
 
-**7.3.1 Quality at 128K**
+| Model | Context | Ratios | Pipeline | Target Cosine | Memory Risk |
+|-------|---------|--------|----------|:-------------:|:-----------:|
+| Llama3.2-3B | 128K | 2x, 4x, 8x, 16x | select | >= 0.90 | Safe (~4.5GB) |
+| Qwen2.5-7B | 128K | 2x, 4x, 8x, 16x | select | >= 0.90 | Safe (~9.6GB) |
+| Qwen3-8B | 128K | 2x, 4x, 8x | select | >= 0.85 | Tight (~11.5GB) — monitor RSS |
+| Qwen3-14B | 128K | 2x, 4x | select | >= 0.85 | Very tight (~19GB) — monitor RSS, kill if swap detected |
+
+**7.2.2 Performance at 128K**
+
+| Test | Measurement | Target |
+|------|-------------|--------|
+| Compaction latency (select) | Time to compact 128K → 64K (2x) | < 2s on 3B, < 5s on 7B |
+| Compaction latency (solver) | Time to compact 128K → 64K (2x) | < 5s on 3B with GPU solver |
+| Post-compaction decode tok/s | Decode 128 tokens after compaction | Faster than uncompacted baseline |
+| Memory savings | Peak RSS with 8x compaction vs none | Measurable reduction in active KV |
+| Serialization round-trip | Save/restore compacted 128K state | Cosine >= 0.99 |
+
+**7.2.3 Chunked Compaction at 128K**
+
+128K context requires chunked compaction (single-block won't fit in solver memory). Tests must verify:
+
+- [ ] Chunked compaction at 128K produces quality within 0.02 cosine of single-block at 8K
+- [ ] RoPE phase alignment correct across chunk boundaries (no position discontinuities)
+- [ ] Chunk merging produces a single contiguous compacted prefix
+- [ ] Decode after chunked compaction produces finite, coherent logits
+
+**7.2.4 Stress Tests**
+
+- [ ] Compact 128K → 8K (16x) on Llama3.2-3B: quality and stability
+- [ ] Compact 128K → 16K (8x) on Qwen2.5-7B: quality and stability
+- [ ] Multiple compaction cycles: compact, decode, compact again — no memory leaks
+- [ ] Serialization at 128K: save state, clear, restore, verify cosine
+
+### 7.3 Server Integration at 128K
+
+Test `/compact` endpoint with 128K context via llama-server:
+
+- [ ] `/compact` succeeds at 128K with `method=select`, `ratio=2`
+- [ ] `/props` reports correct `active_n_kv` after 128K compaction
+- [ ] `/metrics` shows compaction timing at 128K
+- [ ] Streaming decode after 128K compaction produces valid SSE chunks
+- [ ] Memory stays within 32GB envelope for 3B-7B models
+
+### 7.4 14B+ at 128K (Future Hardware)
+
+When 64GB+ hardware is available (M4 Max, cloud instance, or provisioned server):
 
 | Model | Context | Ratios | Pipeline | Target Cosine |
 |-------|---------|--------|----------|:-------------:|
-| Llama3.2-3B | 128K | 2x, 4x, 8x, 16x | select | >= 0.90 |
-| Qwen2.5-7B | 128K | 2x, 4x, 8x, 16x | select | >= 0.90 |
-| Qwen3-8B | 128K | 2x, 4x, 8x | select | >= 0.90 |
-| Qwen3-14B | 128K | 2x, 4x | select | >= 0.90 |
+| Qwen3-14B | 128K | 2x, 4x, 8x | select + solver | >= 0.90 |
+| DeepSeek-R1-14B | 128K | 2x, 4x | select | >= 0.90 |
 
-**7.3.2 Performance at 128K**
+These tests are **written and ready to run** but need 64GB+ to run without swap pressure.
 
-| Metric | Measurement |
-|--------|-------------|
-| Compaction latency | Time to compact 128K → target ratio |
-| Post-compaction decode tok/s | Decode speed after compaction vs baseline |
-| Memory savings | Peak RSS with compaction vs without |
-| Chunked compaction quality | Quality with 12K chunks vs single-block |
+Qwen3-30B-A3B at 128K is tested separately in Phase 8 (see below).
 
-**7.3.3 Execution Options**
+### 7.5 Estimated Effort
 
-1. **Local (32GB Mac):** 3B and 7B models only. Run on current hardware.
-2. **Cloud (64GB+ instance):** All models. Use AWS/GCP Metal instance or NVIDIA A10G.
-3. **M4 Max/Ultra Mac:** 64-128GB unified memory. Full test matrix.
-
-### 7.4 Estimated Effort
-
-Plan: **complete** (this section).
-Execution: **deferred** until hardware is available. 1-2 days once hardware is provisioned.
+**Medium.** 2-3 days. Test code + chunked compaction hardening + server integration at 128K.
 
 ---
 
-## Phase 8: Documentation and Benchmarks
+## Phase 8: Final Validation, Qwen3-30B-A3B 128K Stress Test, and Documentation
 
-**Goal:** Update all docs to reflect V2 capabilities, run comprehensive benchmarks, update benchmark results.
+**Goal:** Stress-test the full V2 stack with the largest feasible model at 128K, update all docs, run comprehensive benchmarks.
 
-### 8.1 Documentation Updates
+### 8.1 Qwen3-30B-A3B at 128K — Capstone Stress Test
+
+This is the final validation after all Phases 1-7 are complete. Qwen3-30B-A3B is the most demanding model that can potentially fit on 32GB (17.3GB weights + KV cache).
+
+**Why this model:** MoE architecture with 30B total / 3B active. It achieved the best V1 select cosine (0.999) and the best solver cosine (0.906). If any model can handle 128K with compaction on 32GB, this is it — because compaction reduces the KV cache that would otherwise make it impossible.
+
+**Protocol — run with extreme care:**
+
+1. Close all other applications. Kill Ollama, browsers, anything consuming memory.
+2. Monitor memory continuously: `vm_stat 1` in a separate terminal
+3. Start with the smallest test first: 128K context, 8x compaction (reduces KV from ~10GB to ~1.25GB)
+4. If RSS stays under 28GB and no swap activity: proceed to 4x, then 2x
+5. **Abort immediately** if swap pages start increasing — results under swap are meaningless
+
+| Test | Context | Ratio | Expected KV After Compaction | Total RAM Needed | Feasible? |
+|------|---------|:-----:|:----------------------------:|:----------------:|:---------:|
+| A | 128K | 8x | ~1.25 GB | ~18.5 GB | **Likely yes** |
+| B | 128K | 4x | ~2.5 GB | ~19.8 GB | **Probably** |
+| C | 128K | 2x | ~5.0 GB | ~22.3 GB | **Tight** |
+| D | 128K | 16x | ~0.6 GB | ~17.9 GB | **Yes (best shot)** |
+
+**Success criteria:**
+- [ ] At least one compaction ratio completes without swap
+- [ ] Post-compaction decode produces finite, coherent logits
+- [ ] Quality: select cosine >= 0.85 (relaxed threshold for extreme conditions)
+- [ ] Serialization round-trip works at 128K compacted state
+- [ ] Compaction latency documented (GPU solver if available from Phase 2)
+
+**If Qwen3-30B-A3B at 128K works on 32GB Mac with compaction, this is the headline result:**
+> "Run a 30B model with 128K context on a 32GB laptop — only possible with KV compaction."
+
+### 8.2 Documentation Updates
 
 | Document | Change |
 |----------|--------|
@@ -574,27 +633,31 @@ Execution: **deferred** until hardware is available. 1-2 days once hardware is p
 | `docs/modelai-v1-benchmark-results.md` | Add V1→V2 comparison section |
 | `CLAUDE.md` | Update V0 Support Matrix to V2 Support Matrix |
 
-### 8.2 Benchmark Plan
+### 8.3 Benchmark Plan
 
-**8.2.1 Solver Quality Matrix**
+**8.3.1 Solver Quality Matrix**
 
 Run solver pipeline on all 18+ models at 2x, 4x, 10x, 20x. Compare to V1 select-only baseline.
 
-**8.2.2 GPU Solver Performance**
+**8.3.2 GPU Solver Performance**
 
 Measure compaction latency (CPU vs GPU) across model sizes and context lengths.
 
-**8.2.3 Flash Attention Hybrid**
+**8.3.3 Flash Attention Hybrid**
 
 Measure decode performance with hybrid FA path vs pure non-FA path.
 
-**8.2.4 SWA Compaction**
+**8.3.4 SWA Compaction**
 
 Measure quality and performance on Gemma2-9B and Gemma3-12B with full SWA compaction.
 
-### 8.3 Estimated Effort
+**8.3.5 128K Context Results**
 
-**Low.** 1-2 days for docs and benchmarks once all phases are complete.
+Full quality and performance data at 128K for all tested models (3B, 7B, 8B, 14B, 30B MoE).
+
+### 8.4 Estimated Effort
+
+**Medium.** 2-3 days for stress test + docs + benchmarks.
 
 ---
 
@@ -613,7 +676,7 @@ Phase 1: Upstream Sync
     |
     +--→ Phase 5: SWA Full Compaction
     |
-    +--→ Phase 7: 128K Validation (deferred impl)
+    +--→ Phase 7: 128K Validation (3B-7B local, 14B+ future hardware)
     |
     +--- All above --→ Phase 8: Documentation & Benchmarks
 ```
@@ -650,7 +713,7 @@ V2 is complete when:
 4. **Flash attention hybrid:** decode performance within 10% of pure FA
 5. **18+ models validated:** Gemma3-12B, GPT-OSS-20B, Phi4-14B added via upstream sync
 6. **SWA compaction:** base + SWA sub-cache compaction on iSWA models
-7. **128K plan written** (this document) — execution deferred
+7. **128K validated:** compaction works at 128K on 3B-7B models with quality >= 0.90
 
 ---
 
@@ -664,6 +727,6 @@ V2 is complete when:
 | Phase 4: Flash + Beta (Hybrid) | Medium-High | 3-5 days |
 | Phase 5: SWA Compaction | Medium | 2-3 days |
 | Phase 6: High Compression | Medium | 2-3 days |
-| Phase 7: 128K Validation | Plan only | 0 days (deferred) |
-| Phase 8: Docs & Benchmarks | Low | 1-2 days |
-| **Total** | | **16-28 days** |
+| Phase 7: 128K Validation (3B-14B) | Medium | 2-3 days |
+| Phase 8: 30B-A3B Stress Test + Docs | Medium | 2-3 days |
+| **Total** | | **18-32 days** |
