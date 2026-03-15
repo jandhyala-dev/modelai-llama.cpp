@@ -1124,6 +1124,14 @@ bool llama_kv_cache::compacted_prefix_runtime_supported() const {
     // When used as kv_base inside llama_kv_cache_iswa, this instance has
     // n_swa=0 and swa_type=NONE even though the model has SWA layers.
     if (n_swa > 0 || swa_type != LLAMA_SWA_TYPE_NONE) {
+        static bool warned_swa = false;
+        if (!warned_swa) {
+            LLAMA_LOG_WARN("%s: compacted prefix not supported for SWA sub-cache "
+                           "(n_swa=%u, swa_type=%d) — models like Gemma3 use iSWA; "
+                           "compaction only applies to the base (non-SWA) cache\n",
+                           __func__, n_swa, (int)swa_type);
+            warned_swa = true;
+        }
         return false;
     }
 
@@ -2174,16 +2182,19 @@ void llama_kv_cache::set_input_compacted_prefix_k(ggml_tensor * dst, int32_t il,
         cp_cache.beta_bytes.resize(state->layers.size());
     }
 
-    // Cache hit: zero-copy pointer swap.
+    // Cache hit: upload cached staging buffer to tensor (B5: backend-agnostic).
     if (cp_cache.k_bytes[ikv].size() == nbytes) {
-        dst->data = cp_cache.k_bytes[ikv].data();
+        ggml_backend_tensor_set(dst, cp_cache.k_bytes[ikv].data(), 0, nbytes);
         return;
     }
 
-    // Cache miss: materialize directly into aligned cache buffer, then swap.
+    // Cache miss: materialize into host staging buffer, then upload.
     cp_cache.k_bytes[ikv].resize(nbytes);
+    void * original_data = dst->data;
     dst->data = cp_cache.k_bytes[ikv].data();
     llama_compacted_prefix_set_input_k(dst, state->layers[ikv]);
+    dst->data = original_data;
+    ggml_backend_tensor_set(dst, cp_cache.k_bytes[ikv].data(), 0, nbytes);
 }
 
 void llama_kv_cache::set_input_compacted_prefix_v(ggml_tensor * dst, int32_t il, llama_seq_id seq_id) const {
@@ -2210,16 +2221,19 @@ void llama_kv_cache::set_input_compacted_prefix_v(ggml_tensor * dst, int32_t il,
         cp_cache.beta_bytes.resize(state->layers.size());
     }
 
-    // Cache hit: zero-copy pointer swap.
+    // Cache hit: upload cached staging buffer to tensor (B5: backend-agnostic).
     if (cp_cache.v_bytes[ikv].size() == nbytes) {
-        dst->data = cp_cache.v_bytes[ikv].data();
+        ggml_backend_tensor_set(dst, cp_cache.v_bytes[ikv].data(), 0, nbytes);
         return;
     }
 
-    // Cache miss: materialize directly into aligned cache buffer, then swap.
+    // Cache miss: materialize into host staging buffer, then upload.
     cp_cache.v_bytes[ikv].resize(nbytes);
+    void * original_data = dst->data;
     dst->data = cp_cache.v_bytes[ikv].data();
     llama_compacted_prefix_set_input_v(dst, state->layers[ikv]);
+    dst->data = original_data;
+    ggml_backend_tensor_set(dst, cp_cache.v_bytes[ikv].data(), 0, nbytes);
 }
 
 void llama_kv_cache::set_input_compacted_prefix_kq_b(ggml_tensor * dst, int32_t il, llama_seq_id seq_id) const {
@@ -2247,16 +2261,19 @@ void llama_kv_cache::set_input_compacted_prefix_kq_b(ggml_tensor * dst, int32_t 
         cp_cache.beta_bytes.resize(state->layers.size());
     }
 
-    // Cache hit: zero-copy pointer swap (with shape guard on n_tps).
+    // Cache hit: upload cached staging buffer to tensor (B5: backend-agnostic).
     if (cp_cache.beta_bytes[ikv].size() == nbytes && cp_cache.beta_n_tps == n_tps) {
-        dst->data = cp_cache.beta_bytes[ikv].data();
+        ggml_backend_tensor_set(dst, cp_cache.beta_bytes[ikv].data(), 0, nbytes);
         return;
     }
 
-    // Cache miss: materialize directly into aligned cache buffer, then swap.
+    // Cache miss: materialize into host staging buffer, then upload.
     cp_cache.beta_bytes[ikv].resize(nbytes);
+    void * original_data = dst->data;
     dst->data = cp_cache.beta_bytes[ikv].data();
     llama_compacted_prefix_set_input_beta(dst, state->layers[ikv], hparams.n_head(il));
+    dst->data = original_data;
+    ggml_backend_tensor_set(dst, cp_cache.beta_bytes[ikv].data(), 0, nbytes);
     cp_cache.beta_n_tps = n_tps;
 }
 

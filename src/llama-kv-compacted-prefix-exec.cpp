@@ -141,7 +141,8 @@ void llama_compacted_prefix_set_input_k(
     const int64_t t0 = ggml_time_us();
 
     require_tensor_type(dst, layer.layout.type_k, "K");
-    require_host_or_direct_data(dst, "K");
+    // Note: require_host_or_direct_data removed — caller guarantees dst->data
+    // points to a host staging buffer (B5: GPU-resident tensor support).
 
     const int64_t n_prefix = layer.n_compacted_tokens;
     require_dims(dst, layer.layout.n_embd_head_k, layer.layout.n_head_kv, n_prefix, 1, "K");
@@ -168,7 +169,8 @@ void llama_compacted_prefix_set_input_v(
     const int64_t t0 = ggml_time_us();
 
     require_tensor_type(dst, layer.layout.type_v, "V");
-    require_host_or_direct_data(dst, "V");
+    // Note: require_host_or_direct_data removed — caller guarantees dst->data
+    // points to a host staging buffer (B5: GPU-resident tensor support).
 
     const int64_t n_prefix = layer.n_compacted_tokens;
     require_dims(dst, layer.layout.n_embd_head_v, layer.layout.n_head_kv, n_prefix, 1, "V");
@@ -199,7 +201,8 @@ void llama_compacted_prefix_set_input_beta(
         uint32_t n_head) {
     const int64_t t0 = ggml_time_us();
     require_tensor_type(dst, GGML_TYPE_F32, "beta");
-    require_host_or_direct_data(dst, "beta");
+    // Note: require_host_or_direct_data removed — caller guarantees dst->data
+    // points to a host staging buffer (B5: GPU-resident tensor support).
 
     const int64_t n_prefix = layer.n_compacted_tokens;
     const int64_t n_stream = dst->ne[3];

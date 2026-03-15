@@ -660,6 +660,34 @@ bool llama_kv_compact_nonuniform_from_live_kv(
         return false;
     }
 
+    // BUG-I01 guard: if union truncation caused >50% of heads to lose ALL
+    // their selected tokens, the nonuniform pipeline will produce near-random
+    // output (cosine ~0.2).  Fall back to the select pipeline which uses a
+    // single global selection set and avoids per-head masking entirely.
+    {
+        uint32_t n_fully_masked = 0;
+        for (uint32_t h = 0; h < total_kv_heads; ++h) {
+            bool has_any = false;
+            for (uint32_t j = 0; j < n_selected; ++j) {
+                if (per_head_mask[size_t(h) * n_selected + j]) {
+                    has_any = true;
+                    break;
+                }
+            }
+            if (!has_any) {
+                n_fully_masked++;
+            }
+        }
+
+        if (n_fully_masked * 2 > total_kv_heads) {
+            LLAMA_LOG_WARN("%s: nonuniform pipeline: %u/%u heads fully masked after union truncation — "
+                           "falling back to select pipeline\n",
+                           __func__, (unsigned)n_fully_masked, (unsigned)total_kv_heads);
+            return llama_kv_compact_select_from_live_kv(
+                    kv, seq_id, target_tokens, live_suffix_pos0, stats, p0);
+        }
+    }
+
     const auto t_query_end = std::chrono::steady_clock::now();
 
     // Convert union indices to positions.

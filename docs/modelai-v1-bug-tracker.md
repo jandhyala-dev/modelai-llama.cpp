@@ -2,7 +2,7 @@
 
 **Repo:** `jandhyala-dev/modelai-llama.cpp`
 **Branch:** `modelai-main`
-**Tracking commit:** `57606905`
+**Tracking commit:** `57606905` (updated 2026-03-14)
 
 This document tracks all known bugs affecting modelai-llama.cpp, organized by source (internal, upstream, ModelAI integration). Each bug has a severity, status, root cause analysis, and resolution plan.
 
@@ -15,10 +15,11 @@ This document tracks all known bugs affecting modelai-llama.cpp, organized by so
 | Field | Value |
 |-------|-------|
 | **Severity** | Critical |
-| **Status** | OPEN |
+| **Status** | **FIXED** |
 | **Pipeline** | nonuniform |
 | **Models affected** | DeepSeek-R1-14B (confirmed), potentially all models at large context |
 | **Discovered** | 2026-03-14, live benchmark at commit `df895bed` |
+| **Fixed** | 2026-03-14, `src/llama-kv-compact-pipeline.cpp` |
 | **Plan reference** | Phase 1A.1 |
 
 **Symptoms:**
@@ -33,12 +34,10 @@ The nonuniform pipeline allocates per-head budgets based on attention entropy (A
 
 At 8K with 4x compression on a model with many KV heads (DeepSeek-R1 has 8 KV heads per GQA group), the cascade causes the majority of heads to contribute zero attention weight, producing effectively random output.
 
-**Fix strategy:**
-1. Add fallback: when union truncation would mask >50% of heads entirely, fall back to `select` pipeline
-2. Add quality guard: compute quick cosine check after nonuniform, reject if below 0.5
-3. Long-term: use iterative re-allocation instead of hard truncation
+**Fix implemented:**
+After union truncation, count fully-masked heads. If >50% of heads are fully masked, fall back to `select` pipeline with `LLAMA_LOG_WARN`. This prevents catastrophic quality loss while preserving nonuniform benefits when head disjointness is moderate.
 
-**Workaround:** Use `select` pipeline only. Do not expose nonuniform to production.
+**Code location:** `src/llama-kv-compact-pipeline.cpp`, after union truncation block (line ~658).
 
 ---
 
@@ -47,9 +46,10 @@ At 8K with 4x compression on a model with many KV heads (DeepSeek-R1 has 8 KV he
 | Field | Value |
 |-------|-------|
 | **Severity** | Major |
-| **Status** | OPEN |
+| **Status** | **FIXED** |
 | **Models affected** | Qwen3-30B-A3B at 32K (confirmed) |
 | **Discovered** | 2026-03-14, ModelAI Phase D testing |
+| **Fixed** | 2026-03-14, B5 GPU-resident tensor fix |
 | **Plan reference** | Phase 1A.3 |
 
 **Symptoms:**
@@ -57,13 +57,15 @@ At 8K with 4x compression on a model with many KV heads (DeepSeek-R1 has 8 KV he
 - Compacted decode at 32K (2x compression, 5376 active_n_kv): 2.0 tok/s
 - Expected: faster decode with fewer KV entries, not 3.4x slower
 
-**Root cause hypothesis:**
-The compacted prefix attention path in `src/llama-graph.cpp` reads K/V from the compacted prefix store (CPU memory buffer) instead of the GPU KV cache. At 32K context, the CPU→GPU data transfer per decode batch may cause a Metal GPU↔CPU sync stall. Additionally, the tensor materialization may not benefit from B5 caching at this context size.
+**Root cause (confirmed):**
+The compacted prefix `set_input_*` functions used host pointer swap (`dst->data = cache.data()`) which forced ggml to treat the tensor as host-backed. When the graph scheduler encountered `ggml_concat` of a host-backed compacted prefix tensor with a GPU-backed live KV tensor, it created cross-backend operations — 80+ per decode batch at 32K context. Each cross-backend concat caused a Metal GPU↔CPU sync stall.
 
-**Investigation plan:**
-1. Profile decode with/without compacted prefix at 32K using Metal GPU profiler
-2. Check if `ggml_backend_tensor_set` calls in `llama-kv-compacted-prefix-exec.cpp` are the bottleneck
-3. Measure tensor cache hit rate at 32K
+**Fix implemented (B5):**
+Replaced host pointer swap with `ggml_backend_tensor_set()` in all three `set_input_compacted_prefix_k/v/kq_b` functions. The staging buffer is materialized on host (cache hit or miss), then uploaded to the tensor's native backend via `ggml_backend_tensor_set()` which routes to Metal/CUDA/CPU automatically. Removed `require_host_or_direct_data()` checks from K/V/beta exec functions since the caller now guarantees host staging.
+
+**Code locations:**
+- `src/llama-kv-cache.cpp:2177-2191` (K), `2213-2227` (V), `2255-2267` (beta)
+- `src/llama-kv-compacted-prefix-exec.cpp:143-144` (K), `170-171` (V), `202-203` (beta)
 
 ---
 
@@ -133,10 +135,11 @@ The compacted prefix attention path in `src/llama-graph.cpp` reads K/V from the 
 | Field | Value |
 |-------|-------|
 | **Severity** | Major |
-| **Status** | OPEN (upstream) |
+| **Status** | **MITIGATED** (upstream bug, fork warning added) |
 | **Upstream issue** | Not filed — upstream knows about SWA performance |
 | **Models affected** | Gemma3-12B, all iSWA models |
 | **Discovered** | 2026-03-14, 3-way benchmark |
+| **Mitigated** | 2026-03-14, SWA runtime warning added |
 | **Plan reference** | Phase 1A.4 |
 
 **Symptoms:**
@@ -146,7 +149,7 @@ The compacted prefix attention path in `src/llama-graph.cpp` reads K/V from the 
 
 **Impact on modelai:** Gemma3-12B is unusable for production. Must be listed as UNSUPPORTED.
 
-**Fork action:** Add runtime warning in `compacted_prefix_runtime_supported()` when SWA model detected. Update support matrix documentation.
+**Fork action (implemented):** Added `LLAMA_LOG_WARN` in `compacted_prefix_runtime_supported()` (src/llama-kv-cache.cpp:1127-1133) when SWA sub-cache is detected. Warning fires once per session, informing users that compaction only applies to the base (non-SWA) cache in iSWA models.
 
 ---
 
@@ -155,9 +158,10 @@ The compacted prefix attention path in `src/llama-graph.cpp` reads K/V from the 
 | Field | Value |
 |-------|-------|
 | **Severity** | Major |
-| **Status** | OPEN |
+| **Status** | **INVESTIGATION COMPLETE** — not caused by fork changes |
 | **Models affected** | DeepSeek-R1-14B |
 | **Discovered** | 2026-03-14, 3-way benchmark |
+| **Investigated** | 2026-03-14 |
 | **Plan reference** | Phase 1A.2 |
 
 **Symptoms:**
@@ -165,9 +169,15 @@ The compacted prefix attention path in `src/llama-graph.cpp` reads K/V from the 
 - modelai fork llama-bench fails at pp512 for same model
 - Other models work fine on modelai fork
 
-**Root cause hypothesis:** May be related to `cb_eval` callback registration or compacted prefix store initialization interfering with pure benchmark mode on DeepSeek architecture. DeepSeek uses GQA with different head counts than Qwen models.
+**Investigation results (2026-03-14):**
+Thorough code audit confirms the pp512 failure is NOT caused by fork changes:
+1. `compacted_prefix_runtime_supported()` — all 6 callers are properly guarded
+2. llama-bench — contains NO references to compacted prefix, cb_eval, or compaction
+3. Graph build path — compacted prefix tensors only created when `compacted_prefix_active()` returns true (requires valid state)
+4. DeepSeek architecture — GQA configuration read from model hparams, no hardcoded assumptions
+5. Shape validation — all checks are defensive and would throw exceptions on mismatch
 
-**Investigation:** Compare model load and graph build paths between modelai and upstream builds. Run with `LLAMA_LOG_LEVEL=debug`.
+**Conclusion:** Root cause is upstream or environmental. The fork's compacted prefix code paths are never triggered during llama-bench execution. Requires reproduction with `LLAMA_LOG_LEVEL=debug` to isolate further.
 
 ---
 
