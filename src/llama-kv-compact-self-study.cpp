@@ -914,7 +914,7 @@ bool llama_kv_compact_chunked_self_study_from_live_kv(
         llama_pos p0,
         uint32_t chunk_size) {
 
-    if (seq_id < 0 || target_tokens == 0 || live_suffix_pos0 <= p0) {
+    if (seq_id < 0 || target_tokens == 0 || live_suffix_pos0 <= p0 || chunk_size == 0) {
         return false;
     }
 
