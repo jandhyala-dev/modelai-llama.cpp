@@ -745,6 +745,7 @@ bool llama_kv_compact_self_study_from_live_kv(
     };
 
     bool solver_ok = true;
+    bool warned_zerobeta = false;
     uint32_t actual_queries_per_head = 0;
 
     for (size_t li = 0; li < layouts.size() && solver_ok; ++li) {
@@ -804,9 +805,10 @@ bool llama_kv_compact_self_study_from_live_kv(
 
             if (zerobeta) {
                 std::fill(beta.begin(), beta.end(), 0.0f);
-                if (li == 0 && head == 0) {
-                    LLAMA_LOG_WARN("self-study: extreme beta_norm (%.1f) — using zerobeta + direct V\n",
-                                   beta_norm);
+                if (!warned_zerobeta) {
+                    LLAMA_LOG_WARN("self-study: extreme beta_norm (%.1f) at layer %zu head %u — using zerobeta + direct V\n",
+                                   beta_norm, li, head);
+                    warned_zerobeta = true;
                 }
             }
 
@@ -1264,6 +1266,7 @@ bool llama_kv_compact_chunked_self_study_from_live_kv(
     };
 
     bool solver_ok = true;
+    bool warned_zerobeta = false;
     uint32_t actual_queries_per_head = 0;
 
     double beta_norm_sum = 0.0, beta_sparsity_sum = 0.0;
@@ -1334,9 +1337,10 @@ bool llama_kv_compact_chunked_self_study_from_live_kv(
 
             if (zerobeta) {
                 std::fill(beta.begin(), beta.end(), 0.0f);
-                if (li == 0 && head == 0) {
-                    LLAMA_LOG_WARN("chunked self-study: extreme beta_norm (%.1f) — using zerobeta + direct V\n",
-                                   beta_norm);
+                if (!warned_zerobeta) {
+                    LLAMA_LOG_WARN("chunked self-study: extreme beta_norm (%.1f) at layer %zu head %u — using zerobeta + direct V\n",
+                                   beta_norm, li, head);
+                    warned_zerobeta = true;
                 }
             }
 
