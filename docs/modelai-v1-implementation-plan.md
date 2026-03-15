@@ -82,7 +82,7 @@ All 6 upstream issues verified safe/compatible. Integration tests added in `test
 | B2: Eliminate dual K/V extraction | DONE | `llama-kv-compact-pipeline.cpp:67-71` |
 | B3: NEON vectorization | DONE | `llama-kv-compact-math.h:16-52` |
 | B4: GPU solver path | DEFERRED | Requires Metal compute shader — out of V1 scope |
-| B5: GPU-resident tensor upload (K/V/beta) | DONE (Phase 1A) | `llama-kv-cache.cpp:2161-2267` |
+| B5: GPU-resident tensor upload (K/V/beta) | DONE (Phase 1A) | `llama-kv-cache.cpp:2160-2295` (K:2160, V:2205, beta:2250) |
 | B5: GPU-native mask materialization | BY DESIGN: remains host-backed | Mask tensor is small (n_prefix × 1 float per head) and written directly to `dst->data`. GPU upload overhead would exceed any savings. `require_host_or_direct_data` intentionally retained for mask in `llama-kv-compacted-prefix-exec.cpp`. |
 
 ---
@@ -190,7 +190,7 @@ All 6 upstream issues verified safe/compatible. Integration tests added in `test
 
 **Test 3.4.1 — M-RoPE / MLA model rejected (head dimension mismatch)**
 
-- Setup: Models using M-RoPE (e.g., Qwen3-VL) or MLA (e.g., DeepSeek-V2/V3) must be rejected by the head dimension guard at `llama-kv-cache.cpp:1130-1143`
+- Setup: Models using M-RoPE (e.g., Qwen3-VL) or MLA (e.g., DeepSeek-V2/V3) must be rejected by the head dimension guard at `llama-kv-cache.cpp:1138-1151`
 - Assert: `compacted_prefix_runtime_supported()` returns `false`
 - Why: Both M-RoPE and MLA architectures result in `n_embd_head_v != n_embd_head_k`, which the guard checks. MLA uses latent key/value dimensions that differ from query dimensions.
 - Implementation note: Requires a model with `n_embd_head_v != n_embd_head_k` or M-RoPE flag. If no such model fixture is available, document as manual test with specific model name (Qwen3-VL for M-RoPE, DeepSeek-V2 for MLA).
@@ -874,7 +874,7 @@ These items are NOT part of V1. Each has a documented reason for deferral.
 | Flash attention with non-zero beta | Blocked on FlashBias (arXiv:2505.12044) — external dependency | PR-6+ |
 | SWA architecture full support | Blocked on upstream fixing Gemma3-12B decode (0.7 tok/s vs 16.5 Ollama) | Post-upstream-fix |
 | Hybrid recurrent+attention | No ModelAI target models use Mamba/RWKV. Guard exists. | Not planned |
-| M-RoPE edge cases | No ModelAI models use M-RoPE. Guard exists at `llama-kv-cache.cpp:1130-1143`. | Not planned |
+| M-RoPE edge cases | No ModelAI models use M-RoPE. Guard exists at `llama-kv-cache.cpp:1138-1151`. | Not planned |
 | Self-study production speed | 3.6 min at 4K — needs algorithmic redesign, not incremental fix | PR-7 |
 | Self-study pipeline dim mismatch | Known blocker — self-study generates queries that may have dimension mismatch with model KV heads. Requires upstream investigation. | PR-7 |
 | OMP production speed | >23 min for 2x on 14B — quality-comparison-only pipeline | Not planned |

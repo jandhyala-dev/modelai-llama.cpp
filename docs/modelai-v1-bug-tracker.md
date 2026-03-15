@@ -64,8 +64,8 @@ The compacted prefix `set_input_*` functions used host pointer swap (`dst->data 
 Replaced host pointer swap with `ggml_backend_tensor_set()` in all three `set_input_compacted_prefix_k/v/kq_b` functions. The staging buffer is materialized on host (cache hit or miss), then uploaded to the tensor's native backend via `ggml_backend_tensor_set()` which routes to Metal/CUDA/CPU automatically. Removed `require_host_or_direct_data()` checks from K/V/beta exec functions since the caller now guarantees host staging.
 
 **Code locations:**
-- `src/llama-kv-cache.cpp:2177-2191` (K), `2213-2227` (V), `2255-2267` (beta)
-- `src/llama-kv-compacted-prefix-exec.cpp:143-144` (K), `170-171` (V), `202-203` (beta)
+- `src/llama-kv-cache.cpp:2160-2203` (K), `2205-2248` (V), `2250-2295` (beta)
+- `src/llama-kv-compacted-prefix-exec.cpp:144-164` (K), `172-196` (V), `204-219` (beta)
 
 ---
 
@@ -149,7 +149,7 @@ Replaced host pointer swap with `ggml_backend_tensor_set()` in all three `set_in
 
 **Impact on modelai:** Gemma3-12B is unusable for production. Must be listed as UNSUPPORTED.
 
-**Fork action (implemented):** Added `LLAMA_LOG_WARN` in `compacted_prefix_runtime_supported()` (src/llama-kv-cache.cpp:1127-1133) when SWA sub-cache is detected. Warning fires once per session, informing users that compaction only applies to the base (non-SWA) cache in iSWA models.
+**Fork action (implemented):** Added `LLAMA_LOG_WARN` in `compacted_prefix_runtime_supported()` (src/llama-kv-cache.cpp:1123-1136) when SWA sub-cache is detected. Uses `std::atomic<bool>` with `exchange(true)` for thread-safe one-time warning (BUG-R02). Warning fires once per session, informing users that compaction only applies to the base (non-SWA) cache in iSWA models.
 
 ---
 
