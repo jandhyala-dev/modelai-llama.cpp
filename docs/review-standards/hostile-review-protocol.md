@@ -143,6 +143,28 @@ Treat all of those as claims that must be verified.
 - Integer division truncation is a top-priority failure mode.
 - If arithmetic silently degenerates into truncation, clipping, or bias, that is a finding.
 
+#### 3e. SECURITY TRACE (MANDATORY FOR WEB/API CODE)
+- For every user-facing endpoint, middleware, or data ingestion path, trace:
+  - **Injection:** SQL injection (parameterized queries?), command injection (shell calls with user input?), XSS (output encoding?), template injection, formula injection (Excel/CSV contexts)
+  - **Authentication/Authorization bypass:** Can an unauthenticated user reach protected routes? Can a lower-privilege actor escalate? Are auth checks applied before business logic?
+  - **SSRF/Path traversal:** Does user input flow into URLs, file paths, or hostnames without validation? Can `../` or protocol switching (`file://`, `gopher://`) reach internal resources?
+  - **Secrets exposure:** Are API keys, tokens, or credentials logged, included in error responses, or committed to source?
+  - **Denial of service:** Unbounded allocations, missing pagination caps, regex catastrophic backtracking (ReDoS), zip bombs, XML entity expansion
+  - **Deserialization:** Is untrusted input passed to `JSON.parse` callbacks, `eval`, `new Function`, `vm.runInNewContext`, or YAML/pickle loaders?
+  - **CORS/CSP:** Are cross-origin policies overly permissive? Does `Access-Control-Allow-Origin: *` appear on authenticated endpoints?
+- For each attack surface found, construct a concrete exploit payload and trace it through the code to determine if it reaches a sink.
+- If the code is not web/API (e.g., pure C++ library), this trace may be marked N/A with justification.
+
+#### 3f. CONCURRENCY AND ASYNC TRACE (MANDATORY WHEN APPLICABLE)
+- If the slice uses async/await, Promises, threads, mutexes, or shared mutable state, trace:
+  - **Race conditions:** Can two concurrent requests read-modify-write the same state? Are database operations atomic or do they need transactions?
+  - **Deadlocks:** Can lock acquisition order vary between code paths?
+  - **Orphaned work:** When `Promise.race` or timeouts abort a logical operation, do the losing promises continue consuming resources (CPU, memory, network connections, database connections)?
+  - **Error propagation:** Do rejected promises in concurrent workers (`Promise.all`, `Promise.allSettled`, worker pools) propagate correctly or are they silently swallowed?
+  - **Timer cleanup:** Every `setTimeout`/`setInterval` must have a corresponding `clearTimeout`/`clearInterval` on ALL exit paths (success, error, timeout, early return).
+  - **Connection pool exhaustion:** Can concurrent requests drain database/HTTP connection pools? Are connections returned on error paths?
+- If no concurrency exists in the slice, mark N/A with justification.
+
 ### 4. MULTI-VARIANT MODEL TRACE (WHEN APPLICABLE)
 - If the slice touches callback/capture/model-specific graph behavior:
   a. list every matching tensor/callback event in the trace
@@ -229,13 +251,48 @@ Treat all of those as claims that must be verified.
 - Clean code is not evidence of correctness.
 - Passing the production trace is not enough. Boundary and adversarial traces exist to break what the happy path cannot.
 
-### 10. PASS BAR
+### 10. DEPENDENCY AND SUPPLY-CHAIN CHECK
+- For every new dependency added in this slice:
+  a. Is it actively maintained (last commit < 12 months)?
+  b. Is the license compatible (MIT, Apache-2.0, ISC, BSD are safe; GPL/AGPL require review)?
+  c. Does it pull in transitive dependencies with known CVEs? (`npm audit`, `pip audit`, or equivalent)
+  d. Is the package name correct (typosquatting check)?
+  e. Is the dependency pinned to a specific version or range?
+- For dependency upgrades: are there breaking changes in the changelog between old and new versions?
+- If no new dependencies, mark N/A.
+
+### 11. PERFORMANCE REGRESSION CHECK
+- If the slice modifies a hot path (request handler, loop body, data pipeline, render path):
+  a. Is there a before/after measurement or benchmark?
+  b. Does the change add O(n) or worse complexity where O(1) existed?
+  c. Are there unnecessary allocations inside loops (object creation, string concatenation, array spread)?
+  d. Does the change add synchronous I/O, blocking calls, or `await` in a tight loop?
+  e. For database queries: are new queries indexed? Do they avoid full table scans?
+- If the slice is not on a hot path (config, docs, one-time setup), mark N/A with justification.
+
+### 12. CROSS-REPO CONTRACT CHECK
+- If this slice produces or consumes an interface shared across repositories (REST API, CLI flags, file formats, database schemas, environment variables, IPC protocols):
+  a. List every cross-repo contract touched
+  b. Verify the producer's output matches the consumer's expectations (field names, types, units, error shapes)
+  c. Verify backward compatibility — will the other repo break if it hasn't been updated yet?
+  d. If a breaking change is intentional, verify that all consuming repos are updated in the same release
+- Cross-repo contracts in the ModelAI ecosystem include:
+  - modelai-llama.cpp REST API (health, props, models, completions, metrics) consumed by ModelAI server
+  - Supabase schema (tables, RLS policies, storage buckets) shared across ModelAI server and marketing site
+  - Environment variables and config contracts between repos
+  - Git webhook payloads between GitHub and the deployment pipeline
+- If no cross-repo contracts are touched, mark N/A.
+
+### 13. PASS BAR
 - PASS only if:
   a. no plausible production bug remains
   b. critical contracts are explicit and consistent
   c. assumptions are either enforced or clearly documented
   d. tests are meaningful for this slice
   e. your disprove-it pass did not find a credible failure
+  f. no unmitigated security vulnerabilities exist (from security trace)
+  g. no timer/resource leaks exist (from concurrency trace)
+  h. no breaking cross-repo contract changes are unaddressed
 - Otherwise FAIL.
 
 ---
@@ -283,6 +340,16 @@ For each finding:
 - every division/modulo/stride/offset with substituted values
 - state where truncation/rounding changes behavior
 
+### Security trace (if applicable)
+- attack surfaces identified
+- concrete exploit payloads attempted
+- for each: did it reach a sink? was it blocked? by what mechanism?
+
+### Concurrency/async trace (if applicable)
+- race conditions tested
+- timer/resource cleanup verified on all exit paths
+- orphaned work identified
+
 ### Multi-variant model trace (if applicable)
 - per-model callback/tensor sequence
 - final state after all matching callbacks
@@ -293,6 +360,19 @@ For each finding:
 - after state
 - failure state
 - rollback state
+
+## Dependency / Supply-Chain Check
+- new dependencies added: (list or N/A)
+- license compatibility: (verified or N/A)
+- known CVEs: (clean or list)
+
+## Cross-Repo Contract Check
+- contracts touched: (list or N/A)
+- backward compatibility: (verified or breaking — with justification)
+
+## Performance Check
+- hot path affected: (yes/no)
+- measurement: (before/after or N/A)
 
 ## Unsupported / Precondition Audit
 - list every assumption
