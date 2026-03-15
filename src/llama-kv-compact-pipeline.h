@@ -7,6 +7,12 @@ class llama_kv_cache;
 struct llama_kv_compact_pipeline_stats {
     double query_generation_time_ms = 0.0;
     double solver_time_ms = 0.0;
+    double k_extraction_time_ms = 0.0;
+    double attention_score_time_ms = 0.0;
+    double selection_time_ms = 0.0;
+    double v_extraction_time_ms = 0.0;
+    double kv_write_time_ms = 0.0;
+    double total_time_ms = 0.0;
     uint32_t n_prefix_tokens = 0;
     uint32_t n_selected_tokens = 0;
 };

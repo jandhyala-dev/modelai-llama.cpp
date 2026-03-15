@@ -21,6 +21,7 @@
 #include <cstddef>
 #include <cinttypes>
 #include <memory>
+#include <set>
 #include <filesystem>
 
 // fix problem with std::min and std::max
@@ -58,6 +59,34 @@ static double tokens_per_second(uint64_t n_tokens, uint64_t t_ms) {
     return (n_tokens > 0 && t_ms > 0)
         ? 1.e3 / t_ms * n_tokens
         : 0.0;
+}
+
+// V1 beta pipeline allowlist — configurable via LLAMA_COMPACT_ALLOWED_METHODS env var.
+// Default: "select" only.  Comma-separated list (e.g. "select,solver").
+static const std::set<std::string> & get_compact_allowed_methods() {
+    static const std::set<std::string> methods = [] {
+        std::set<std::string> result;
+        const char * env = std::getenv("LLAMA_COMPACT_ALLOWED_METHODS");
+        if (env && env[0] != '\0') {
+            std::string s(env);
+            size_t pos = 0;
+            while ((pos = s.find(',')) != std::string::npos) {
+                std::string token = s.substr(0, pos);
+                if (!token.empty()) {
+                    result.insert(token);
+                }
+                s.erase(0, pos + 1);
+            }
+            if (!s.empty()) {
+                result.insert(s);
+            }
+        }
+        if (result.empty()) {
+            result.insert("select");
+        }
+        return result;
+    }();
+    return methods;
 }
 
 // Get the base llama_kv_cache from a context (handles both plain and iSWA layouts).
@@ -137,12 +166,13 @@ static json build_modelai_server_capabilities(const common_params & params, cons
             { "zero_beta_flash_compatible", true },
             { "flash_attn_overridden",      compaction_flash_overridden },
             { "last_fallback_reason",       meta.compaction_supported ? "" : "model_unsupported" },
-            { "supported_envelope", {
-                { "pipelines",    json::array({"select"}) },
+            { "tested_envelope", {
+                { "pipelines",    [&] { json arr = json::array(); for (const auto & m : get_compact_allowed_methods()) { arr.push_back(m); } return arr; }() },
                 { "min_context",  4096 },
                 { "max_context",  16384 },
                 { "max_ratio_4k", 4 },
-                { "note",         "50x supported at 8K-16K; 4K supported at 2x-4x only (8x fails 0.838 < 0.85); 32K experimental" },
+                { "note",         "Advisory — these bounds are tested and recommended, not enforced. "
+                                  "50x supported at 8K-16K; 4K supported at 2x-4x only (8x fails 0.838 < 0.85); 32K experimental" },
             } },
         } },
     };
@@ -2167,8 +2197,27 @@ private:
 
                     // Validate method
                     const std::string & method = cp.method;
-                    if (method != "select" && method != "solver" && method != "omp" && method != "self_study") {
-                        send_error(task, "Invalid compaction method. Supported: select, solver, omp, self_study", ERROR_TYPE_INVALID_REQUEST);
+
+                    // All implemented methods (superset)
+                    static const std::set<std::string> valid_methods = {
+                        "select", "solver", "omp", "self_study",
+                        "nonuniform", "chunked", "on_policy",
+                    };
+                    // V1 beta allowlist — configurable via LLAMA_COMPACT_ALLOWED_METHODS
+                    const auto & v1_allowlist = get_compact_allowed_methods();
+
+                    if (valid_methods.find(method) == valid_methods.end()) {
+                        send_error(task, "Invalid compaction method. Supported: select, solver, omp, self_study, nonuniform, chunked, on_policy", ERROR_TYPE_INVALID_REQUEST);
+                        break;
+                    }
+                    if (v1_allowlist.find(method) == v1_allowlist.end()) {
+                        std::string allowed_str;
+                        for (const auto & m : v1_allowlist) {
+                            if (!allowed_str.empty()) allowed_str += ", ";
+                            allowed_str += m;
+                        }
+                        SRV_WRN("compaction method '%s' rejected by V1 beta allowlist (caller tried a valid but gated method)\n", method.c_str());
+                        send_error(task, "Method '" + method + "' is not in the V1 beta allowlist. Allowed: " + allowed_str, ERROR_TYPE_INVALID_REQUEST);
                         break;
                     }
 
@@ -2257,6 +2306,15 @@ private:
                     if (!kv->compacted_prefix_set_execution(seq_id, true)) {
                         send_error(task, "Failed to enable compacted prefix execution", ERROR_TYPE_SERVER);
                         break;
+                    }
+
+                    // Warn if compaction produced non-zero beta under flash attention.
+                    // Must be checked AFTER set_execution since has_compacted_prefix()
+                    // requires execution_enabled to return true.
+                    if (params_base.flash_attn_type != LLAMA_FLASH_ATTN_TYPE_DISABLED
+                            && kv->compacted_prefix_forces_non_flash()) {
+                        LLAMA_LOG_WARN("compaction method '%s' produced non-zero beta with flash_attn enabled "
+                                       "— falling back to non-flash attention path\n", method.c_str());
                     }
 
                     bool reclaimed = false;

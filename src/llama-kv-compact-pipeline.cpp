@@ -107,6 +107,12 @@ bool llama_kv_compact_fit_from_live_kv(
     // Eliminates the dual extraction that existed before.
     std::vector<std::vector<head_cache_entry>> layer_cache(layouts.size());
 
+    double t_k_extract_ms = 0.0;
+    double t_attn_score_ms = 0.0;
+    double t_selection_ms = 0.0;
+    double t_v_extract_ms = 0.0;
+    double t_kv_write_ms = 0.0;
+
     const auto t_query_start = std::chrono::steady_clock::now();
     for (size_t li = 0; li < layouts.size(); ++li) {
         const auto & layout = layouts[li];
@@ -115,6 +121,7 @@ bool llama_kv_compact_fit_from_live_kv(
         for (uint32_t head = 0; head < layout.n_head_kv; ++head) {
             auto & entry = layer_cache[li][head];
 
+            const auto t_k_start = std::chrono::steady_clock::now();
             std::vector<float> k_data;
             if (!kv.compacted_prefix_copy_k_head_f32(
                         int32_t(layout.layer_id), seq_id, head,
@@ -131,14 +138,22 @@ bool llama_kv_compact_fit_from_live_kv(
                         entry.queries)) {
                 return false;
             }
+            const auto t_k_end = std::chrono::steady_clock::now();
+            t_k_extract_ms += std::chrono::duration<double, std::milli>(t_k_end - t_k_start).count();
 
+            const auto t_score_start = std::chrono::steady_clock::now();
             llama_kv_compact_accumulate_attention_scores(
                     entry.queries, entry.k, aggregate_scores);
+            const auto t_score_end = std::chrono::steady_clock::now();
+            t_attn_score_ms += std::chrono::duration<double, std::milli>(t_score_end - t_score_start).count();
         }
     }
     const auto t_query_end = std::chrono::steady_clock::now();
 
+    const auto t_sel_start = std::chrono::steady_clock::now();
     const std::vector<uint32_t> selected_local = llama_kv_compact_select_topk(aggregate_scores, n_selected);
+    const auto t_sel_end = std::chrono::steady_clock::now();
+    t_selection_ms = std::chrono::duration<double, std::milli>(t_sel_end - t_sel_start).count();
     std::vector<llama_pos> selected_positions;
     selected_positions.reserve(selected_local.size());
     for (uint32_t idx : selected_local) {
@@ -173,6 +188,7 @@ bool llama_kv_compact_fit_from_live_kv(
             const auto & entry = layer_cache[li][head];
 
             // V still needs extraction (not cached in Phase 1 to save memory).
+            const auto t_v_start = std::chrono::steady_clock::now();
             std::vector<float> full_v_data;
             if (!kv.compacted_prefix_copy_v_head_f32(
                         int32_t(layout.layer_id), seq_id, head,
@@ -181,6 +197,8 @@ bool llama_kv_compact_fit_from_live_kv(
             }
             llama_kv_compact_matrix full_v(n_prefix_tokens, layout.n_embd_head_v);
             full_v.data = std::move(full_v_data);
+            const auto t_v_end = std::chrono::steady_clock::now();
+            t_v_extract_ms += std::chrono::duration<double, std::milli>(t_v_end - t_v_start).count();
 
             llama_kv_compact_matrix compacted_k;
             if (!gather_matrix_rows(entry.k.data, entry.k.rows,
@@ -204,17 +222,23 @@ bool llama_kv_compact_fit_from_live_kv(
                             compacted_v)) {
                     return false;
                 }
+                const auto t_w_start = std::chrono::steady_clock::now();
                 write_compacted_payload(dst_layer.v_data, layout.type_v,
                                         layout.n_head_kv, n_selected, head,
                                         layout.n_embd_head_v, compacted_v);
+                const auto t_w_mid = std::chrono::steady_clock::now();
+                t_kv_write_ms += std::chrono::duration<double, std::milli>(t_w_mid - t_w_start).count();
             }
 
+            const auto t_w2_start = std::chrono::steady_clock::now();
             write_compacted_payload(dst_layer.k_data, layout.type_k,
                                     layout.n_head_kv, n_selected, head,
                                     layout.n_embd_head_k, compacted_k);
             for (uint32_t token = 0; token < n_selected; ++token) {
                 dst_layer.beta_data[size_t(head) * n_selected + token] = beta[token];
             }
+            const auto t_w2_end = std::chrono::steady_clock::now();
+            t_kv_write_ms += std::chrono::duration<double, std::milli>(t_w2_end - t_w2_start).count();
         }
     }
     const auto t_solver_end = std::chrono::steady_clock::now();
@@ -222,6 +246,14 @@ bool llama_kv_compact_fit_from_live_kv(
     if (stats) {
         stats->query_generation_time_ms = std::chrono::duration<double, std::milli>(t_query_end - t_query_start).count();
         stats->solver_time_ms = std::chrono::duration<double, std::milli>(t_solver_end - t_solver_start).count();
+        stats->k_extraction_time_ms = t_k_extract_ms;
+        stats->attention_score_time_ms = t_attn_score_ms;
+        stats->selection_time_ms = t_selection_ms;
+        stats->v_extraction_time_ms = t_v_extract_ms;
+        stats->kv_write_time_ms = t_kv_write_ms;
+        stats->total_time_ms = t_k_extract_ms + t_attn_score_ms + t_selection_ms
+                             + t_v_extract_ms + t_kv_write_ms
+                             + stats->solver_time_ms;
         stats->n_prefix_tokens = n_prefix_tokens;
         stats->n_selected_tokens = n_selected;
     }
@@ -263,6 +295,12 @@ bool llama_kv_compact_omp_from_live_kv(
     std::vector<float> vote_scores(n_prefix_tokens, 0.0f);
     std::vector<std::vector<head_cache_entry>> layer_cache(layouts.size());
 
+    double t_k_extract_ms = 0.0;
+    double t_attn_score_ms = 0.0;
+    double t_selection_ms = 0.0;
+    double t_v_extract_ms = 0.0;
+    double t_kv_write_ms = 0.0;
+
     const llama_kv_compact_omp_opts omp_opts = {};
 
     const auto t_query_start = std::chrono::steady_clock::now();
@@ -273,6 +311,7 @@ bool llama_kv_compact_omp_from_live_kv(
         for (uint32_t head = 0; head < layout.n_head_kv; ++head) {
             auto & entry = layer_cache[li][head];
 
+            const auto t_k_start = std::chrono::steady_clock::now();
             std::vector<float> k_data;
             if (!kv.compacted_prefix_copy_k_head_f32(
                         int32_t(layout.layer_id), seq_id, head,
@@ -289,8 +328,11 @@ bool llama_kv_compact_omp_from_live_kv(
                         entry.queries)) {
                 return false;
             }
+            const auto t_k_end = std::chrono::steady_clock::now();
+            t_k_extract_ms += std::chrono::duration<double, std::milli>(t_k_end - t_k_start).count();
 
             // Run OMP per head to get greedy residual-based selection.
+            const auto t_score_start = std::chrono::steady_clock::now();
             std::vector<float> beta_head;
             const std::vector<uint32_t> selected_head =
                 llama_kv_compact_select_omp(entry.queries, entry.k, n_selected, omp_opts, beta_head);
@@ -299,12 +341,17 @@ bool llama_kv_compact_omp_from_live_kv(
             for (uint32_t idx : selected_head) {
                 vote_scores[idx] += 1.0f;
             }
+            const auto t_score_end = std::chrono::steady_clock::now();
+            t_attn_score_ms += std::chrono::duration<double, std::milli>(t_score_end - t_score_start).count();
         }
     }
     const auto t_query_end = std::chrono::steady_clock::now();
 
     // Aggregate votes -> global selection via topk on vote counts.
+    const auto t_sel_start = std::chrono::steady_clock::now();
     const std::vector<uint32_t> selected_local = llama_kv_compact_select_topk(vote_scores, n_selected);
+    const auto t_sel_end = std::chrono::steady_clock::now();
+    t_selection_ms = std::chrono::duration<double, std::milli>(t_sel_end - t_sel_start).count();
     std::vector<llama_pos> selected_positions;
     selected_positions.reserve(selected_local.size());
     for (uint32_t idx : selected_local) {
@@ -338,6 +385,7 @@ bool llama_kv_compact_omp_from_live_kv(
         for (uint32_t head = 0; head < layout.n_head_kv; ++head) {
             const auto & entry = layer_cache[li][head];
 
+            const auto t_v_start = std::chrono::steady_clock::now();
             std::vector<float> full_v_data;
             if (!kv.compacted_prefix_copy_v_head_f32(
                         int32_t(layout.layer_id), seq_id, head,
@@ -346,6 +394,8 @@ bool llama_kv_compact_omp_from_live_kv(
             }
             llama_kv_compact_matrix full_v(n_prefix_tokens, layout.n_embd_head_v);
             full_v.data = std::move(full_v_data);
+            const auto t_v_end = std::chrono::steady_clock::now();
+            t_v_extract_ms += std::chrono::duration<double, std::milli>(t_v_end - t_v_start).count();
 
             llama_kv_compact_matrix compacted_k;
             if (!gather_matrix_rows(entry.k.data, entry.k.rows,
@@ -369,17 +419,23 @@ bool llama_kv_compact_omp_from_live_kv(
                             compacted_v)) {
                     return false;
                 }
+                const auto t_w_start = std::chrono::steady_clock::now();
                 write_compacted_payload(dst_layer.v_data, layout.type_v,
                                         layout.n_head_kv, n_selected, head,
                                         layout.n_embd_head_v, compacted_v);
+                const auto t_w_mid = std::chrono::steady_clock::now();
+                t_kv_write_ms += std::chrono::duration<double, std::milli>(t_w_mid - t_w_start).count();
             }
 
+            const auto t_w2_start = std::chrono::steady_clock::now();
             write_compacted_payload(dst_layer.k_data, layout.type_k,
                                     layout.n_head_kv, n_selected, head,
                                     layout.n_embd_head_k, compacted_k);
             for (uint32_t token = 0; token < n_selected; ++token) {
                 dst_layer.beta_data[size_t(head) * n_selected + token] = beta[token];
             }
+            const auto t_w2_end = std::chrono::steady_clock::now();
+            t_kv_write_ms += std::chrono::duration<double, std::milli>(t_w2_end - t_w2_start).count();
         }
     }
     const auto t_solver_end = std::chrono::steady_clock::now();
@@ -387,6 +443,14 @@ bool llama_kv_compact_omp_from_live_kv(
     if (stats) {
         stats->query_generation_time_ms = std::chrono::duration<double, std::milli>(t_query_end - t_query_start).count();
         stats->solver_time_ms = std::chrono::duration<double, std::milli>(t_solver_end - t_solver_start).count();
+        stats->k_extraction_time_ms = t_k_extract_ms;
+        stats->attention_score_time_ms = t_attn_score_ms;
+        stats->selection_time_ms = t_selection_ms;
+        stats->v_extraction_time_ms = t_v_extract_ms;
+        stats->kv_write_time_ms = t_kv_write_ms;
+        stats->total_time_ms = t_k_extract_ms + t_attn_score_ms + t_selection_ms
+                             + t_v_extract_ms + t_kv_write_ms
+                             + stats->solver_time_ms;
         stats->n_prefix_tokens = n_prefix_tokens;
         stats->n_selected_tokens = n_selected;
     }
@@ -437,12 +501,17 @@ bool llama_kv_compact_select_from_live_kv(
     }
 
     // Populate K/V from original cache values with zero beta.
+    double t_k_extract_ms = 0.0;
+    double t_v_extract_ms = 0.0;
+    double t_kv_write_ms = 0.0;
+
     for (size_t li = 0; li < layouts.size(); ++li) {
         const auto & layout = layouts[li];
         auto & dst_layer = seq->layers[li];
 
         for (uint32_t head = 0; head < layout.n_head_kv; ++head) {
             // Copy original K
+            const auto t_k_start = std::chrono::steady_clock::now();
             std::vector<float> k_f32;
             if (!kv.compacted_prefix_copy_k_head_f32(
                         int32_t(layout.layer_id), seq_id, head, selected_positions, k_f32)) {
@@ -450,11 +519,12 @@ bool llama_kv_compact_select_from_live_kv(
             }
             llama_kv_compact_matrix k_mat(n_selected, layout.n_embd_head_k);
             k_mat.data = std::move(k_f32);
-            write_compacted_payload(dst_layer.k_data, layout.type_k, layout.n_head_kv,
-                                    n_selected, head, layout.n_embd_head_k, k_mat);
+            const auto t_k_end = std::chrono::steady_clock::now();
+            t_k_extract_ms += std::chrono::duration<double, std::milli>(t_k_end - t_k_start).count();
 
             // Copy original V
             if (layout.n_embd_head_v > 0) {
+                const auto t_v_start = std::chrono::steady_clock::now();
                 std::vector<float> v_f32;
                 if (!kv.compacted_prefix_copy_v_head_f32(
                             int32_t(layout.layer_id), seq_id, head, selected_positions, v_f32)) {
@@ -462,20 +532,38 @@ bool llama_kv_compact_select_from_live_kv(
                 }
                 llama_kv_compact_matrix v_mat(n_selected, layout.n_embd_head_v);
                 v_mat.data = std::move(v_f32);
+                const auto t_v_end = std::chrono::steady_clock::now();
+                t_v_extract_ms += std::chrono::duration<double, std::milli>(t_v_end - t_v_start).count();
+
+                const auto t_w_start = std::chrono::steady_clock::now();
                 write_compacted_payload(dst_layer.v_data, layout.type_v, layout.n_head_kv,
                                         n_selected, head, layout.n_embd_head_v, v_mat);
+                const auto t_w_mid = std::chrono::steady_clock::now();
+                t_kv_write_ms += std::chrono::duration<double, std::milli>(t_w_mid - t_w_start).count();
             }
+
+            const auto t_w2_start = std::chrono::steady_clock::now();
+            write_compacted_payload(dst_layer.k_data, layout.type_k, layout.n_head_kv,
+                                    n_selected, head, layout.n_embd_head_k, k_mat);
 
             // Zero beta
             for (uint32_t t = 0; t < n_selected; ++t) {
                 dst_layer.beta_data[size_t(head) * n_selected + t] = 0.0f;
             }
+            const auto t_w2_end = std::chrono::steady_clock::now();
+            t_kv_write_ms += std::chrono::duration<double, std::milli>(t_w2_end - t_w2_start).count();
         }
     }
 
     if (stats) {
         stats->query_generation_time_ms = 0.0;
         stats->solver_time_ms = 0.0;
+        stats->k_extraction_time_ms = t_k_extract_ms;
+        stats->attention_score_time_ms = 0.0;
+        stats->selection_time_ms = 0.0;
+        stats->v_extraction_time_ms = t_v_extract_ms;
+        stats->kv_write_time_ms = t_kv_write_ms;
+        stats->total_time_ms = t_k_extract_ms + t_v_extract_ms + t_kv_write_ms;
         stats->n_prefix_tokens = n_prefix_tokens;
         stats->n_selected_tokens = n_selected;
     }
@@ -534,6 +622,16 @@ bool llama_kv_compact_nonuniform_from_live_kv(
     std::vector<float> all_entropies;
     all_entropies.reserve(total_kv_heads);
 
+    // Per-stage timing (populated at end; may be unused on fallback path).
+    double t_k_extract_ms  = 0.0;
+    double t_attn_score_ms = 0.0;
+    double t_selection_ms  = 0.0;
+    double t_v_extract_ms  = 0.0;
+    double t_kv_write_ms   = 0.0;
+    GGML_UNUSED(t_k_extract_ms); GGML_UNUSED(t_attn_score_ms);
+    GGML_UNUSED(t_selection_ms); GGML_UNUSED(t_v_extract_ms);
+    GGML_UNUSED(t_kv_write_ms);
+
     const auto t_query_start = std::chrono::steady_clock::now();
     for (size_t li = 0; li < layouts.size(); ++li) {
         const auto & layout = layouts[li];
@@ -542,6 +640,7 @@ bool llama_kv_compact_nonuniform_from_live_kv(
         for (uint32_t head = 0; head < layout.n_head_kv; ++head) {
             auto & hd = layer_data[li][head];
 
+            const auto t_k_start = std::chrono::steady_clock::now();
             std::vector<float> k_data;
             if (!kv.compacted_prefix_copy_k_head_f32(
                         int32_t(layout.layer_id), seq_id, head,
@@ -558,6 +657,8 @@ bool llama_kv_compact_nonuniform_from_live_kv(
                         hd.queries)) {
                 return false;
             }
+            const auto t_k_end = std::chrono::steady_clock::now();
+            t_k_extract_ms += std::chrono::duration<double, std::milli>(t_k_end - t_k_start).count();
 
             hd.entropy = llama_kv_compact_head_entropy(hd.queries, hd.k);
             all_entropies.push_back(hd.entropy);
@@ -579,6 +680,7 @@ bool llama_kv_compact_nonuniform_from_live_kv(
     }
 
     // Phase 2: Per-head top-k selection with individual budgets.
+    const auto t_score_start = std::chrono::steady_clock::now();
     std::vector<std::vector<uint32_t>> per_head_selections(total_kv_heads);
     uint32_t head_idx = 0;
     for (size_t li = 0; li < layouts.size(); ++li) {
@@ -593,8 +695,11 @@ bool llama_kv_compact_nonuniform_from_live_kv(
                     head_scores, budgets[head_idx]);
         }
     }
+    const auto t_score_end = std::chrono::steady_clock::now();
+    t_attn_score_ms += std::chrono::duration<double, std::milli>(t_score_end - t_score_start).count();
 
     // Build union of all per-head selections.
+    const auto t_sel_start = std::chrono::steady_clock::now();
     std::vector<bool> per_head_mask;
     std::vector<uint32_t> union_local = llama_kv_compact_build_union(
             per_head_selections, total_kv_heads, per_head_mask);
@@ -688,6 +793,9 @@ bool llama_kv_compact_nonuniform_from_live_kv(
         }
     }
 
+    const auto t_sel_end = std::chrono::steady_clock::now();
+    t_selection_ms = std::chrono::duration<double, std::milli>(t_sel_end - t_sel_start).count();
+
     const auto t_query_end = std::chrono::steady_clock::now();
 
     // Convert union indices to positions.
@@ -727,6 +835,7 @@ bool llama_kv_compact_nonuniform_from_live_kv(
             const auto & hd = layer_data[li][head];
 
             // V extraction.
+            const auto t_v_start = std::chrono::steady_clock::now();
             std::vector<float> full_v_data;
             if (!kv.compacted_prefix_copy_v_head_f32(
                         int32_t(layout.layer_id), seq_id, head,
@@ -735,6 +844,8 @@ bool llama_kv_compact_nonuniform_from_live_kv(
             }
             llama_kv_compact_matrix full_v(n_prefix_tokens, layout.n_embd_head_v);
             full_v.data = std::move(full_v_data);
+            const auto t_v_end = std::chrono::steady_clock::now();
+            t_v_extract_ms += std::chrono::duration<double, std::milli>(t_v_end - t_v_start).count();
 
             // Gather union K rows.
             llama_kv_compact_matrix compacted_k;
@@ -775,17 +886,23 @@ bool llama_kv_compact_nonuniform_from_live_kv(
                             compacted_v)) {
                     return false;
                 }
+                const auto t_w_start = std::chrono::steady_clock::now();
                 write_compacted_payload(dst_layer.v_data, layout.type_v,
                                         layout.n_head_kv, n_selected, head,
                                         layout.n_embd_head_v, compacted_v);
+                const auto t_w_mid = std::chrono::steady_clock::now();
+                t_kv_write_ms += std::chrono::duration<double, std::milli>(t_w_mid - t_w_start).count();
             }
 
+            const auto t_w2_start = std::chrono::steady_clock::now();
             write_compacted_payload(dst_layer.k_data, layout.type_k,
                                     layout.n_head_kv, n_selected, head,
                                     layout.n_embd_head_k, compacted_k);
             for (uint32_t token = 0; token < n_selected; ++token) {
                 dst_layer.beta_data[size_t(head) * n_selected + token] = beta[token];
             }
+            const auto t_w2_end = std::chrono::steady_clock::now();
+            t_kv_write_ms += std::chrono::duration<double, std::milli>(t_w2_end - t_w2_start).count();
         }
     }
     const auto t_solver_end = std::chrono::steady_clock::now();
@@ -793,6 +910,14 @@ bool llama_kv_compact_nonuniform_from_live_kv(
     if (stats) {
         stats->query_generation_time_ms = std::chrono::duration<double, std::milli>(t_query_end - t_query_start).count();
         stats->solver_time_ms = std::chrono::duration<double, std::milli>(t_solver_end - t_solver_start).count();
+        stats->k_extraction_time_ms = t_k_extract_ms;
+        stats->attention_score_time_ms = t_attn_score_ms;
+        stats->selection_time_ms = t_selection_ms;
+        stats->v_extraction_time_ms = t_v_extract_ms;
+        stats->kv_write_time_ms = t_kv_write_ms;
+        stats->total_time_ms = t_k_extract_ms + t_attn_score_ms + t_selection_ms
+                             + t_v_extract_ms + t_kv_write_ms
+                             + stats->solver_time_ms;
         stats->n_prefix_tokens = n_prefix_tokens;
         stats->n_selected_tokens = n_selected;
     }
@@ -889,6 +1014,16 @@ bool llama_kv_compact_chunked_from_live_kv(
     // Phase 1: Per-chunk scoring and selection.
     const auto t_query_start = std::chrono::steady_clock::now();
 
+    // Per-stage timing.
+    double t_k_extract_ms  = 0.0;
+    double t_attn_score_ms = 0.0;
+    double t_selection_ms  = 0.0;
+    double t_v_extract_ms  = 0.0;
+    double t_kv_write_ms   = 0.0;
+    GGML_UNUSED(t_k_extract_ms); GGML_UNUSED(t_attn_score_ms);
+    GGML_UNUSED(t_selection_ms); GGML_UNUSED(t_v_extract_ms);
+    GGML_UNUSED(t_kv_write_ms);
+
     // Collect selected positions from all chunks.
     std::vector<uint32_t> all_selected_local;
     all_selected_local.reserve(target_tokens);
@@ -921,6 +1056,7 @@ bool llama_kv_compact_chunked_from_live_kv(
             for (uint32_t head = 0; head < layout.n_head_kv; ++head) {
                 auto & cc = chunk_caches[c][li][head];
 
+                const auto t_k_start = std::chrono::steady_clock::now();
                 std::vector<float> k_data;
                 if (!kv.compacted_prefix_copy_k_head_f32(
                             int32_t(layout.layer_id), seq_id, head,
@@ -937,14 +1073,22 @@ bool llama_kv_compact_chunked_from_live_kv(
                             cc.queries)) {
                     return false;
                 }
+                const auto t_k_end = std::chrono::steady_clock::now();
+                t_k_extract_ms += std::chrono::duration<double, std::milli>(t_k_end - t_k_start).count();
 
+                const auto t_score_start = std::chrono::steady_clock::now();
                 llama_kv_compact_accumulate_attention_scores(
                         cc.queries, cc.k, chunk_scores);
+                const auto t_score_end = std::chrono::steady_clock::now();
+                t_attn_score_ms += std::chrono::duration<double, std::milli>(t_score_end - t_score_start).count();
             }
         }
 
         // Select top-k within this chunk.
+        const auto t_sel_start = std::chrono::steady_clock::now();
         const std::vector<uint32_t> chunk_selected = llama_kv_compact_select_topk(chunk_scores, cb);
+        const auto t_sel_end = std::chrono::steady_clock::now();
+        t_selection_ms += std::chrono::duration<double, std::milli>(t_sel_end - t_sel_start).count();
 
         // Map chunk-local indices to global prefix indices.
         for (uint32_t idx : chunk_selected) {
@@ -999,6 +1143,7 @@ bool llama_kv_compact_chunked_from_live_kv(
 
         for (uint32_t head = 0; head < layout.n_head_kv; ++head) {
             // Extract full-prefix K for scoring.
+            const auto t_k2_start = std::chrono::steady_clock::now();
             std::vector<float> full_k_data;
             if (!kv.compacted_prefix_copy_k_head_f32(
                         int32_t(layout.layer_id), seq_id, head,
@@ -1017,6 +1162,8 @@ bool llama_kv_compact_chunked_from_live_kv(
                         queries)) {
                 return false;
             }
+            const auto t_k2_end = std::chrono::steady_clock::now();
+            t_k_extract_ms += std::chrono::duration<double, std::milli>(t_k2_end - t_k2_start).count();
 
             // Gather selected K rows.
             llama_kv_compact_matrix compacted_k;
@@ -1035,6 +1182,7 @@ bool llama_kv_compact_chunked_from_live_kv(
 
             // V extraction and fitting.
             if (layout.n_embd_head_v > 0) {
+                const auto t_v_start = std::chrono::steady_clock::now();
                 std::vector<float> full_v_data;
                 if (!kv.compacted_prefix_copy_v_head_f32(
                             int32_t(layout.layer_id), seq_id, head,
@@ -1043,6 +1191,8 @@ bool llama_kv_compact_chunked_from_live_kv(
                 }
                 llama_kv_compact_matrix full_v(n_prefix_tokens, layout.n_embd_head_v);
                 full_v.data = std::move(full_v_data);
+                const auto t_v_end = std::chrono::steady_clock::now();
+                t_v_extract_ms += std::chrono::duration<double, std::milli>(t_v_end - t_v_start).count();
 
                 llama_kv_compact_matrix compacted_v;
                 if (!llama_kv_compact_fit_values(
@@ -1051,17 +1201,23 @@ bool llama_kv_compact_chunked_from_live_kv(
                             compacted_v)) {
                     return false;
                 }
+                const auto t_w_start = std::chrono::steady_clock::now();
                 write_compacted_payload(dst_layer.v_data, layout.type_v,
                                         layout.n_head_kv, n_selected, head,
                                         layout.n_embd_head_v, compacted_v);
+                const auto t_w_mid = std::chrono::steady_clock::now();
+                t_kv_write_ms += std::chrono::duration<double, std::milli>(t_w_mid - t_w_start).count();
             }
 
+            const auto t_w2_start = std::chrono::steady_clock::now();
             write_compacted_payload(dst_layer.k_data, layout.type_k,
                                     layout.n_head_kv, n_selected, head,
                                     layout.n_embd_head_k, compacted_k);
             for (uint32_t token = 0; token < n_selected; ++token) {
                 dst_layer.beta_data[size_t(head) * n_selected + token] = beta[token];
             }
+            const auto t_w2_end = std::chrono::steady_clock::now();
+            t_kv_write_ms += std::chrono::duration<double, std::milli>(t_w2_end - t_w2_start).count();
         }
     }
     const auto t_solver_end = std::chrono::steady_clock::now();
@@ -1069,6 +1225,14 @@ bool llama_kv_compact_chunked_from_live_kv(
     if (stats) {
         stats->query_generation_time_ms = std::chrono::duration<double, std::milli>(t_query_end - t_query_start).count();
         stats->solver_time_ms = std::chrono::duration<double, std::milli>(t_solver_end - t_solver_start).count();
+        stats->k_extraction_time_ms = t_k_extract_ms;
+        stats->attention_score_time_ms = t_attn_score_ms;
+        stats->selection_time_ms = t_selection_ms;
+        stats->v_extraction_time_ms = t_v_extract_ms;
+        stats->kv_write_time_ms = t_kv_write_ms;
+        stats->total_time_ms = t_k_extract_ms + t_attn_score_ms + t_selection_ms
+                             + t_v_extract_ms + t_kv_write_ms
+                             + stats->solver_time_ms;
         stats->n_prefix_tokens = n_prefix_tokens;
         stats->n_selected_tokens = n_selected;
     }
