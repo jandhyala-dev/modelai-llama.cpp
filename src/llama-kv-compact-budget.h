@@ -43,3 +43,30 @@ std::vector<uint32_t> llama_kv_compact_build_union(
         const std::vector<std::vector<uint32_t>> & per_head_selections,
         uint32_t n_heads,
         std::vector<bool> & per_head_mask);
+
+// Load per-head budget proportions from a JSON file.
+// JSON format: {"L0H0": 0.0025, "L0H1": 0.0015, ...}
+// Proportions should sum to approximately 1.0.
+//
+// n_layers, n_heads: model architecture dimensions.
+// proportions_out: output vector of size n_layers * n_heads, indexed as [layer * n_heads + head].
+//
+// Returns true on success.
+bool llama_kv_compact_load_budget_json(
+        const char * json_path,
+        uint32_t n_layers,
+        uint32_t n_heads,
+        std::vector<float> & proportions_out);
+
+// Allocate per-head budgets from pre-computed proportions.
+// proportions: per-head proportions (sum to ~1.0), indexed as [layer * n_heads + head].
+// total_budget: total tokens to allocate.
+// min_per_head: minimum budget per head.
+// max_per_head: maximum budget per head (0 = unlimited).
+//
+// Returns vector of budgets indexed same as proportions.
+std::vector<uint32_t> llama_kv_compact_allocate_from_proportions(
+        const std::vector<float> & proportions,
+        uint32_t total_budget,
+        uint32_t min_per_head = 4,
+        uint32_t max_per_head = 0);

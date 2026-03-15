@@ -36,20 +36,61 @@ std::vector<uint32_t> llama_kv_compact_select_topk(
         const std::vector<float> & scores,
         uint32_t t);
 
+// Progressive OMP schedule entry.
+// Reference: omp.py DEFAULT_PROGRESSIVE_SCHEDULE (lines 120-124)
+//
+// As OMP selects more keys, it becomes more aggressive:
+//   Phase 1 (0-299):    k_choice=1, nnls_interval=1 (conservative)
+//   Phase 2 (300-1499): k_choice=2, nnls_interval=2 (moderate)
+//   Phase 3 (1500+):    k_choice=4, nnls_interval=2 (aggressive)
+struct llama_kv_compact_omp_schedule_entry {
+    uint32_t threshold;      // use this config until selected count reaches threshold
+    uint32_t k_choice;       // keys to select per iteration
+    uint32_t nnls_interval;  // NNLS solve frequency (1=every iter, 2=every other)
+};
+
+// MIT default progressive schedule.
+static const llama_kv_compact_omp_schedule_entry LLAMA_KV_COMPACT_DEFAULT_OMP_SCHEDULE[] = {
+    {  300, 1, 1 },
+    { 1500, 2, 2 },
+    { UINT32_MAX, 4, 2 },
+};
+
 // OMP key selection options.
 // Reference: omp.py class OMPCompaction.__init__() lines 138-206
 struct llama_kv_compact_omp_opts {
-    uint32_t k_choice      = 1;     // keys per iteration (1=standard, 4=fast)
-    uint32_t nnls_interval = 1;     // refit every N iters (1=always, 2=fast)
+    // Schedule (V2 — GAP-04)
+    const llama_kv_compact_omp_schedule_entry * schedule     = LLAMA_KV_COMPACT_DEFAULT_OMP_SCHEDULE;
+    uint32_t                                    schedule_len = 3;
+
     float    lower_bound   = 1e-12f;
-    float    beta_prune_log_threshold = -7.0f; // Paper Appendix C.2: prune keys with log(beta) < threshold
+
+    // Drop-key refinement (V2 — GAP-05)
+    // After initial selection, drop keys with log(beta) < cutoff and re-select.
+    // Set to -INFINITY to disable. Max 3 refinement passes.
+    float    drop_key_beta_cutoff = -7.0f;
+
+    // Quality parameters (V2 — GAP-16)
+    bool     use_abs_corr         = false;   // use |correlation| for key selection
+    bool     normalize_exp_scores = false;   // L2-normalize exp_score columns before correlation
+
+    // Cached selection order (V2 — GAP-15)
+    // If non-null, reuse a previously computed selection order instead of running OMP.
+    // Only the first t indices are used; beta is recomputed via NNLS.
+    std::vector<uint32_t> * cached_selection_order = nullptr;
 };
 
-// OMP key selection with periodic NNLS refit.
+// OMP key selection with progressive schedule + drop-key refinement.
 //
 // Greedy selection of t keys that best approximate the attention partition
-// function. At each step selects the key most correlated with the residual
+// function. At each step selects the key(s) most correlated with the residual
 // between the target partition sum and the current approximation.
+//
+// V2 enhancements over V1:
+//   - Progressive schedule: k_choice/nnls_interval adapt as more keys are selected
+//   - Drop-key refinement: post-selection pruning of low-weight keys (max 3 passes)
+//   - cached_selection_order: reuse prior OMP order for multi-ratio evaluation
+//   - use_abs_corr / normalize_exp_scores: MIT quality parameters
 //
 // Reference: Algorithm 1, arXiv:2602.16284 Section 3.2
 // Reference impl: compaction/algorithms/omp.py lines 478-718

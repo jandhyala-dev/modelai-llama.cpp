@@ -88,9 +88,7 @@ int main() {
 
     // OMP key selection test
     {
-        llama_kv_compact_omp_opts omp_opts;
-        omp_opts.k_choice = 1;
-        omp_opts.nnls_interval = 1;
+        llama_kv_compact_omp_opts omp_opts;  // defaults: progressive schedule, drop-key enabled
         std::vector<float> omp_beta;
 
         auto omp_selected = llama_kv_compact_select_omp(

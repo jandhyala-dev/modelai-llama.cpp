@@ -1,8 +1,12 @@
 #include "llama-kv-compact-budget.h"
 #include "llama-kv-compact-math.h"
 
+#include "llama-impl.h"
+
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <cstring>
 #include <limits>
 #include <numeric>
 #include <set>
@@ -164,4 +168,173 @@ std::vector<uint32_t> llama_kv_compact_build_union(
     }
 
     return union_vec;
+}
+
+// ---------------------------------------------------------------------------
+// Budget JSON loading (V2 — GAP-13)
+// ---------------------------------------------------------------------------
+//
+// Parses simple JSON: {"L0H0": 0.0025, "L0H1": 0.0015, ...}
+// No external JSON library — hand-rolled parser for this fixed format.
+
+bool llama_kv_compact_load_budget_json(
+        const char * json_path,
+        uint32_t n_layers,
+        uint32_t n_heads,
+        std::vector<float> & proportions_out) {
+
+    FILE * f = fopen(json_path, "r");
+    if (!f) {
+        LLAMA_LOG_ERROR("budget: cannot open %s\n", json_path);
+        return false;
+    }
+
+    // Read entire file into string.
+    fseek(f, 0, SEEK_END);
+    long file_size = ftell(f);
+    fseek(f, 0, SEEK_SET);
+
+    if (file_size <= 0 || file_size > 10 * 1024 * 1024) {
+        fclose(f);
+        LLAMA_LOG_ERROR("budget: file size invalid (%ld bytes)\n", file_size);
+        return false;
+    }
+
+    std::vector<char> buf(file_size + 1);
+    size_t read_bytes = fread(buf.data(), 1, file_size, f);
+    fclose(f);
+    buf[read_bytes] = '\0';
+
+    const uint32_t total = n_layers * n_heads;
+    proportions_out.assign(total, 0.0f);
+
+    // Parse key-value pairs: "LxHy": float
+    const char * p = buf.data();
+    uint32_t parsed = 0;
+
+    while (*p) {
+        // Find next quoted key.
+        const char * quote1 = strchr(p, '"');
+        if (!quote1) break;
+        const char * quote2 = strchr(quote1 + 1, '"');
+        if (!quote2) break;
+
+        // Extract key: "LxHy"
+        size_t key_len = quote2 - quote1 - 1;
+        if (key_len < 4 || quote1[1] != 'L') {
+            p = quote2 + 1;
+            continue;
+        }
+
+        // Parse layer and head from "LxHy".
+        uint32_t layer = 0;
+        uint32_t head = 0;
+        const char * kp = quote1 + 2; // after "L"
+        while (kp < quote2 && *kp >= '0' && *kp <= '9') {
+            layer = layer * 10 + (*kp - '0');
+            kp++;
+        }
+        if (kp >= quote2 || *kp != 'H') {
+            p = quote2 + 1;
+            continue;
+        }
+        kp++; // skip 'H'
+        while (kp < quote2 && *kp >= '0' && *kp <= '9') {
+            head = head * 10 + (*kp - '0');
+            kp++;
+        }
+
+        // Find colon + value.
+        const char * colon = strchr(quote2 + 1, ':');
+        if (!colon) break;
+
+        char * endptr = nullptr;
+        float val = strtof(colon + 1, &endptr);
+        if (endptr == colon + 1) {
+            p = colon + 1;
+            continue;
+        }
+
+        if (layer < n_layers && head < n_heads) {
+            proportions_out[layer * n_heads + head] = val;
+            parsed++;
+        }
+
+        p = endptr;
+    }
+
+    if (parsed == 0) {
+        LLAMA_LOG_ERROR("budget: no valid entries parsed from %s\n", json_path);
+        return false;
+    }
+
+    LLAMA_LOG_INFO("budget: loaded %u/%u head proportions from %s\n", parsed, total, json_path);
+    return true;
+}
+
+std::vector<uint32_t> llama_kv_compact_allocate_from_proportions(
+        const std::vector<float> & proportions,
+        uint32_t total_budget,
+        uint32_t min_per_head,
+        uint32_t max_per_head) {
+
+    const uint32_t n = (uint32_t) proportions.size();
+    if (n == 0 || total_budget == 0) {
+        return {};
+    }
+
+    const uint32_t max_b = (max_per_head > 0) ? max_per_head : total_budget;
+
+    // Normalize proportions.
+    float prop_sum = 0.0f;
+    for (float p : proportions) {
+        prop_sum += p;
+    }
+    if (prop_sum < 1e-12f) {
+        prop_sum = 1.0f;
+    }
+
+    std::vector<uint32_t> budgets(n);
+    uint32_t allocated = 0;
+
+    for (uint32_t i = 0; i < n; ++i) {
+        float frac = proportions[i] / prop_sum;
+        uint32_t b = (uint32_t) std::round(frac * total_budget);
+        b = std::max(b, min_per_head);
+        b = std::min(b, max_b);
+        budgets[i] = b;
+        allocated += b;
+    }
+
+    // Fine-tune to hit exact total_budget.
+    while (allocated < total_budget) {
+        // Add to head with largest proportion that's not at max.
+        uint32_t best = UINT32_MAX;
+        float best_prop = -1.0f;
+        for (uint32_t i = 0; i < n; ++i) {
+            if (budgets[i] < max_b && proportions[i] > best_prop) {
+                best = i;
+                best_prop = proportions[i];
+            }
+        }
+        if (best == UINT32_MAX) break;
+        budgets[best]++;
+        allocated++;
+    }
+    while (allocated > total_budget) {
+        // Remove from head with smallest proportion that's above min.
+        uint32_t best = UINT32_MAX;
+        float best_prop = std::numeric_limits<float>::max();
+        for (uint32_t i = 0; i < n; ++i) {
+            if (budgets[i] > min_per_head && proportions[i] < best_prop) {
+                best = i;
+                best_prop = proportions[i];
+            }
+        }
+        if (best == UINT32_MAX) break;
+        budgets[best]--;
+        allocated--;
+    }
+
+    return budgets;
 }

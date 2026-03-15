@@ -141,11 +141,9 @@ int main() {
         llama_kv_compact_matrix queries, keys;
         make_fixture(queries, keys);
 
-        // Default opts with pruning enabled.
+        // Default opts with drop-key refinement enabled (V2 default).
         llama_kv_compact_omp_opts omp_opts;
-        omp_opts.k_choice = 1;
-        omp_opts.nnls_interval = 1;
-        omp_opts.beta_prune_log_threshold = -7.0f;
+        omp_opts.drop_key_beta_cutoff = -7.0f;
 
         std::vector<float> beta;
         auto selected = llama_kv_compact_select_omp(queries, keys, 3, omp_opts, beta);
@@ -163,11 +161,9 @@ int main() {
             check(selected[i] > selected[i-1], "OMP results are position-sorted");
         }
 
-        // Pruning disabled (threshold = -inf).
+        // Drop-key refinement disabled (cutoff = -inf).
         llama_kv_compact_omp_opts no_prune_opts;
-        no_prune_opts.k_choice = 1;
-        no_prune_opts.nnls_interval = 1;
-        no_prune_opts.beta_prune_log_threshold = -std::numeric_limits<float>::infinity();
+        no_prune_opts.drop_key_beta_cutoff = -std::numeric_limits<float>::infinity();
 
         std::vector<float> beta_no_prune;
         auto selected_no_prune = llama_kv_compact_select_omp(

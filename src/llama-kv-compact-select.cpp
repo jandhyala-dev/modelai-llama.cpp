@@ -87,6 +87,8 @@ std::vector<uint32_t> llama_kv_compact_select_topk(
 
 namespace {
 
+// Solve NNLS via Cholesky normal equations + clamp.
+// Used inside OMP loop for fast beta refit.
 bool omp_solve_nnls(
         const llama_kv_compact_matrix & M,
         const std::vector<float> & target,
@@ -114,7 +116,9 @@ bool omp_solve_nnls(
     const float lambda = 1e-6f;
     for (uint32_t i = 0; i < t; ++i) {
         for (uint32_t j = 0; j < i; ++j) {
-            mtm[size_t(j) * t + i] = mtm[size_t(i) * t + j];
+            const float avg = 0.5f * (mtm[size_t(i) * t + j] + mtm[size_t(j) * t + i]);
+            mtm[size_t(i) * t + j] = avg;
+            mtm[size_t(j) * t + i] = avg;
         }
         mtm[size_t(i) * t + i] += lambda;
     }
@@ -164,6 +168,26 @@ bool omp_solve_nnls(
     return true;
 }
 
+// Look up k_choice and nnls_interval from progressive schedule.
+// Reference: omp.py _get_schedule_params() lines 211-235
+void get_schedule_params(
+        const llama_kv_compact_omp_schedule_entry * schedule,
+        uint32_t schedule_len,
+        uint32_t num_selected,
+        uint32_t & k_choice_out,
+        uint32_t & nnls_interval_out) {
+    for (uint32_t si = 0; si < schedule_len; ++si) {
+        if (num_selected < schedule[si].threshold) {
+            k_choice_out = schedule[si].k_choice;
+            nnls_interval_out = schedule[si].nnls_interval;
+            return;
+        }
+    }
+    // Fallback to last entry
+    k_choice_out = schedule[schedule_len - 1].k_choice;
+    nnls_interval_out = schedule[schedule_len - 1].nnls_interval;
+}
+
 } // namespace
 
 std::vector<uint32_t> llama_kv_compact_select_omp(
@@ -200,133 +224,224 @@ std::vector<uint32_t> llama_kv_compact_select_omp(
         target[qi] = sum;
     }
 
-    // Step 2: Greedy OMP loop
+    // Optional: L2-normalize exp_score columns (GAP-16).
+    // Precompute column norms for correlation computation.
+    std::vector<float> col_norms;
+    if (opts.normalize_exp_scores) {
+        col_norms.resize(T, 0.0f);
+        for (uint32_t ki = 0; ki < T; ++ki) {
+            float norm_sq = 0.0f;
+            for (uint32_t qi = 0; qi < n; ++qi) {
+                norm_sq += exp_scores(qi, ki) * exp_scores(qi, ki);
+            }
+            col_norms[ki] = std::sqrt(norm_sq) + 1e-12f;
+        }
+    }
+
+    // Cached selection order shortcut (GAP-15).
+    if (opts.cached_selection_order && !opts.cached_selection_order->empty()) {
+        const auto & cached = *opts.cached_selection_order;
+        const uint32_t use_t = std::min(t, (uint32_t) cached.size());
+
+        std::vector<uint32_t> selected(cached.begin(), cached.begin() + use_t);
+
+        // Recompute beta via NNLS for the selected subset.
+        llama_kv_compact_matrix M(n, use_t);
+        for (uint32_t qi = 0; qi < n; ++qi) {
+            for (uint32_t si = 0; si < use_t; ++si) {
+                M(qi, si) = exp_scores(qi, selected[si]);
+            }
+        }
+        std::vector<float> B;
+        if (!omp_solve_nnls(M, target, opts.lower_bound, B)) {
+            B.assign(use_t, opts.lower_bound);
+        }
+
+        // Sort by position and convert to log-weights.
+        std::vector<uint32_t> order(use_t);
+        std::iota(order.begin(), order.end(), 0);
+        std::sort(order.begin(), order.end(),
+                  [&](uint32_t a, uint32_t b) { return selected[a] < selected[b]; });
+
+        std::vector<uint32_t> result(use_t);
+        beta_out.resize(use_t);
+        for (size_t i = 0; i < order.size(); ++i) {
+            result[i] = selected[order[i]];
+            beta_out[i] = std::log(std::max(B[order[i]], opts.lower_bound));
+        }
+        return result;
+    }
+
+    // Step 2: OMP loop with progressive schedule + drop-key refinement.
     std::vector<uint32_t> selected;
     selected.reserve(t);
-    std::vector<bool> mask(T, false);
+    std::vector<bool> mask_selected(T, false);
+    std::vector<bool> mask_excluded(T, false);  // permanently excluded (drop-key)
     std::vector<float> current(n, 0.0f);
     std::vector<float> B;
     std::vector<float> corr(T);
 
     uint32_t iteration = 0;
-    while (selected.size() < t) {
-        // Compute correlation of each key with residual
-        for (uint32_t ki = 0; ki < T; ++ki) {
-            if (mask[ki]) {
-                corr[ki] = -std::numeric_limits<float>::infinity();
-                continue;
+    uint32_t refinement_count = 0;
+
+    while (true) {
+        const uint32_t i = (uint32_t) selected.size();
+
+        if (i < t) {
+            // --- Normal selection phase ---
+            // Compute correlation of each key with residual.
+            for (uint32_t ki = 0; ki < T; ++ki) {
+                if (mask_selected[ki] || mask_excluded[ki]) {
+                    corr[ki] = -std::numeric_limits<float>::infinity();
+                    continue;
+                }
+                float c = 0.0f;
+                for (uint32_t qi = 0; qi < n; ++qi) {
+                    float es = exp_scores(qi, ki);
+                    if (opts.normalize_exp_scores) {
+                        es /= col_norms[ki];
+                    }
+                    c += es * (target[qi] - current[qi]);
+                }
+                corr[ki] = opts.use_abs_corr ? std::fabs(c) : c;
             }
-            float c = 0.0f;
-            for (uint32_t qi = 0; qi < n; ++qi) {
-                c += exp_scores(qi, ki) * (target[qi] - current[qi]);
+
+            // Get k_choice and nnls_interval from progressive schedule.
+            uint32_t k_choice = 1;
+            uint32_t nnls_interval = 1;
+            get_schedule_params(opts.schedule, opts.schedule_len, i,
+                                k_choice, nnls_interval);
+
+            uint32_t k_select = std::min(k_choice, t - i);
+
+            // Select top k_select keys by correlation.
+            // Use partial sort to find the top candidates efficiently.
+            std::vector<uint32_t> candidates(T);
+            std::iota(candidates.begin(), candidates.end(), 0);
+            std::partial_sort(
+                candidates.begin(),
+                candidates.begin() + std::min(k_select + i, T),
+                candidates.end(),
+                [&](uint32_t a, uint32_t b) { return corr[a] > corr[b]; });
+
+            uint32_t added = 0;
+            for (uint32_t ci = 0; ci < T && added < k_select; ++ci) {
+                uint32_t idx = candidates[ci];
+                if (mask_selected[idx] || mask_excluded[idx]) continue;
+                selected.push_back(idx);
+                mask_selected[idx] = true;
+                added++;
             }
-            corr[ki] = c;
-        }
 
-        // Select top k_choice keys
-        uint32_t k_select = std::min(opts.k_choice,
-                                      uint32_t(t - selected.size()));
+            if (added == 0) break;  // no more candidates
 
-        std::vector<uint32_t> candidates(T);
-        std::iota(candidates.begin(), candidates.end(), 0);
-        std::partial_sort(
-            candidates.begin(),
-            candidates.begin() + std::min(k_select + uint32_t(selected.size()), T),
-            candidates.end(),
-            [&](uint32_t a, uint32_t b) { return corr[a] > corr[b]; });
+            // Solve NNLS conditionally based on interval.
+            bool should_solve = B.empty()
+                             || (iteration % nnls_interval == 0)
+                             || (selected.size() >= t);
 
-        uint32_t added = 0;
-        for (uint32_t ci = 0; ci < T && added < k_select; ++ci) {
-            uint32_t idx = candidates[ci];
-            if (mask[idx]) continue;
-            selected.push_back(idx);
-            mask[idx] = true;
-            added++;
-        }
+            if (should_solve) {
+                const uint32_t sel_count = (uint32_t) selected.size();
+                llama_kv_compact_matrix M(n, sel_count);
+                for (uint32_t qi = 0; qi < n; ++qi) {
+                    for (uint32_t si = 0; si < sel_count; ++si) {
+                        M(qi, si) = exp_scores(qi, selected[si]);
+                    }
+                }
+                if (!omp_solve_nnls(M, target, opts.lower_bound, B)) {
+                    B.assign(sel_count, opts.lower_bound);
+                }
+            } else {
+                B.resize(selected.size(), opts.lower_bound);
+            }
 
-        // Solve NNLS conditionally based on interval
-        bool should_solve = (B.empty())
-                         || (iteration % opts.nnls_interval == 0)
-                         || (selected.size() >= t);
-
-        if (should_solve) {
-            uint32_t i = selected.size();
-            llama_kv_compact_matrix M(n, i);
+            // Update approximation: current = M @ B
+            std::fill(current.begin(), current.end(), 0.0f);
             for (uint32_t qi = 0; qi < n; ++qi) {
-                for (uint32_t si = 0; si < i; ++si) {
+                for (size_t si = 0; si < selected.size(); ++si) {
+                    current[qi] += exp_scores(qi, selected[si]) * B[si];
+                }
+            }
+
+            iteration++;
+
+        } else if (i == t && opts.drop_key_beta_cutoff > -std::numeric_limits<float>::infinity()) {
+            // --- Drop-key refinement phase (V2 — GAP-05) ---
+            // Reference: omp.py lines 629-702
+            refinement_count++;
+            if (refinement_count > 3) break;  // max 3 refinement passes
+
+            // Always solve NNLS in refinement (need accurate beta for drop decision).
+            const uint32_t sel_count = (uint32_t) selected.size();
+            llama_kv_compact_matrix M(n, sel_count);
+            for (uint32_t qi = 0; qi < n; ++qi) {
+                for (uint32_t si = 0; si < sel_count; ++si) {
                     M(qi, si) = exp_scores(qi, selected[si]);
                 }
             }
             if (!omp_solve_nnls(M, target, opts.lower_bound, B)) {
-                B.resize(selected.size(), opts.lower_bound);
+                break;  // NNLS failed — accept current selection
             }
 
-            // OMP key pruning (Appendix C.2): remove keys with log(beta) < threshold.
-            // After NNLS, keys with near-zero weight contribute nothing to the
-            // approximation. Pruning them frees capacity for better candidates.
-            // Guard: always retain at least 1 key to prevent degenerate empty selection.
-            if (opts.beta_prune_log_threshold > -std::numeric_limits<float>::infinity()
-                    && selected.size() > 1) {
-                size_t write = 0;
+            // Find keys to drop: log(beta) < cutoff.
+            std::vector<bool> drop_mask(sel_count, false);
+            uint32_t n_drop = 0;
+            for (uint32_t si = 0; si < sel_count; ++si) {
+                float log_b = std::log(std::max(B[si], 1e-30f));
+                if (log_b < opts.drop_key_beta_cutoff) {
+                    drop_mask[si] = true;
+                    n_drop++;
+                }
+            }
+
+            if (n_drop == 0) break;  // stable set — converged
+
+            // Drop keys: mark as permanently excluded, compact selected/B arrays.
+            size_t write = 0;
+            for (size_t si = 0; si < selected.size(); ++si) {
+                if (drop_mask[si]) {
+                    mask_selected[selected[si]] = false;
+                    mask_excluded[selected[si]] = true;
+                } else {
+                    if (write != si) {
+                        selected[write] = selected[si];
+                        B[write] = B[si];
+                    }
+                    write++;
+                }
+            }
+            selected.resize(write);
+            B.resize(write);
+
+            // Update approximation for reduced set.
+            std::fill(current.begin(), current.end(), 0.0f);
+            for (uint32_t qi = 0; qi < n; ++qi) {
                 for (size_t si = 0; si < selected.size(); ++si) {
-                    const float log_b = std::log(std::max(B[si], 1e-30f));
-                    if (log_b >= opts.beta_prune_log_threshold) {
-                        if (write != si) {
-                            selected[write] = selected[si];
-                            B[write] = B[si];
-                        }
-                        write++;
-                    } else {
-                        mask[selected[si]] = false; // allow re-selection
-                    }
-                }
-                // Retain at least 1 key even if all fail the threshold.
-                // Keep the key with the highest beta (best contributor).
-                if (write == 0) {
-                    size_t best = 0;
-                    for (size_t si = 1; si < selected.size(); ++si) {
-                        if (B[si] > B[best]) {
-                            best = si;
-                        }
-                    }
-                    selected[0] = selected[best];
-                    B[0] = B[best];
-                    mask[selected[0]] = true; // keep it masked (not re-selectable)
-                    write = 1;
-                }
-                if (write < selected.size()) {
-                    selected.resize(write);
-                    B.resize(write);
+                    current[qi] += exp_scores(qi, selected[si]) * B[si];
                 }
             }
+
+            iteration++;
+            // Continue — loop will re-enter i < t to fill dropped slots.
+
         } else {
-            B.resize(selected.size(), opts.lower_bound);
+            break;  // i == t and no refinement — done
         }
-
-        // Update approximation: current = M @ B
-        std::fill(current.begin(), current.end(), 0.0f);
-        for (uint32_t qi = 0; qi < n; ++qi) {
-            for (uint32_t si = 0; si < selected.size(); ++si) {
-                current[qi] += exp_scores(qi, selected[si]) * B[si];
-            }
-        }
-
-        iteration++;
     }
 
-    // Final NNLS if last iteration was skipped
-    if (opts.nnls_interval > 1 && !selected.empty()) {
-        uint32_t i = selected.size();
-        llama_kv_compact_matrix M(n, i);
+    // Final NNLS if last iteration skipped due to interval.
+    if (!selected.empty()) {
+        const uint32_t sel_count = (uint32_t) selected.size();
+        llama_kv_compact_matrix M(n, sel_count);
         for (uint32_t qi = 0; qi < n; ++qi) {
-            for (uint32_t si = 0; si < i; ++si) {
+            for (uint32_t si = 0; si < sel_count; ++si) {
                 M(qi, si) = exp_scores(qi, selected[si]);
             }
         }
         omp_solve_nnls(M, target, opts.lower_bound, B);
     }
 
-    // Convert to beta (log-weights) and sort by position
+    // Convert to beta (log-weights) and sort by position.
     std::vector<uint32_t> order(selected.size());
     std::iota(order.begin(), order.end(), 0);
     std::sort(order.begin(), order.end(),

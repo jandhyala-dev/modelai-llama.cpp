@@ -9,13 +9,19 @@
 #include <cstring>
 #include <vector>
 
+// Maximum number of generation rounds for diversity.
+#define LLAMA_KV_COMPACT_MAX_ROUNDS 8
+
 // Configuration for self-study Q-capture generation
 struct llama_kv_compact_self_study_config {
-    uint32_t n_generate              = 256;    // continuation tokens to generate
-    uint32_t max_queries_per_kv_head = 1024;   // subsample limit after GQA regrouping
-    int      nnls_iters              = 2;      // solver iterations (paper: 0 for OMP, 2 for HighestAttnKeys)
+    uint32_t n_generate              = 2000;   // continuation tokens per round (V2: was 256)
+    uint32_t max_queries_per_kv_head = 10000;  // subsample limit after GQA regrouping (V2: was 1024)
+    int      nnls_iters              = 0;      // solver iterations (V2: 0 = lstsq+clamp)
     float    lambda                  = 1e-6f;  // solver regularization
-    float    temperature             = 0.0f;   // sampling temp (0 = greedy)
+
+    // Multi-round diversity (V2 — GAP-03)
+    uint32_t n_rounds                = 3;      // generation rounds with different temperatures
+    float    temperatures[LLAMA_KV_COMPACT_MAX_ROUNDS] = {0.6f, 0.8f, 1.0f};  // per-round sampling temperature
 };
 
 // Statistics output
@@ -98,32 +104,23 @@ struct llama_context;
 // Generate n_generate continuation tokens from the current context state,
 // capturing post-RoPE Q tensors into q_state via cb_eval.
 //
+// temperature controls sampling diversity:
+//   - 0.0 = greedy (argmax)
+//   - > 0.0 = softmax(logits / temp) with random sampling
+//
 // Caller contract:
-//   - seq_id MUST be 0 (enforced by assert). This is because
-//     llama_batch_get_one() hardcodes sequence 0. When manual batch
-//     construction is added, this constraint can be lifted.
+//   - seq_id MUST be 0 (enforced by assert)
 //   - Context must have been prefilled (logits available from last decode)
 //   - q_state must be initialized via reset() before this call
 //   - KV cache must have room for n_generate additional tokens
 //
-// The function:
-//   1. Asserts seq_id == 0
-//   2. Checks KV capacity (n_ctx - current_pos >= n_generate)
-//   3. Saves existing cb_eval, installs Q-capture callback
-//   4. Seeds first token from last prefill logits (argmax)
-//   5. Runs autoregressive loop: batch_get_one → decode → finalize_step → argmax
-//   6. Restores previous cb_eval
-//   7. Removes generated tokens from memory (llama_memory_seq_rm)
-//
-// EOS tokens are ignored — generation continues for Q diversity.
-// On decode failure, discards uncommitted pending data and breaks
-// with partial capture (still usable).
 // Returns true if at least one token was generated.
 bool llama_kv_compact_self_study_generate(
         struct llama_context * ctx,
         llama_q_capture_state & q_state,
         uint32_t n_generate,
-        llama_seq_id seq_id);
+        llama_seq_id seq_id,
+        float temperature = 0.0f);
 
 // ---------------------------------------------------------------------------
 // GQA regrouping + subsampling (slice 6b-3)

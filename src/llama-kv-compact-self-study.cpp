@@ -13,6 +13,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstring>
+#include <random>
 
 // ---------------------------------------------------------------------------
 // llama_q_capture_state
@@ -138,11 +139,43 @@ static int32_t parse_layer_index(const char * name) {
 // Autoregressive generation loop (slice 6b-4)
 // ---------------------------------------------------------------------------
 
+// Sample a token from logits with temperature.
+// temperature == 0 → argmax (greedy).
+// temperature > 0 → softmax(logits/temp) with random sampling.
+static llama_token sample_with_temperature(
+        const float * logits,
+        int32_t n_vocab,
+        float temperature,
+        std::mt19937 & rng) {
+    if (temperature <= 0.0f) {
+        return (llama_token)(std::max_element(logits, logits + n_vocab) - logits);
+    }
+
+    // Softmax with temperature
+    const float inv_temp = 1.0f / temperature;
+    float max_logit = *std::max_element(logits, logits + n_vocab);
+
+    std::vector<float> probs(n_vocab);
+    float sum = 0.0f;
+    for (int32_t i = 0; i < n_vocab; ++i) {
+        probs[i] = std::exp((logits[i] - max_logit) * inv_temp);
+        sum += probs[i];
+    }
+    const float inv_sum = 1.0f / sum;
+    for (int32_t i = 0; i < n_vocab; ++i) {
+        probs[i] *= inv_sum;
+    }
+
+    std::discrete_distribution<int32_t> dist(probs.begin(), probs.end());
+    return (llama_token)dist(rng);
+}
+
 bool llama_kv_compact_self_study_generate(
         struct llama_context * ctx,
         llama_q_capture_state & q_state,
         uint32_t n_generate,
-        llama_seq_id seq_id) {
+        llama_seq_id seq_id,
+        float temperature) {
 
     // llama_batch_get_one() hardcodes sequence 0 (llama.h).
     // Until we build batches manually, enforce this precondition.
@@ -177,7 +210,7 @@ bool llama_kv_compact_self_study_generate(
     q_state.active = true;
     ctx->set_eval_callback(llama_q_capture_eval_callback, &q_state);
 
-    // 3. Seed token from last prefill logits (argmax)
+    // 3. Seed token from last prefill logits
     float * logits = llama_get_logits_ith(ctx, -1);
     if (!logits) {
         LLAMA_LOG_ERROR("self-study: no logits available from prefill\n");
@@ -186,7 +219,9 @@ bool llama_kv_compact_self_study_generate(
         return false;
     }
 
-    llama_token token = (llama_token)(std::max_element(logits, logits + n_vocab) - logits);
+    // Use a fixed seed for reproducibility; temperature provides diversity across rounds.
+    std::mt19937 rng(42);
+    llama_token token = sample_with_temperature(logits, n_vocab, temperature, rng);
 
     // 4. Autoregressive generation loop
     uint32_t n_generated = 0;
@@ -212,13 +247,13 @@ bool llama_kv_compact_self_study_generate(
         q_state.finalize_step();
         n_generated++;
 
-        // Argmax for next token
+        // Sample next token
         logits = llama_get_logits_ith(ctx, -1);
         if (!logits) {
             LLAMA_LOG_ERROR("self-study: no logits at step %u\n", i);
             break;
         }
-        token = (llama_token)(std::max_element(logits, logits + n_vocab) - logits);
+        token = sample_with_temperature(logits, n_vocab, temperature, rng);
 
         // Do NOT stop on EOS — continue for Q diversity (text is discarded)
     }
@@ -235,7 +270,8 @@ bool llama_kv_compact_self_study_generate(
         llama_memory_seq_rm(mem, seq_id, gen_start, gen_end);
     }
 
-    LLAMA_LOG_INFO("self-study: captured Q from %u tokens (seq %d)\n", n_generated, seq_id);
+    LLAMA_LOG_INFO("self-study: captured Q from %u tokens (temp=%.1f, seq %d)\n",
+                   n_generated, temperature, seq_id);
     return n_generated > 0;
 }
 
@@ -453,17 +489,30 @@ bool llama_kv_compact_self_study_from_live_kv(
     const uint32_t n_prefix_tokens = (uint32_t)prefix_positions.size();
     const uint32_t n_selected = std::min<uint32_t>(target_tokens, n_prefix_tokens);
 
-    // --- Phase 1: Q-capture generation ---
+    // --- Phase 1: Multi-round Q-capture generation (V2 — GAP-03) ---
     const auto & model_hparams = ctx->get_model().hparams;
     const uint32_t n_layer     = model_hparams.n_layer;
     const uint32_t n_embd_head = model_hparams.n_embd_head_k(0);
     const uint32_t n_head_q    = model_hparams.n_head(0);
 
+    const uint32_t n_rounds = std::max(1u, std::min(config.n_rounds, (uint32_t) LLAMA_KV_COMPACT_MAX_ROUNDS));
+    const uint32_t total_generate = config.n_generate * n_rounds;
+
     llama_q_capture_state q_state;
-    q_state.reset((int32_t)n_layer, n_embd_head, n_head_q, config.n_generate);
+    q_state.reset((int32_t)n_layer, n_embd_head, n_head_q, total_generate);
 
     const auto t_gen_start = std::chrono::steady_clock::now();
-    if (!llama_kv_compact_self_study_generate(ctx, q_state, config.n_generate, seq_id)) {
+    bool any_generated = false;
+    for (uint32_t round = 0; round < n_rounds; ++round) {
+        const float temp = config.temperatures[round];
+        if (llama_kv_compact_self_study_generate(ctx, q_state, config.n_generate, seq_id, temp)) {
+            any_generated = true;
+        } else if (round == 0) {
+            // First round must succeed; subsequent rounds are best-effort.
+            return false;
+        }
+    }
+    if (!any_generated) {
         return false;
     }
     const auto t_gen_end = std::chrono::steady_clock::now();
