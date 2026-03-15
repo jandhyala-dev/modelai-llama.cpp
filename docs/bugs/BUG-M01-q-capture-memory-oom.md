@@ -46,9 +46,9 @@ Added runtime memory budget guard:
 
 ```
 bytes_per_token = 40 × 40 × 128 × 4 = 819,200 bytes ≈ 0.78 MB
-max_total_tokens = 1024 / 0.78 ≈ 1311
-with n_rounds=3: n_generate = 1311 / 3 = 437
-Q-capture = 40 × 1311 × 40 × 128 × 4 ≈ 1.0 GB
+max_total_tokens = 1,073,741,824 / 819,200 = 1310
+with n_rounds=3: n_generate = 1310 / 3 = 436
+Q-capture = 40 × (436×3) × 40 × 128 × 4 ≈ 1.0 GB
 Total system: 8 + 1.3 + 1.0 + 2.2 = 12.5 GB (within 16 GB target)
 ```
 
