@@ -90,88 +90,47 @@ The current runtime constraints that shape this fork are:
 7. `beta` cannot be represented as a flat slot scalar; its dimensionality is per layer / per KV head / per compacted token.
 8. PR-1 telemetry currently reaches `memory_breakdown()` through `src/llama-context.h`; that is acceptable for this product fork but it is an explicit upstream-sync risk until a public API exists.
 
-## Expected Results
+## Implementation Status
 
-### Near-Term
+### PR Status
+
+| PR | Scope | Status | Key Commit |
+|---|---|---|---|
+| PR-0 | Docs baseline and governance | DONE | `25535c9b` |
+| PR-1 | Capability flags and observability | DONE | `cf787729` |
+| PR-2 | Compacted-prefix memory architecture | DONE | `4f29b389` |
+| PR-3 | Non-flash correctness path | DONE | `e1be3dea` |
+| PR-4 | Session and state integration | DONE | `30b3c525` |
+| PR-5a | Runtime reclaim and perf slice | DONE | `f9f988d6` |
+| PR-5b | Solver pipeline (Attention Matching) | DONE | `72d4420e` |
+| PR-6 | Coverage expansion (server, self-study, benchmarks) | DONE | `06f178eb`, `c5f2405d` |
+
+### V1 Implementation Plan
+
+The V1 plan covers all remaining work beyond the V0 PRs above: upstream sync, performance bottleneck fixes, 128K context, test/benchmark expansion, and release gates.
+
+See `docs/modelai-v1-implementation-plan.md` (plan commit `2e43e9c8`).
+
+### Expected Results
+
+#### Near-Term (DONE)
 
 - private product-fork docs and governance are in place,
 - CI and release discipline exist before engine dependency promotion,
 - capability and telemetry surfaces exist before compaction itself lands,
-- `llama-server` exposes a stable ModelAI-facing contract on `/props`, `/models`, and `/metrics` before any compacted-prefix implementation is enabled.
-
-Near-term observability requirements:
-- allocated context/model/compute bytes are reported separately,
-- active KV metrics are reported even for idle slots as zero-safe telemetry,
-- compaction timings remain `null` until the compacted-prefix path exists,
-- `/props` must remain safe to query while the server is sleeping and must not wake the runtime just to answer capability questions,
-- `modelai.contract` metadata and `llamacpp:modelai_*` metrics must be present so ModelAI can negotiate engine version and scrape runtime telemetry deterministically.
-
-### Mid-Term
-
-- PR-2 establishes an internal compacted-prefix store inside `llama_kv_cache` with:
-  - per-sequence logical position bookkeeping,
-  - per-layer / per-KV-head `(C_k, beta, C_v)` storage shape,
-  - forwarding of core sequence ops (`seq_rm`, `seq_cp`, `seq_keep`, `seq_add`, `seq_div`),
-  - compacted-prefix bytes folded into context memory accounting as host-side sidecar memory,
-  - scalar compacted cache types only in P2 (`F16`, `BF16`, `F32`),
-  - stale compacted-prefix state invalidated on `state_read`, and warned as non-serialized on `state_write`,
-  - compacted-prefix ownership restricted to the base cache in ISWA layouts,
-  - compacted `V` sidecar storage remains logical `[head][token][embd]`; any transpose-sensitive execution compatibility is deferred to PR-3,
-- no execution path, serialization lifecycle, or public runtime enablement is part of PR-2,
-- compacted-prefix logical positions are not yet merged into the live KV cache `seq_pos_min/seq_pos_max` view before PR-3,
-- PR-3 lands the first internal non-flash execution slice:
-  - explicit per-sequence compacted-prefix execution gating,
-  - compacted-prefix execution eligibility limited to single-sequence, 1D-position, standard `llama_kv_cache` batches,
-  - explicit runtime rejection for flash-attention, SWA / split-memory, and hybrid-memory execution,
-  - host-side materialization helpers for compacted `K`, canonical non-transposed `V`, per-query-head expanded `beta`, and prefix mask columns,
-  - non-flash attention graph wiring that prepends compacted prefix `K/V/B/mask` to the live KV path,
-  - graph reuse disabled while the compacted-prefix execution path is active,
-  - deterministic P3 tests for execution gating, payload materialization, causal/alibi masking, execution-state lifecycle, and non-flash attention sanity,
-- PR-3 deliberately does not yet include query extraction, NNLS/OLS fitting, save/restore serialization, or public runtime enablement,
-- model-provided `kq_b` tensors that rely on broadcast token dimensions remain outside the P3 supported matrix and fail explicitly,
-- PR-4 adds versioned compacted-prefix save/restore integration for both full-context and per-sequence state paths:
-  - compacted-prefix payloads are serialized inside the KV state stream,
-  - restore clears stale compacted-prefix state before loading,
-  - restore validates layer layout and payload sizes before accepting data,
-  - restore rollback now clears partially loaded live/compacted state if compacted-prefix deserialization fails,
-  - state file versions are bumped so old files fail cleanly instead of being mis-parsed,
-  - public save/restore regression tests now cover compacted-prefix roundtrip, failed-restore rollback, and continuation behavior,
-- PR-4 still keeps public runtime enablement and post-restore execution/performance claims out of scope,
-- PR-5 begins the real performance path with a narrow but measurable slice:
-  - once a sequence has a configured compacted prefix, the live prefix rows before `live_suffix_pos0` can be retired,
-  - retained live suffix rows are repacked densely to the front of the live KV cache,
-  - `active_n_kv` is reduced without changing the underlying fixed KV allocation,
-  - model-backed regression coverage now proves the runtime-visible active range drops after reclaim,
-  - a manual compacted-prefix perf harness reports before/after `active_n_kv` and decode tok/s for the same compacted execution slice,
-  - on the current Apple Silicon debug smoke run with `stories15M-q4_0`, that harness reduced `active_n_kv` from `512` to `256` and improved continuation throughput from `244.1 tok/s` to `309.8 tok/s`; this is a branch validation result, not a general release claim,
-- PR-5b is the first solver-complete compaction milestone and is the only branch allowed to claim paper-aligned compression:
-  - the first query-extraction baseline uses RoPE-baked cache keys as surrogate queries, which is valid only because both solver sides remain in the same rotated space,
-  - query extraction is implemented using RoPE-baked cache keys as surrogate queries (`src/llama-kv-compact-query.cpp`),
-  - key selection is implemented with top-k baseline and OMP (`src/llama-kv-compact-select.cpp`),
-  - the first solver pass uses one shared selected-position schedule across the sequence because the current compacted-prefix store exposes a single logical-position array per sequence,
-  - NNLS beta fitting populates `beta_data` (`src/llama-kv-compact-solver.cpp`),
-  - least-squares V fitting populates `v_data` (`src/llama-kv-compact-solver.cpp`),
-  - the solver path is pure C++ dense fp32 math with no LAPACK dependency,
-  - minimal internal read-only KV accessors are added in `src/llama-kv-cache.*` (`compacted_prefix_copy_k_head_f32`, `copy_v_head_f32`, `layer_layout_for_solver`, `seq_positions`),
-  - compacted-prefix payloads are solver-populated from the original KV cache (`src/llama-kv-compact-pipeline.cpp`),
-  - quality is regression-tested on fixed tolerances (`tests/test-kv-compact-quality.cpp`): continuation-logit cosine >= 0.95 at 2x, >= 0.90 at 4x, >= 0.85 at 8x,
-  - a real ModelAI-like workload must prove Goal 1 and Goal 2 (`>= 1B` model, `>= 2048` real-text prefix, W2 or W3 workload, same-run quality gate satisfied),
-- with PR-5b, the compacted-prefix store is solver-populated from the original KV cache via the Attention Matching pipeline (query extraction, key selection with top-k and OMP, NNLS beta fitting, least-squares V fitting),
-- P5b implementation steps before the pipeline orchestration step are only unit-testable with synthetic matrices; branch closure still requires the model-backed path and benchmark proof,
+- `llama-server` exposes a stable ModelAI-facing contract on `/props`, `/models`, and `/metrics`,
 - narrow v0 compaction path on the supported matrix,
 - measured long-session improvements on ModelAI workloads,
-- measured repeated-turn follow-up improvements on at least one supported workload.
+- measured repeated-turn follow-up improvements on at least one supported workload,
 - explicit fallback to the baseline path on unsupported configs.
 
-### Long-Term
+#### Long-Term
 
 - broader backend/model coverage,
 - real packed-layout performance work,
 - optional sanitized upstream path after the architecture is proven in product use.
 
 ## V0 Support Matrix
-
-The matrix below describes the intended v0 execution-path scope for the fork as a whole. PR-2 only lands the internal memory representation and guardrails needed to reach that scope later.
 
 | Category | Status | Conditions |
 |---|---|---|
@@ -188,11 +147,29 @@ The matrix below describes the intended v0 execution-path scope for the fork as 
 | Precomputed nonuniform schedules | Supported where validated | — |
 | OMP selection | Supported | Known infeasible at production scale (>23 min for 2x on 14B); use for quality comparison only |
 | Self-study queries | Supported | Q-capture + generation + GQA regrouping (PR-6b) |
+| Public/server compacted-prefix enablement | Supported | `/props` reports live compaction state via KV cache queries (6b-18, 6b-19) |
+| Gemma3-12B | Unsupported | SWA decode broken upstream (0.7 tok/s vs 16.5 Ollama); not a fork regression |
 | SWA / split-memory compaction | Unsupported | `compacted_prefix_runtime_supported()` rejects SWA caches (`n_swa > 0`) |
 | Hybrid recurrent + attention compaction | Unsupported | Requires `llama_memory_hybrid` (Mamba layers have no KV) |
 | M-RoPE edge cases | Unsupported | `compacted_prefix_runtime_supported()` rejects multi-position models (`n_pos_per_embd() > 1`) |
-| Public/server compacted-prefix enablement | Supported | `/props` reports live compaction state via KV cache queries (6b-18, 6b-19) |
 | Public API guarantees | Unsupported | Internal-only; no stable public API contract yet |
+
+### Tested Models
+
+| Model | Quality (2x) | Quality (4x) | Quality (8x) | Status |
+|---|---|---|---|---|
+| Qwen3-8B | >= 0.95 | >= 0.90 | >= 0.85 | Validated |
+| Qwen3-14B | >= 0.95 | >= 0.90 | >= 0.85 | Validated |
+| DeepSeek-R1-14B | >= 0.95 | >= 0.90 | >= 0.85 | Validated |
+| Qwen3-30B-A3B | >= 0.95 | >= 0.90 | >= 0.85 | Validated |
+
+Quality thresholds: continuation-logit cosine similarity >= 0.95 at 2x, >= 0.90 at 4x, >= 0.85 at 8x.
+
+### Known Limitations
+
+- **B4 GPU solver:** deferred — requires Metal compute shader, out of V1 scope,
+- **Flash attention with beta > 0:** blocked — the flash-attention path does not support additive `kq_b`; requires FlashBias or equivalent upstream support,
+- **SWA architecture:** compaction is restricted to the base cache only; SWA sub-cache compaction is rejected by `compacted_prefix_runtime_supported()`.
 
 ## Runtime Strategy
 
@@ -218,6 +195,7 @@ The matrix below describes the intended v0 execution-path scope for the fork as 
 ## Governance And Related Documents
 
 - `docs/modelai-kv-compaction-plan.md` — staged PR plan from docs baseline through coverage expansion
+- `docs/modelai-v1-implementation-plan.md` — V1 plan: upstream sync, performance, 128K, release gates (commit `2e43e9c8`)
 - `docs/modelai-git-policy.md` — upstream sync, branch, merge, and release governance
 - `docs/modelai-ci-policy.md` — CI jobs, regression thresholds, and artifact rules
 - `docs/modelai-release-checklist.md` — release promotion and rollback checklist

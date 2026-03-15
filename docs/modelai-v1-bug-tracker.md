@@ -2,7 +2,7 @@
 
 **Repo:** `jandhyala-dev/modelai-llama.cpp`
 **Branch:** `modelai-main`
-**Tracking commit:** `626c1664` (updated 2026-03-14)
+**Tracking commit:** `f3587d6b` (updated 2026-03-14)
 
 This document tracks all known bugs affecting modelai-llama.cpp, organized by source (internal, upstream, ModelAI integration). Each bug has a severity, status, root cause analysis, and resolution plan.
 
@@ -28,16 +28,16 @@ This document tracks all known bugs affecting modelai-llama.cpp, organized by so
 - All `select` pipeline tests pass (0.993-0.999) on same model/context/ratio
 
 **Root cause analysis:**
-The nonuniform pipeline allocates per-head budgets based on attention entropy (Algorithm 4). When per-head selections are highly disjoint across many KV heads, the union of selections exceeds the target token count. The pipeline truncates the union by aggregate score ranking (`src/llama-kv-compact-pipeline.cpp:606-656`). After truncation, many heads lose ALL their selected tokens (`head_fully_masked=true` at line 727). These heads get:
-- beta = -infinity for all positions (line 730)
-- V = all zeros (lines 739-743)
+The nonuniform pipeline allocates per-head budgets based on attention entropy (Algorithm 4). When per-head selections are highly disjoint across many KV heads, the union of selections exceeds the target token count. The pipeline truncates the union by aggregate score ranking (`src/llama-kv-compact-pipeline.cpp:707-760`). After truncation, many heads lose ALL their selected tokens (`head_fully_masked=true` at line 866). These heads get:
+- beta = -infinity for all positions (line 869)
+- V = all zeros (lines 881-882)
 
 At 8K with 4x compression on a model with many KV heads (DeepSeek-R1 has 8 KV heads per GQA group), the cascade causes the majority of heads to contribute zero attention weight, producing effectively random output.
 
 **Fix implemented:**
 After union truncation, count fully-masked heads. If >50% of heads are fully masked, fall back to `select` pipeline with `LLAMA_LOG_WARN`. This prevents catastrophic quality loss while preserving nonuniform benefits when head disjointness is moderate.
 
-**Code location:** `src/llama-kv-compact-pipeline.cpp`, after union truncation block (line ~658).
+**Code location:** `src/llama-kv-compact-pipeline.cpp`, after union truncation block (line ~768).
 
 ---
 
@@ -64,8 +64,8 @@ The compacted prefix `set_input_*` functions used host pointer swap (`dst->data 
 Replaced host pointer swap with `ggml_backend_tensor_set()` in all three `set_input_compacted_prefix_k/v/kq_b` functions. The staging buffer is materialized on host (cache hit or miss), then uploaded to the tensor's native backend via `ggml_backend_tensor_set()` which routes to Metal/CUDA/CPU automatically. Removed `require_host_or_direct_data()` checks from K/V/beta exec functions since the caller now guarantees host staging.
 
 **Code locations:**
-- `src/llama-kv-cache.cpp:2160-2203` (K), `2205-2248` (V), `2250-2295` (beta)
-- `src/llama-kv-compacted-prefix-exec.cpp:144-164` (K), `172-196` (V), `204-219` (beta)
+- `src/llama-kv-cache.cpp:2162-2205` (K), `2207-2250` (V), `2252-2297` (beta)
+- `src/llama-kv-compacted-prefix-exec.cpp:138-164` (K), `166-196` (V), `198-241` (beta)
 
 ---
 
@@ -74,16 +74,17 @@ Replaced host pointer swap with `ggml_backend_tensor_set()` in all three `set_in
 | Field | Value |
 |-------|-------|
 | **Severity** | Minor |
-| **Status** | OPEN |
+| **Status** | **PARTIALLY FIXED** — instrumentation added, re-verification pending with production model |
 | **Models affected** | Qwen3-30B-A3B at 4K (all ratios), 8K (4x, 8x) |
 | **Discovered** | 2026-03-14, ModelAI Phase D testing |
+| **Updated** | 2026-03-14, Phase 4.2 (commit `f3587d6b`) |
 | **Plan reference** | Phase 4.1 |
 
 **Symptoms:**
 - `compaction_time_ms`, `baseline_decode_tok_s`, `compacted_decode_tok_s` are null for some test points
 - These are the most commonly used context sizes
 
-**Fix:** Re-run benchmarks with timing instrumentation enabled for all test points.
+**Phase 4.2 update:** Per-stage timing instrumentation added to all pipelines (select, nonuniform, exact, hybrid) in commit `f3587d6b`. Timing fields (`k_extraction_time_ms`, `attention_score_time_ms`, `selection_time_ms`, `v_extraction_time_ms`, `kv_write_time_ms`, `total_time_ms`) are now always populated by the pipeline stats struct. The specific null timing at short contexts for Qwen3-30B-A3B needs re-verification with the production model.
 
 ---
 
@@ -92,9 +93,10 @@ Replaced host pointer swap with `ggml_backend_tensor_set()` in all three `set_in
 | Field | Value |
 |-------|-------|
 | **Severity** | Minor |
-| **Status** | OPEN |
+| **Status** | OPEN — profiling instrumentation in place, optimization deferred |
 | **Models affected** | All models |
 | **Discovered** | 2026-03-14, ModelAI Phase D testing |
+| **Updated** | 2026-03-14, Phase 4.2 (commit `f3587d6b`) |
 | **Plan reference** | Phase 4.2 |
 
 **Symptoms:**
@@ -103,6 +105,8 @@ Replaced host pointer swap with `ggml_backend_tensor_set()` in all three `set_in
 - 32K: 2633-3663ms (~3x for 2x context, 7x total)
 
 **Root cause:** The attention score computation in the select pipeline is O(n_prefix * n_queries * n_heads * n_layers). With n_queries proportional to context length, this becomes O(n^2). At 64K+, compaction could reach 10-15 seconds.
+
+**Phase 4.2 update:** Per-stage timing instrumentation added to all pipelines in commit `f3587d6b`. Timing fields break down into: `k_extraction_time_ms`, `attention_score_time_ms`, `selection_time_ms`, `v_extraction_time_ms`, `kv_write_time_ms`. The O(n^2) bottleneck is confirmed to be in the attention score computation stage (see `llama_kv_compact_stats` in `src/llama-kv-compact-pipeline.h:10-15`).
 
 **Fix strategy:** Profile to identify the dominant O(n^2) component. Consider capping n_queries or using chunked score computation.
 
@@ -124,7 +128,7 @@ Replaced host pointer swap with `ggml_backend_tensor_set()` in all three `set_in
 - All other test points > 0.99
 - Qwen3-14B at 16K/8x: 0.987 (also slightly below average)
 
-**Status:** Above the 0.95 threshold. Investigate in Phase 4.3 with additional test points (8K/6x, 8K/10x) to characterize the quality curve.
+**Status:** OPEN — above the 0.95 threshold. Investigation requires Qwen3-14B model runs, deferred to Phase 7. Will add test points (8K/6x, 8K/10x) to characterize the quality curve.
 
 ---
 
@@ -149,7 +153,7 @@ Replaced host pointer swap with `ggml_backend_tensor_set()` in all three `set_in
 
 **Impact on modelai:** Gemma3-12B is unusable for production. Must be listed as UNSUPPORTED.
 
-**Fork action (implemented):** Added `LLAMA_LOG_WARN` in `compacted_prefix_runtime_supported()` (src/llama-kv-cache.cpp:1123-1136) when SWA sub-cache is detected. Uses `std::atomic<bool>` with `exchange(true)` for thread-safe one-time warning (BUG-R02). Warning fires once per session, informing users that compaction only applies to the base (non-SWA) cache in iSWA models.
+**Fork action (implemented):** Added `LLAMA_LOG_WARN` in `compacted_prefix_runtime_supported()` (src/llama-kv-cache.cpp:1125-1138) when SWA sub-cache is detected. Uses `std::atomic<bool>` with `exchange(true)` for thread-safe one-time warning (BUG-R02). Warning fires once per session, informing users that compaction only applies to the base (non-SWA) cache in iSWA models.
 
 ---
 
@@ -283,4 +287,4 @@ Thorough code audit confirms the pp512 failure is NOT caused by fork changes:
 | **Upstream issue** | #12253 (CLOSED, completed Mar 2025) |
 | **Verification** | Code audit + integration test (TEST 5) |
 
-**Verification details:** `compacted_prefix_reclaim_live_kv()` at llama-kv-cache.cpp:731 checks `cells.get_has_shift()` and returns false when shift is pending. This prevents any interaction between compaction and shift bugs.
+**Verification details:** `compacted_prefix_reclaim_live_kv()` at llama-kv-cache.cpp:732 checks `cells.get_has_shift()` and returns false when shift is pending. This prevents any interaction between compaction and shift bugs.

@@ -3,7 +3,7 @@
 **Owner:** Ajay Jandhyala — ajay@model-ai.app (COT Labs / ModelAI)
 **Repository:** [jandhyala-dev/modelai-llama.cpp](https://github.com/jandhyala-dev/modelai-llama.cpp)
 **Branch:** `modelai-main`
-**Current Commit:** `3214e6e8`
+**Current Commit:** `f3587d6b`
 **Date:** 2026-03-14
 
 ---
@@ -111,7 +111,7 @@ where `C_k` and `C_v` are the compacted key/value matrices and `beta` is a per-l
 - **Machine:** Apple M2 Pro, 32GB unified memory
 - **OS:** macOS Darwin 25.3.0
 - **Backend:** Metal GPU (non-flash attention)
-- **Commit:** `3214e6e8` on `modelai-main`
+- **Commit:** `f3587d6b` on `modelai-main`
 
 ### Models Tested
 
@@ -260,6 +260,7 @@ Input: Full KV cache (T tokens)
 | `294a03b6` | Fix nonuniform budget infeasibility, add pipeline integration tests |
 | `302dcffa` | 3-way comparison benchmark (modelai vs llama.cpp vs Ollama) |
 | `3214e6e8` | Fix adversarial review findings, add Qwen3-30B financial benchmark |
+| `f3587d6b` | V1 implementation: Phase 1A–5 bug fixes, performance, tests, server hardening |
 
 ---
 
@@ -285,7 +286,7 @@ Input: Full KV cache (T tokens)
 
 ### Test Suite
 
-- **8 unit/integration test targets** — all passing
+- **51 unit/integration tests** — all passing (Phase 3 complete)
 - **33+ model-backed quality test points** — all above 0.97 cosine
 - **12 deep benchmark points** on Qwen3-30B-A3B (4K-32K, 2x-8x)
 - **3-way engine comparison** across 5 models
@@ -294,11 +295,18 @@ Input: Full KV cache (T tokens)
 
 All code reviewed under the [Hostile Review Protocol](docs/review-standards/hostile-review-protocol.md):
 
+- **V0:** 2 adversarial review cycles — CONDITIONAL PASS, all findings fixed
+- **V1 plan:** 2 adversarial review cycles plus implementer self-review — GO verdict
 - **Memory safety:** No buffer overflows, use-after-free, or uninitialized reads found
 - **Numerical stability:** Guarded divisions, max-subtraction in exp, retry-lambda in Cholesky
 - **Thread safety:** All pipelines single-threaded (consistent with llama.cpp design)
 - **Edge cases:** Validated at 1-token, 0-target, extreme compression ratios
-- **Verdict:** CONDITIONAL PASS → all findings fixed and committed
+
+### Server Integration Hardening (Phase 5)
+
+- `/compact` endpoint restricted to `select` pipeline via allowlist (configurable via `LLAMA_COMPACT_ALLOWED_METHODS`)
+- `/props` exposes `tested_envelope` — advisory quality bounds, not enforced
+- Flash attention warning fires after execution enabled, covers all beta-bearing pipelines
 
 ### Mandatory Testing-Review Loop
 
@@ -372,13 +380,21 @@ Full SQL schemas and Python import scripts are in `bench-results/README.md`.
 - [x] Supabase-ready structured results
 - [x] Adversarial review with all findings fixed
 
+### Completed (V1 Phases 1–5)
+
+- [x] Phase 1A: Critical bug fixes — BUG-I01 (nonuniform fallback), BUG-I02 (GPU-resident tensors), BUG-U01 (SWA warning)
+- [x] Phase 1B: Upstream bug sync — 6 upstream issues verified safe/compatible
+- [x] Phase 2: Performance bottlenecks B1/B2/B3/B5 resolved
+- [x] Phase 3: Test suite — 51 tests passing
+- [x] Phase 4.2: Per-stage timing instrumentation
+- [x] Phase 5: Server integration hardening — pipeline allowlist, tested_envelope, flash-attn warning
+- [x] V1 plan adversarial review — 2 cycles + implementer self-review, GO verdict
+
 ### Next Steps
 
 - [ ] 128K context validation (requires >32GB memory or chunked approach)
-- [ ] Phase D: Complete 28 use-case testing across all models
 - [ ] Flash attention support (zero-beta path)
 - [ ] SWA architecture support (Gemma3)
-- [ ] Server integration (llama-server compaction endpoints)
 - [ ] Public API for compaction triggers
 - [ ] Upstream contribution (Track B)
 

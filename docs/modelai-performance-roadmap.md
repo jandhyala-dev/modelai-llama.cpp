@@ -6,13 +6,15 @@ These are performance issues **inside the existing P5b code** that should be fix
 
 ### Critical Bottlenecks
 
-| # | Issue | Location | Impact | Fix Effort |
-|---|-------|----------|--------|------------|
-| **B1** | **Transposed V element-by-element extraction** — non-flash path reads one scalar at a time across non-contiguous strides | `src/llama-kv-cache.cpp:953-969` | O(head_dim) worse memory access pattern, terrible cache locality — single biggest solver bottleneck | Medium |
-| **B2** | **K/V extracted twice** — once during query scoring (Phase 1), again during fitting (Phase 2) | `src/llama-kv-compact-pipeline.cpp:90-111, 131-189` | 2x unnecessary I/O and type conversion overhead | Low |
-| **B3** | **Zero SIMD vectorization in solver** — all dot products, Cholesky decomposition, matrix multiply, and exp() are scalar loops | `src/llama-kv-compact-solver.cpp` (entire file, especially `dot_row` lines 10-16, normal equations lines 80-92, power iteration lines 154-206) | 4-8x slower than vectorized on Apple Silicon (ARM NEON vfmaq_f32) | Medium |
-| **B4** | **No GPU solver path** — forces host-device transfer of full K/V matrices per head per layer via `ggml_backend_tensor_get()` | All solver modules | Blocks pipeline on CPU even when KV cache lives on Metal GPU | High |
-| **B5** | **Graph tensors reallocated every batch** — compacted prefix K/V/beta/mask tensors created fresh each decode batch | `src/llama-graph.cpp:464-495` | Unnecessary allocation churn on every decode step | Low |
+| # | Issue | Location | Impact | Fix Effort | Status |
+|---|-------|----------|--------|------------|--------|
+| **B1** | **Transposed V element-by-element extraction** — non-flash path reads one scalar at a time across non-contiguous strides | `src/llama-kv-cache.cpp:953-969` | O(head_dim) worse memory access pattern, terrible cache locality — single biggest solver bottleneck | Medium | **DONE** |
+| **B2** | **K/V extracted twice** — once during query scoring (Phase 1), again during fitting (Phase 2) | `src/llama-kv-compact-pipeline.cpp:90-111, 131-189` | 2x unnecessary I/O and type conversion overhead | Low | **DONE** |
+| **B3** | **Zero SIMD vectorization in solver** — all dot products, Cholesky decomposition, matrix multiply, and exp() are scalar loops | `src/llama-kv-compact-solver.cpp` (entire file, especially `dot_row` lines 10-16, normal equations lines 80-92, power iteration lines 154-206) | 4-8x slower than vectorized on Apple Silicon (ARM NEON vfmaq_f32) | Medium | **DONE** |
+| **B4** | **No GPU solver path** — forces host-device transfer of full K/V matrices per head per layer via `ggml_backend_tensor_get()` | All solver modules | Blocks pipeline on CPU even when KV cache lives on Metal GPU | High | **DEFERRED** — requires Metal compute shader development, out of V1 scope |
+| **B5** | **GPU-resident tensor upload** — compacted prefix K/V/beta/mask tensors uploaded to backend | `src/llama-graph.cpp:464-495` | Staging buffer materialized on host, then uploaded to tensor's native backend via `ggml_backend_tensor_set()` | Low | **DONE** (Phase 1A, commit `3d5132b1`) |
+
+**Note:** Per-stage timing instrumentation was added in V1 (Phase 4.2, commit `f3587d6b`) to identify the O(n^2) bottleneck in attention score computation.
 
 ### Recommended Quick Wins
 
@@ -190,21 +192,21 @@ All items below are scoped to land **before P5b merges**. Items marked POST-P5b 
 
 These fix bottlenecks in existing P5b code. No new features, just making existing code production-viable.
 
-**1a. Eliminate dual K/V extraction**
+**1a. Eliminate dual K/V extraction** — DONE (V1)
 - File: `src/llama-kv-compact-pipeline.cpp`
 - Change: Extract K/V per-head in Phase 1 (query scoring), store in temporary buffers, pass to Phase 2 (fitting) instead of re-extracting
 - Why now: 2x unnecessary I/O is unacceptable for the benchmark proof gate
 - Effort: Low (refactor pipeline data flow)
 - Test: Existing solver + quality tests must still pass; pipeline timing should drop ~40-50%
 
-**1b. Batch transposed V extraction**
+**1b. Batch transposed V extraction** — DONE (V1)
 - File: `src/llama-kv-cache.cpp`, function `compacted_prefix_copy_v_head_f32` (lines 953-969)
 - Change: Read full V column per element dimension in one `ggml_backend_tensor_get` call (stride = kv_size * type_size), then scatter to output buffer — instead of one element at a time
 - Why now: Element-by-element extraction is the single largest solver bottleneck
 - Effort: Medium (need to handle backend buffer alignment)
 - Test: Existing V extraction tests must produce identical results
 
-**1c. NEON vectorization of hot solver loops**
+**1c. NEON vectorization of hot solver loops** — DONE (V1)
 - File: `src/llama-kv-compact-solver.cpp`
 - Change: Replace scalar `dot_row` (lines 10-16) with ARM NEON `vfmaq_f32` 4-wide FMA. Add `#ifdef __ARM_NEON__` guard with scalar fallback.
 - Why now: 4-8x speedup on Apple Silicon for the solver math that runs per-head per-layer

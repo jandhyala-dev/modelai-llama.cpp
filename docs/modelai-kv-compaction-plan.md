@@ -54,16 +54,18 @@ The plan assumes the following current `llama.cpp` realities:
 
 ## Milestone Overview
 
-| PR | Branch | Scope |
-|---|---|---|
-| PR-0 | `kv-compact-pr0-docs` | Docs baseline and governance |
-| PR-1 | `kv-compact-pr1-observability` | Capability flags and observability |
-| PR-2 | `kv-compact-pr2-memory-arch` | Compacted-prefix memory architecture |
-| PR-3 | `kv-compact-pr3-correctness` | Non-flash correctness path |
-| PR-4 | `kv-compact-pr4-session-state` | Session and state integration |
-| PR-5a | `kv-compact-pr5-performance` | Runtime reclaim and perf slice |
-| PR-5b | `kv-compact-pr5b-solver-pipeline` | Solver-derived compaction pipeline |
-| PR-6 | `kv-compact-pr6-coverage` | Coverage expansion |
+| PR | Branch | Scope | Status |
+|---|---|---|---|
+| PR-0 | `kv-compact-pr0-docs` | Docs baseline and governance | DONE |
+| PR-1 | `kv-compact-pr1-observability` | Capability flags and observability | DONE |
+| PR-2 | `kv-compact-pr2-memory-arch` | Compacted-prefix memory architecture | DONE |
+| PR-3 | `kv-compact-pr3-correctness` | Non-flash correctness path | DONE |
+| PR-4 | `kv-compact-pr4-session-state` | Session and state integration | DONE |
+| PR-5a | `kv-compact-pr5-performance` | Runtime reclaim and perf slice | DONE |
+| PR-5b | `kv-compact-pr5b-solver-pipeline` | Solver-derived compaction pipeline | DONE |
+| PR-6 | `kv-compact-pr6-coverage` | Coverage expansion | DONE |
+
+See `docs/modelai-v1-implementation-plan.md` (commit `2e43e9c8`) for the complete V1 plan covering Phases 3-7.
 
 ## PR-0: Docs Baseline And Governance
 
@@ -462,6 +464,15 @@ Broaden support after the narrow path works.
 - improved query-generation paths such as self-study and OMP
 
 Each added path must have isolated tests and benchmark evidence.
+
+**Deferred items**
+
+The following items are deferred from the v0 milestone with explicit reasons:
+
+- **B4: GPU solver path** — requires Metal compute shader development; CPU solver is sufficient for v0 matrix sizes
+- **FlashBias** — blocked on arXiv:2505.12044 implementation; flash path does not support additive `kq_b` today
+- **SWA full support** — blocked on upstream Gemma3-12B decode performance; split-memory compaction requires stable baseline
+- **Paper gaps for 50x compression** — research-grade work (advanced query generation, OMP selection, per-layer nonuniform schedules); deferred to PR-6a/6b/6c
 
 ## Benchmark Workloads
 
