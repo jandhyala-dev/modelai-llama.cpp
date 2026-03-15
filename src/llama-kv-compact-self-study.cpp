@@ -1,5 +1,6 @@
 #include "llama-kv-compact-self-study.h"
 #include "llama-kv-compact-select.h"
+#include "llama-kv-compact-solver-metal.h"
 #include "llama-kv-cache.h"
 #include "llama-kv-compacted-prefix.h"
 #include "llama-context.h"
@@ -573,6 +574,9 @@ bool llama_kv_compact_self_study_from_live_kv(
 
     // --- Phase 2: Score + select ---
     // For each layer/head: regroup Q, subsample, extract K, accumulate scores.
+    // Use Metal GPU when available for attention score computation.
+    auto * metal_ctx = llama_kv_compact_metal_create();
+
     std::vector<float> aggregate_scores(n_prefix_tokens, 0.0f);
 
     struct head_cache_entry {
@@ -640,12 +644,32 @@ bool llama_kv_compact_self_study_from_live_kv(
                 }
             }
 
-            // Accumulate attention scores
-            llama_kv_compact_accumulate_attention_scores(
-                    entry.queries, entry.k, aggregate_scores);
+            // Accumulate attention scores (GPU when available, CPU fallback).
+            if (metal_ctx) {
+                std::vector<float> head_scores(n_prefix_tokens, 0.0f);
+                if (llama_kv_compact_metal_attention_scores(
+                            metal_ctx,
+                            entry.queries.data.data(), entry.queries.rows, entry.queries.cols,
+                            entry.k.data.data(), entry.k.rows,
+                            head_scores.data())) {
+                    for (uint32_t ki = 0; ki < n_prefix_tokens; ++ki) {
+                        aggregate_scores[ki] += head_scores[ki];
+                    }
+                } else {
+                    // GPU failed — fall back to CPU for this head.
+                    llama_kv_compact_accumulate_attention_scores(
+                            entry.queries, entry.k, aggregate_scores);
+                }
+            } else {
+                llama_kv_compact_accumulate_attention_scores(
+                        entry.queries, entry.k, aggregate_scores);
+            }
         }
     }
     const auto t_query_end = std::chrono::steady_clock::now();
+
+    llama_kv_compact_metal_free(metal_ctx);
+    metal_ctx = nullptr;
 
     // Global selection: top-k across aggregated scores
     const std::vector<uint32_t> selected_local = llama_kv_compact_select_topk(aggregate_scores, n_selected);
