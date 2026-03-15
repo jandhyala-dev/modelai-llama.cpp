@@ -22,6 +22,12 @@ struct llama_kv_compact_self_study_config {
     // Multi-round diversity (V2 — GAP-03)
     uint32_t n_rounds                = 3;      // generation rounds with different temperatures
     float    temperatures[LLAMA_KV_COMPACT_MAX_ROUNDS] = {0.6f, 0.8f, 1.0f};  // per-round sampling temperature
+
+    // Memory budget for Q-capture (V2 — M-01 fix).
+    // Auto-reduces n_generate/n_rounds at runtime if the projected Q-capture
+    // allocation would exceed this limit.  Prevents OOM on ≤16 GB machines.
+    // Set to 0 to disable the guard (not recommended).
+    uint32_t max_q_capture_mb = 1024;  // 1 GB default
 };
 
 // Statistics output
@@ -120,7 +126,8 @@ bool llama_kv_compact_self_study_generate(
         llama_q_capture_state & q_state,
         uint32_t n_generate,
         llama_seq_id seq_id,
-        float temperature = 0.0f);
+        float temperature = 0.0f,
+        uint32_t seed = 42);
 
 // ---------------------------------------------------------------------------
 // GQA regrouping + subsampling (slice 6b-3)

@@ -161,6 +161,13 @@ bool omp_solve_nnls(
         B_out[i] = sum / L[size_t(i) * t + uint32_t(i)];
     }
 
+    // Check solution validity before clamping.
+    for (uint32_t i = 0; i < t; ++i) {
+        if (!std::isfinite(B_out[i])) {
+            return false;
+        }
+    }
+
     // Clamp to non-negative
     for (float & w : B_out) {
         w = std::max(w, lower_bound);
@@ -318,9 +325,12 @@ std::vector<uint32_t> llama_kv_compact_select_omp(
             // Use partial sort to find the top candidates efficiently.
             std::vector<uint32_t> candidates(T);
             std::iota(candidates.begin(), candidates.end(), 0);
+            // partial_sort only needs to find the top k_select candidates.
+            // Masked keys have corr=-inf and sort to the end, so k_select
+            // unmasked candidates will be in the first k_select positions.
             std::partial_sort(
                 candidates.begin(),
-                candidates.begin() + std::min(k_select + i, T),
+                candidates.begin() + std::min(k_select, T),
                 candidates.end(),
                 [&](uint32_t a, uint32_t b) { return corr[a] > corr[b]; });
 

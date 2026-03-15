@@ -227,21 +227,29 @@ bool llama_kv_compact_load_budget_json(
         }
 
         // Parse layer and head from "LxHy".
+        // Require at least one digit each for layer and head, and the entire
+        // key must be consumed (reject "L0H0foo" or "LH0").
         uint32_t layer = 0;
         uint32_t head = 0;
         const char * kp = quote1 + 2; // after "L"
+        const char * layer_start = kp;
         while (kp < quote2 && *kp >= '0' && *kp <= '9') {
             layer = layer * 10 + (*kp - '0');
             kp++;
         }
-        if (kp >= quote2 || *kp != 'H') {
+        if (kp == layer_start || kp >= quote2 || *kp != 'H') {
             p = quote2 + 1;
             continue;
         }
         kp++; // skip 'H'
+        const char * head_start = kp;
         while (kp < quote2 && *kp >= '0' && *kp <= '9') {
             head = head * 10 + (*kp - '0');
             kp++;
+        }
+        if (kp == head_start || kp != quote2) {
+            p = quote2 + 1;
+            continue;
         }
 
         // Find colon + value.

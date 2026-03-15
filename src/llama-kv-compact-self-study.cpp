@@ -155,12 +155,23 @@ static llama_token sample_with_temperature(
     const float inv_temp = 1.0f / temperature;
     float max_logit = *std::max_element(logits, logits + n_vocab);
 
+    // Guard: if all logits are -inf, softmax produces NaN — fall back to argmax.
+    if (!std::isfinite(max_logit)) {
+        return (llama_token)(std::max_element(logits, logits + n_vocab) - logits);
+    }
+
     std::vector<float> probs(n_vocab);
     float sum = 0.0f;
     for (int32_t i = 0; i < n_vocab; ++i) {
         probs[i] = std::exp((logits[i] - max_logit) * inv_temp);
         sum += probs[i];
     }
+
+    // Guard: degenerate softmax (sum == 0 or NaN) — fall back to argmax.
+    if (sum <= 0.0f || !std::isfinite(sum)) {
+        return (llama_token)(std::max_element(logits, logits + n_vocab) - logits);
+    }
+
     const float inv_sum = 1.0f / sum;
     for (int32_t i = 0; i < n_vocab; ++i) {
         probs[i] *= inv_sum;
@@ -175,7 +186,8 @@ bool llama_kv_compact_self_study_generate(
         llama_q_capture_state & q_state,
         uint32_t n_generate,
         llama_seq_id seq_id,
-        float temperature) {
+        float temperature,
+        uint32_t seed) {
 
     // llama_batch_get_one() hardcodes sequence 0 (llama.h).
     // Until we build batches manually, enforce this precondition.
@@ -219,8 +231,8 @@ bool llama_kv_compact_self_study_generate(
         return false;
     }
 
-    // Use a fixed seed for reproducibility; temperature provides diversity across rounds.
-    std::mt19937 rng(42);
+    // Per-round seed provides diversity across rounds (M-01/m-02 fix).
+    std::mt19937 rng(seed);
     llama_token token = sample_with_temperature(logits, n_vocab, temperature, rng);
 
     // 4. Autoregressive generation loop
@@ -495,17 +507,47 @@ bool llama_kv_compact_self_study_from_live_kv(
     const uint32_t n_embd_head = model_hparams.n_embd_head_k(0);
     const uint32_t n_head_q    = model_hparams.n_head(0);
 
-    const uint32_t n_rounds = std::max(1u, std::min(config.n_rounds, (uint32_t) LLAMA_KV_COMPACT_MAX_ROUNDS));
-    const uint32_t total_generate = config.n_generate * n_rounds;
+    uint32_t eff_n_rounds = std::max(1u, std::min(config.n_rounds, (uint32_t) LLAMA_KV_COMPACT_MAX_ROUNDS));
+    uint32_t eff_n_generate = config.n_generate;
+
+    // Memory budget guard (M-01 fix).
+    // Q-capture stores all layers simultaneously during decode:
+    //   n_layer * n_tokens * n_head_q * n_embd_head * sizeof(float)
+    // For Qwen3-14B with defaults (6000 tokens): 40*6000*40*128*4 = 4.9 GB.
+    // Auto-reduce n_generate/n_rounds to stay within budget.
+    if (config.max_q_capture_mb > 0) {
+        const size_t bytes_per_token = (size_t)n_layer * n_head_q * n_embd_head * sizeof(float);
+        const size_t budget_bytes = (size_t)config.max_q_capture_mb * 1024 * 1024;
+        const size_t requested_bytes = bytes_per_token * eff_n_generate * eff_n_rounds;
+
+        if (requested_bytes > budget_bytes && bytes_per_token > 0) {
+            const uint32_t max_total_tokens = (uint32_t)(budget_bytes / bytes_per_token);
+
+            // Try to keep n_rounds, reduce n_generate first.
+            eff_n_generate = std::max(1u, max_total_tokens / eff_n_rounds);
+            if (eff_n_generate < 100 && eff_n_rounds > 1) {
+                // Per-round tokens too low — reduce rounds instead.
+                eff_n_rounds = std::max(1u, max_total_tokens / config.n_generate);
+                eff_n_generate = std::max(1u, max_total_tokens / eff_n_rounds);
+            }
+            LLAMA_LOG_WARN("self-study: Q-capture memory guard — reduced from %u×%u to %u×%u tokens "
+                           "(%u MB budget, %.2f MB/token)\n",
+                           config.n_generate, config.n_rounds, eff_n_generate, eff_n_rounds,
+                           config.max_q_capture_mb,
+                           (float)bytes_per_token / (1024.0f * 1024.0f));
+        }
+    }
+
+    const uint32_t total_generate = eff_n_generate * eff_n_rounds;
 
     llama_q_capture_state q_state;
     q_state.reset((int32_t)n_layer, n_embd_head, n_head_q, total_generate);
 
     const auto t_gen_start = std::chrono::steady_clock::now();
     bool any_generated = false;
-    for (uint32_t round = 0; round < n_rounds; ++round) {
+    for (uint32_t round = 0; round < eff_n_rounds; ++round) {
         const float temp = config.temperatures[round];
-        if (llama_kv_compact_self_study_generate(ctx, q_state, config.n_generate, seq_id, temp)) {
+        if (llama_kv_compact_self_study_generate(ctx, q_state, eff_n_generate, seq_id, temp, 42 + round)) {
             any_generated = true;
         } else if (round == 0) {
             // First round must succeed; subsequent rounds are best-effort.
