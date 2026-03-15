@@ -8,6 +8,7 @@
 #include "llama-context.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cassert>
 #include <cmath>
 #include <cstring>
@@ -1124,13 +1125,12 @@ bool llama_kv_cache::compacted_prefix_runtime_supported() const {
     // When used as kv_base inside llama_kv_cache_iswa, this instance has
     // n_swa=0 and swa_type=NONE even though the model has SWA layers.
     if (n_swa > 0 || swa_type != LLAMA_SWA_TYPE_NONE) {
-        static bool warned_swa = false;
-        if (!warned_swa) {
+        static std::atomic<bool> warned_swa{false};
+        if (!warned_swa.exchange(true)) {
             LLAMA_LOG_WARN("%s: compacted prefix not supported for SWA sub-cache "
                            "(n_swa=%u, swa_type=%d) — models like Gemma3 use iSWA; "
                            "compaction only applies to the base (non-SWA) cache\n",
                            __func__, n_swa, (int)swa_type);
-            warned_swa = true;
         }
         return false;
     }
@@ -1142,11 +1142,10 @@ bool llama_kv_cache::compacted_prefix_runtime_supported() const {
     // reclaim_live_kv would destroy prefix KV cells that can_execute will later
     // refuse to serve — causing catastrophic context loss.
     if (hparams.n_pos_per_embd() > 1) {
-        static bool warned = false;
-        if (!warned) {
+        static std::atomic<bool> warned{false};
+        if (!warned.exchange(true)) {
             LLAMA_LOG_WARN("%s: compacted prefix not supported for M-RoPE models (n_pos_per_embd=%u)\n",
                            __func__, hparams.n_pos_per_embd());
-            warned = true;
         }
         return false;
     }
@@ -2189,10 +2188,16 @@ void llama_kv_cache::set_input_compacted_prefix_k(ggml_tensor * dst, int32_t il,
     }
 
     // Cache miss: materialize into host staging buffer, then upload.
+    // RAII guard ensures dst->data is restored even if exec throws.
     cp_cache.k_bytes[ikv].resize(nbytes);
     void * original_data = dst->data;
     dst->data = cp_cache.k_bytes[ikv].data();
-    llama_compacted_prefix_set_input_k(dst, state->layers[ikv]);
+    try {
+        llama_compacted_prefix_set_input_k(dst, state->layers[ikv]);
+    } catch (...) {
+        dst->data = original_data;
+        throw;
+    }
     dst->data = original_data;
     ggml_backend_tensor_set(dst, cp_cache.k_bytes[ikv].data(), 0, nbytes);
 }
@@ -2228,10 +2233,16 @@ void llama_kv_cache::set_input_compacted_prefix_v(ggml_tensor * dst, int32_t il,
     }
 
     // Cache miss: materialize into host staging buffer, then upload.
+    // RAII guard ensures dst->data is restored even if exec throws.
     cp_cache.v_bytes[ikv].resize(nbytes);
     void * original_data = dst->data;
     dst->data = cp_cache.v_bytes[ikv].data();
-    llama_compacted_prefix_set_input_v(dst, state->layers[ikv]);
+    try {
+        llama_compacted_prefix_set_input_v(dst, state->layers[ikv]);
+    } catch (...) {
+        dst->data = original_data;
+        throw;
+    }
     dst->data = original_data;
     ggml_backend_tensor_set(dst, cp_cache.v_bytes[ikv].data(), 0, nbytes);
 }
@@ -2268,10 +2279,16 @@ void llama_kv_cache::set_input_compacted_prefix_kq_b(ggml_tensor * dst, int32_t 
     }
 
     // Cache miss: materialize into host staging buffer, then upload.
+    // RAII guard ensures dst->data is restored even if exec throws.
     cp_cache.beta_bytes[ikv].resize(nbytes);
     void * original_data = dst->data;
     dst->data = cp_cache.beta_bytes[ikv].data();
-    llama_compacted_prefix_set_input_beta(dst, state->layers[ikv], hparams.n_head(il));
+    try {
+        llama_compacted_prefix_set_input_beta(dst, state->layers[ikv], hparams.n_head(il));
+    } catch (...) {
+        dst->data = original_data;
+        throw;
+    }
     dst->data = original_data;
     ggml_backend_tensor_set(dst, cp_cache.beta_bytes[ikv].data(), 0, nbytes);
     cp_cache.beta_n_tps = n_tps;
