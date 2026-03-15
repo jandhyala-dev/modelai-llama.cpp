@@ -1,9 +1,20 @@
-# ModelAI llama.cpp — V1 Implementation Plan
+# ModelAI llama.cpp — V1 Implementation Plan (Revised)
 
+**Plan commit:** `(this commit)`
+**Previous plan commit:** `555fb98e`
 **Base commit:** `5b6bf6eb` (modelai-main)
 **Upstream base:** `0cd4f472` (upstream-master)
 **Date:** 2026-03-14
 **Owner:** Ajay Jandhyala — ajay@model-ai.app
+
+## Revision History
+
+| Date | Change |
+|------|--------|
+| 2026-03-14 (v1) | Initial V1 plan: 7 phases, upstream sync + performance + 128K + architecture |
+| 2026-03-14 (v2) | Incorporated ModelAI Phase D findings (2 Major, 3 Minor), live benchmark critical bug (nonuniform cosine 0.211), 80+ findings from 44 review files. Updated status of B1/B2/B3 to DONE. Added Phase 1A for critical bugs. Added GitHub open issue scan results. |
+
+---
 
 ## Status Summary
 
@@ -27,6 +38,7 @@
 | Adversarial review (2 cycles) | DONE/PASS | `df895bed` |
 | 3-way benchmark (modelai vs llama.cpp vs Ollama) | DONE | `5b6bf6eb` |
 | Server integration (`/compact`, `/props`, `/metrics`) | DONE | In PR-1 + post-6b |
+| Pipeline integration tests (upstream verify) | DONE | `(this commit)` |
 
 ### What V0 Modified in Upstream Files (20 files)
 
@@ -53,90 +65,142 @@
 | `tools/server/server.cpp` | POST `/compact` HTTP endpoint registration |
 | `tools/server/tests/unit/test_basic.py` | ModelAI contract, capabilities, metrics assertions |
 
-### What V0 Did NOT Complete (Outstanding)
-
-These items were planned or identified but not implemented:
-
 ---
 
 ## V1 Implementation Plan
 
-### Phase 1: Upstream Bug Sync (Critical)
+### Phase 1A: Critical Bug Fixes (BLOCKING — must fix before any beta use)
 
-These are bugs/changes in upstream llama.cpp that directly affect compaction correctness and must be verified or synced.
+#### 1A.1 CRITICAL: Nonuniform Pipeline Produces Random Output at 8K
 
-#### 1.1 KV Cache Defrag Bug (PR #10873)
+**Evidence:** Live benchmark at `df895bed`: DeepSeek-R1-14B at 8K/4x nonuniform → cosine 0.211 (near-random). All `select` pipeline tests pass (0.993-0.999).
+**Source:** `MODELAI_COMPREHENSIVE_REVIEW_AND_RECOMMENDATIONS.md`
+**Root cause analysis:** When per-head selections are highly disjoint, the union truncation (pipeline.cpp:606-656) causes many heads to lose ALL their selected tokens. Heads with `head_fully_masked=true` get zero V and -inf beta. At 8K with 4x compression on a model with many KV heads, this cascade can make the majority of heads contribute zero, producing effectively random output.
+**Fix strategy:**
+1. Add a fallback: when union truncation would mask >50% of heads entirely, fall back to the standard `select` pipeline (global top-k).
+2. Alternatively, use iterative re-allocation: after union truncation, re-assign masked heads' budgets to surviving heads and re-select.
+3. Add a quality guard: compute a quick cosine check after nonuniform and reject if below 0.5, falling back to select.
+**Files:** `src/llama-kv-compact-pipeline.cpp` (lines 490-773)
+**Test:** Run nonuniform on DeepSeek-R1-14B at 8K/4x. Must produce cosine >= 0.90.
+**Immediate mitigation:** Document that only the `select` pipeline should be exposed to production/beta users.
+
+#### 1A.2 MAJOR: modelai llama-bench Fails at pp512 for DeepSeek-R1-14B
+
+**Evidence:** Upstream llama-bench succeeds at pp512 (171.4 tok/s). modelai fork fails.
+**Source:** `MODELAI_COMPREHENSIVE_REVIEW_AND_RECOMMENDATIONS.md`
+**Root cause:** Unknown — may be related to compaction code inserting hooks or callbacks that interfere with pure prefill benchmarking on DeepSeek architecture.
+**Action:** Run llama-bench with LLAMA_LOG_LEVEL=debug. Compare model load and graph build paths between modelai and upstream. Check if `cb_eval` callback registration or compacted prefix store initialization is interfering.
+**Files:** `src/llama-context.cpp`, `src/llama-kv-cache.cpp` (constructor)
+**Test:** `llama-bench -m DeepSeek-R1-14B-Q4_K_M.gguf -p 512 -n 0 -r 3`
+
+#### 1A.3 MAJOR: Compacted Decode Throughput Regression at 32K
+
+**Evidence:** Qwen3-30B-A3B at 32K: baseline decode 6.8 tok/s → compacted decode 2.0 tok/s at 2x compression. Fewer KV entries should be faster, not 3.4x slower.
+**Source:** `MODELAI_PHASE_D_IMPROVEMENT_PROMPT.md`, `MODELAI_COMPREHENSIVE_REVIEW_AND_RECOMMENDATIONS.md`
+**Root cause hypothesis:** The compacted prefix attention path in `llama-graph.cpp` may have suboptimal memory access patterns — reading from the compacted prefix store (CPU memory) instead of the GPU KV buffer. Or the tensor materialization per decode batch is not cached properly for the 32K case.
+**Action:** Profile decode with and without compacted prefix at 32K. Check if the compacted attention graph node causes a Metal GPU→CPU sync stall.
+**Files:** `src/llama-graph.cpp` (attention path), `src/llama-kv-compacted-prefix-exec.cpp`
+**Test:** Decode throughput after 2x compaction at 32K must be >= 80% of baseline.
+
+#### 1A.4 MAJOR: Gemma3-12B SWA Decode is 20x Slower Than Ollama
+
+**Evidence:** Gemma3-12B decode: 0.7-0.8 tok/s on llama.cpp/modelai vs 16.5 tok/s on Ollama.
+**Source:** `MODELAI_PHASE_D_IMPROVEMENT_PROMPT.md`, `MODELAI_COMPREHENSIVE_REVIEW_AND_RECOMMENDATIONS.md`
+**Note:** This is an UPSTREAM llama.cpp bug, not specific to modelai fork. Both llama.cpp and modelai show the same poor decode.
+**Action:** For V1, add a runtime guard in `compacted_prefix_runtime_supported()` that logs a clear warning when an SWA model is loaded. Update the support matrix to list Gemma3-12B as UNSUPPORTED with the SWA reason.
+**Immediate mitigation:** Document Gemma3-12B as unsupported in ModelAI admin portal.
+
+---
+
+### Phase 1B: Upstream Bug Sync Verification
+
+#### 1B.1 KV Cache Defrag Bug (PR #10873)
 
 **Issue:** Defrag can corrupt KV data, directly affecting compaction reliability.
-**Status:** PR #10873 was from the old ggerganov/llama.cpp repo. Upstream has since had a major defrag refactor:
-- `#13988` — refactored defrag mechanism
-- `#14081` — fixed shift and defrag logic
-- `#14189` — fixed use-after-move
-- `#15473` — removed KV cache defragmentation logic entirely
+**Upstream status:** PR #10873 (OPEN, stale since Dec 2024). Upstream removed defrag entirely (`#15473`).
+**Fork status:** VERIFIED — compaction works without defrag. Integration test `test-kv-compact-pipeline-integration` (TEST 4) confirms compaction succeeds and produces correct logits without any defrag pass.
+**Code audit:** No compaction code calls defrag. `compacted_prefix_reclaim_live_kv()` uses `llama_kv_cache_seq_rm()` (direct cell removal), not defrag.
+**Risk:** LOW — defrag is gone. If #10873 eventually merges with a new auto-defrag mechanism, retest.
 
-**Action:** Verify our fork correctly handles the defrag removal at `#15473`. Since we track upstream-master, this should be inherited. **Test:** Confirm compaction works correctly without defrag. Write a test that compacts, then verifies data integrity.
+#### 1B.2 KV Cells Unified Refactor (PR #11213, #12695)
 
-#### 1.2 KV Cells Unified Refactor (PR #11213, #12695)
+**Issue:** Core data structure change — KV cell iteration API.
+**Upstream status:** #11213 was CLOSED without merge (decomposed into smaller PRs). #12695 MERGED (Apr 2025) — simplified KV guard, proper return codes, state restore on failure.
+**Fork status:** VERIFIED — compaction code uses the current cell API:
+- `used_max_p1()` for iteration upper bound (llama-kv-cache.cpp:956, 1015)
+- `is_empty(idx)` for emptiness check (llama-kv-cache.cpp:957, 1016)
+- `seq_has(idx, seq_id)` for sequence membership (llama-kv-cache.cpp:957, 1016)
+- `pos_get(idx)` for position retrieval (llama-kv-cache.cpp:958, 1017)
+**Integration test:** TEST 7 in `test-kv-compact-pipeline-integration` verifies K/V extraction produces correct-size, all-finite data for all positions.
 
-**Issue:** Core data structure change — all KV cell iteration code must adapt.
-**Status:** `#12695` is in our upstream-master (`a10b36c9`). `#11213` may have been superseded.
-**Action:** Verify our compaction code iterates KV cells using the refactored API. Audit `src/llama-kv-cache.cpp` compaction methods for any stale cell iteration patterns.
-**Risk:** HIGH — if our code uses old cell iteration, it may silently produce wrong results.
+#### 1B.3 SWA KV Cache Support (PR #13194)
 
-#### 1.3 SWA KV Cache Support (PR #13194)
+**Issue:** Structural changes to KV allocation and eviction for SWA models.
+**Upstream status:** #13194 MERGED (May 2025). Added `llama_kv_cache_unified_iswa`, moved mask/store/view logic into cache.
+**Fork status:** VERIFIED — `compacted_prefix_runtime_supported()` at llama-kv-cache.cpp:1122-1147 checks:
+```cpp
+if (n_swa > 0 || swa_type != LLAMA_SWA_TYPE_NONE) { return false; }
+```
+This check operates on instance-level `n_swa`, not model-level `hparams`. When used as `kv_base` inside `llama_kv_cache_iswa`, the base cache has `n_swa=0` so compaction works for the global-attention portion. The SWA sub-cache correctly rejects compaction.
+**Integration test:** TEST 2 in `test-kv-compact-pipeline-integration`.
+**V1 action:** Phase 4.2 will extend compaction to work on iSWA base cache for SWA models.
 
-**Issue:** Structural changes to KV allocation and eviction.
-**Status:** `#13194` is in our upstream-master (`e298d2fb`). Our V0 explicitly rejects SWA (`n_swa > 0`).
-**Action:** For V1, implement SWA-aware compaction (Phase 4). For now, verify the rejection logic still works correctly with the new SWA code.
+#### 1B.4 Unified KV Buffer Default (Issue #17450)
 
-#### 1.4 Unified KV Buffer Default (Issue #17450)
+**Issue:** `kv_unified=true` is now default — could change KV layout.
+**Upstream status:** #17450 was CLOSED (not planned, cosmetic). Related commits in upstream settled on unified as default.
+**Fork status:** VERIFIED — `test-kv-compact-quality.cpp` runs with `params.kv_unified = true` (line 60). All quality tests pass with unified KV. The new `test-kv-compact-pipeline-integration` also uses `kv_unified=true` (line 89).
+**Integration test:** TEST 1 in `test-kv-compact-pipeline-integration`.
 
-**Issue:** `kv_unified=true` is now default — could change KV layout assumptions.
-**Status:** Related commits in upstream: `#16736`, `#18117`, `#18716`, `#19145`.
-**Action:** Test compaction with unified KV enabled (it should be the default now). Verify `compacted_prefix_copy_k_head_f32` and `copy_v_head_f32` work correctly with unified layout.
+#### 1B.5 KV Cache Shift/Defrag Correctness (Issue #12253)
 
-#### 1.5 KV Cache Shift/Defrag Correctness (Issue #12253)
-
-**Issue:** Prevents data loss during defrag/shift operations.
-**Status:** Addressed by upstream refactor and defrag removal (`#15473`).
-**Action:** Verify compacted prefix state survives shift operations. Write test: compact → shift → verify cosine similarity.
+**Issue:** CPU-backend defrag corruption.
+**Upstream status:** #12253 CLOSED (completed, Mar 2025). Fix is in upstream master.
+**Fork status:** VERIFIED — `compacted_prefix_reclaim_live_kv()` at llama-kv-cache.cpp:731 has a shift guard:
+```cpp
+if (cells.get_has_shift()) { return false; }
+```
+Compaction refuses to operate when KV shift is pending, preventing any interaction with shift-related bugs.
+**Integration test:** TEST 5 in `test-kv-compact-pipeline-integration` verifies reclaim behavior and no-crash on double-reclaim.
 
 ---
 
 ### Phase 2: Performance Bottleneck Fixes
 
-From `docs/modelai-performance-roadmap.md` Part 1 — these are known internal bottlenecks.
+From `docs/modelai-performance-roadmap.md` Part 1.
 
-#### 2.1 B1: Batch Transposed V Extraction
+#### 2.1 B1: Batch Transposed V Extraction — DONE
 
-**Current:** `compacted_prefix_copy_v_head_f32` reads one scalar at a time across non-contiguous strides.
-**Fix:** Read full V columns per element dimension in one `ggml_backend_tensor_get` call, then scatter to output buffer.
-**Files:** `src/llama-kv-cache.cpp` (lines ~953-969)
-**Impact:** Single biggest solver bottleneck. Should reduce compaction time by 30-50%.
-**Test:** Existing V extraction tests must produce identical results.
+**Status:** IMPLEMENTED in llama-kv-cache.cpp:1043-1079.
+**Implementation:** Batch row extraction reads one full V-dimension row per `ggml_backend_tensor_get` call (O(head_dim) calls), then scatters per-position values from the dequantized row. This replaces the O(positions × head_dim) element-by-element approach.
+**Code:** llama-kv-cache.cpp:1053-1079 (transposed V path with `kv_size` block-alignment assertion).
+**Verification:** All quality tests pass. Performance improvement confirmed in pipeline timing.
 
-#### 2.2 B2: Eliminate Dual K/V Extraction
+#### 2.2 B2: Eliminate Dual K/V Extraction — DONE
 
-**Current:** K/V extracted once during query scoring (Phase 1), again during fitting (Phase 2).
-**Fix:** Extract K/V per-head in Phase 1, store in temporary buffers, pass to Phase 2.
-**Files:** `src/llama-kv-compact-pipeline.cpp` (lines ~90-111, 131-189)
-**Impact:** 2x unnecessary I/O eliminated.
-**Test:** Pipeline timing should drop ~40-50%. Quality tests must still pass.
+**Status:** IMPLEMENTED in llama-kv-compact-pipeline.cpp:67-71.
+**Implementation:** `head_cache_entry` struct caches K and queries extracted in Phase 1. Phase 2 (solver) reuses these cached values. V is still extracted in Phase 2 (not cached, to save memory — only the selected positions need V).
+**Code:** llama-kv-compact-pipeline.cpp:106-138 (Phase 1 cache fill), lines 159-218 (Phase 2 reuse).
+**Verification:** Pipeline timing shows Phase 2 K extraction eliminated.
 
-#### 2.3 B3: NEON Vectorization of Solver Loops
+#### 2.3 B3: NEON Vectorization of Solver Loops — DONE
 
-**Current:** All dot products, Cholesky decomposition, matrix multiply, and exp() are scalar loops.
-**Fix:** Replace scalar `dot_row` with ARM NEON `vfmaq_f32` 4-wide FMA. Add `#ifdef __ARM_NEON__` guard.
-**Files:** `src/llama-kv-compact-math.cpp` (dot_row used in solver, select, budget, pipeline)
-**Impact:** 4-8x speedup on Apple Silicon for solver math.
-**Scope:** Only vectorize `dot_row`. Leave Cholesky pivot logic and exp() as scalar.
-**Test:** Solver unit tests must produce identical results within fp32 tolerance.
+**Status:** IMPLEMENTED in src/llama-kv-compact-math.h:16-52.
+**Implementation:** `dot_row()` uses ARM NEON `vfmaq_f32` with 8-wide unrolled inner loop (two `float32x4_t` accumulators), 4-wide cleanup, and scalar tail. Guarded by `#ifdef __ARM_NEON__` with scalar fallback.
+**Code:** llama-kv-compact-math.h:17-44 (NEON path), 46-51 (scalar fallback).
+**Verification:** `test-kv-compact-solver` and `test-kv-compact-features` pass on ARM. Solver timing improvement confirmed.
 
-#### 2.4 B5: Graph Tensor Caching
+#### 2.4 B5: Graph Tensor Caching — PARTIAL
 
-**Current:** Compacted prefix K/V/beta/mask tensors created fresh each decode batch.
-**Status:** PARTIALLY DONE (commit `a63dd655` added tensor caching). GPU-native mask/beta materialization still deferred.
-**Action:** Verify caching is active and working. Profile to confirm no regression.
+**Status:** Partially done (commit `a63dd655` added tensor caching). GPU-native mask/beta materialization still deferred.
+**Action:** Verify caching is active and working. Profile to confirm no regression. Check if tensor cache hit rate is optimal at 32K (relates to 1A.3 decode regression).
+**Files:** `src/llama-kv-compacted-prefix-exec.cpp`
+
+#### 2.5 B4: GPU Solver Path — DEFERRED
+
+**Status:** Not implemented. Forces CPU for all solver math.
+**Priority:** HIGH for production but blocked on Metal compute shader development.
+**Impact:** Would eliminate CPU↔GPU data transfer for K/V extraction.
 
 ---
 
@@ -159,6 +223,13 @@ From `docs/modelai-performance-roadmap.md` Part 1 — these are known internal b
 - 16K and 32K contexts with 2x/4x/8x compression
 - Document memory requirements at each context length
 
+#### 3.3 Compaction Time Scaling Investigation
+
+**Evidence:** Compaction time scales super-linearly: 518ms at 8K → 3663ms at 32K (7x for 4x context increase).
+**Source:** `MODELAI_PHASE_D_IMPROVEMENT_PROMPT.md`
+**Impact:** At 64K+, could reach 10-15 seconds, blocking interactive use.
+**Action:** Profile the select pipeline's attention score computation. Identify O(n²) components. Consider batched score computation or caching partial scores.
+
 ---
 
 ### Phase 4: Architecture Support Expansion
@@ -173,18 +244,19 @@ From `docs/modelai-performance-roadmap.md` Part 1 — these are known internal b
 #### 4.2 SWA Architecture Support (Gemma3)
 
 **Current:** `compacted_prefix_runtime_supported()` rejects SWA caches.
-**Issue:** Gemma3-12B uses SWA — currently fails at model load level (iSWA format issue).
+**Issue:** Gemma3-12B uses iSWA (interleaved SWA). Decode is broken on both llama.cpp and modelai (0.7-0.8 tok/s vs 16.5 on Ollama).
 **Action:**
-1. Fix iSWA model load issue for Gemma3
-2. Implement SWA-aware compaction: only compact global-attention portion, leave SWA portion as-is
-3. Test with Gemma3-12B at various compression ratios
+1. For iSWA models, enable compaction on the base (global-attention) cache only
+2. Leave SWA sub-cache unmodified (it handles local attention windows)
+3. Test with Gemma3-12B once upstream fixes the SWA decode performance
 **Reference:** Paper Section 4.2 discusses SWA handling.
 **Effort:** HIGH — requires understanding iSWA base vs SWA layer split.
+**Dependency:** Upstream must fix Gemma3-12B decode first.
 
 #### 4.3 Server Integration Verification
 
-**Status:** `/compact` endpoint IS implemented (in PR-1 + post-6b sprint). Server-context.cpp has ~600 lines of ModelAI integration.
-**Action:** Verify the endpoint works end-to-end with a real model. Test:
+**Status:** `/compact` endpoint IS implemented (PR-1 + post-6b). ~600 lines in server-context.cpp.
+**Action:** Verify end-to-end with a real model. Test:
 - `POST /compact` with valid slot and method
 - Verify compaction completes and active_n_kv drops
 - Verify subsequent inference uses compacted KV
@@ -197,31 +269,23 @@ From `docs/modelai-performance-roadmap.md` Part 1 — these are known internal b
 
 #### 5.1 Update Brief (`docs/modelai-llama-cpp-overview.md`)
 
-Add missing sections:
-1. **Modified upstream files** — document all 20 files changed and why
-2. **Adversarial review findings** — detail the 6 bugs found and fixed across 2 review cycles:
-   - Cycle 1: Chunked pipeline budget overshoot, prefill-Q p0 assertion, GQA divisibility assert
-   - Cycle 2: Nonuniform NaN propagation, chunked recursive merge, budget allocator convergence
-3. **Server integration** — document `/compact`, `/props`, `/metrics` endpoints
-4. **Upstream bug sync status** — which upstream issues are addressed
-5. **Relabel "Next Steps"** to "Engine Roadmap (V1+)" with clear categorization
+1. **Modified upstream files** — document all 20 files and why
+2. **Adversarial review findings** — 6 bugs found and fixed across 2 review cycles
+3. **Server integration** — `/compact`, `/props`, `/metrics` endpoints
+4. **Upstream bug sync status** — verified items from Phase 1B
+5. **Relabel "Next Steps"** to "Engine Roadmap (V1+)"
 
 #### 5.2 Update Fork Summary (`docs/modelai-fork-summary.md`)
 
-- PR-5b section (lines 147-159): update to reflect DONE status with measured results
-- Add PR-6 and PR-6b completion status
-- Add post-6b sprint status
-- Update V0 Support Matrix with current tested models and quality numbers
+- All PRs marked DONE with commit references
+- V0 Support Matrix updated with tested models and quality numbers
+- Gemma3-12B listed as UNSUPPORTED (SWA decode broken upstream)
 
 #### 5.3 Update Compaction Plan (`docs/modelai-kv-compaction-plan.md`)
 
-- Mark all completed PRs as DONE with commit references
-- Add V1 plan reference
-- Document what was deferred and why
-
-#### 5.4 Sync Review Standards
-
-Ensure `docs/review-standards/hostile-review-protocol.md` has the "MANDATORY TESTING-REVIEW LOOP" section (added in prior session).
+- All completed PRs marked DONE
+- V1 plan reference added
+- Deferred items documented with reasons
 
 ---
 
@@ -237,7 +301,7 @@ All benchmarks must be run with:
 
 **Models:** Qwen3-8B, Qwen3-14B, DeepSeek-R1-14B, Qwen3-30B-A3B
 **Engines:** modelai-llama.cpp, upstream llama.cpp (clean build)
-**Note:** Ollama excluded from comparison — it uses different measurement methodology and adds HTTP overhead. Document this decision.
+**Note:** Ollama excluded — different measurement methodology.
 
 #### 6.2 KV Compaction Quality Matrix
 
@@ -250,7 +314,12 @@ Run select pipeline across all models at multiple compression ratios:
 | DeepSeek-R1-14B | | | | | | | | | |
 | Qwen3-30B-A3B | | | | | | | | | |
 
-#### 6.3 Server Endpoint Benchmark
+#### 6.3 Fill Missing Timing Data
+
+**Issue:** 4K tests have null compaction_time_ms. Re-run with timing instrumentation.
+**Source:** `MODELAI_PHASE_D_IMPROVEMENT_PROMPT.md`
+
+#### 6.4 Server Endpoint Benchmark
 
 - Measure `/compact` endpoint latency for each model at 4K/2x
 - Measure decode throughput before and after compaction
@@ -263,64 +332,142 @@ Run select pipeline across all models at multiple compression ratios:
 Full adversarial review per `docs/review-standards/hostile-review-protocol.md`:
 
 1. **Code review** — all 20 modified upstream files + all new compaction files
-2. **Test review** — verify all tests exercise adversarial inputs, boundary conditions, resource exhaustion
-3. **Integration review** — verify server endpoints, serialization, sequence ops
-4. **Upstream sync review** — verify no stale patterns from pre-refactor llama.cpp
-5. **Break-fix-review loop** — mandatory: test → break → fix → commit → push → review again until PASS
+2. **Test review** — verify tests exercise adversarial inputs, boundary conditions, resource exhaustion
+3. **Integration review** — server endpoints, serialization, sequence ops
+4. **Upstream sync review** — no stale patterns from pre-refactor llama.cpp
+5. **Break-fix-review loop** — test → break → fix → commit → push → review until PASS
 
 ---
 
-## Upstream GitHub Issues Addressed by This Fork
+## Upstream GitHub Issues — Full Scan (2026-03-14)
+
+### Addressed by This Fork
 
 | Issue/PR | Description | Status in Fork |
 |----------|-------------|---------------|
-| `#20037` | Attention Matching upstream RFC | Fork implements full pipeline; upstream tracking only |
-| `#10873` | KV cache defrag corruption | Upstream removed defrag entirely (`#15473`); inherited via sync |
-| `#12695` | KV cache guard refactor | In upstream-master (`a10b36c9`); verify compaction compatibility |
-| `#13194` | SWA KV cache support | In upstream-master (`e298d2fb`); fork rejects SWA (V1 Phase 4) |
-| `#12253` | KV shift/defrag correctness | Addressed by defrag removal; verify shift still works |
-| `#20032` | Fused multiply-add for Q4/Q5/Q6_K | In upstream-master (`2afcdb97`); inherited performance gain |
-| `#20250` | Metal mul_mv_ext for BF16/Q2_K/Q3_K | In upstream-master (`e22cd0aa`); inherited performance gain |
-| `#14363` | High-throughput mode (virtual sequences) | In upstream-master (`225e7a14`); not yet tested with compaction |
+| `#20037` | Attention Matching upstream RFC | Fork implements full pipeline; upstream has NO implementation PR. Community interest only. |
+| `#10873` | KV cache defrag corruption (PR, OPEN/stale) | Upstream removed defrag (`#15473`). Fork verified — compaction works without defrag. |
+| `#12695` | KV cache guard refactor (MERGED) | In upstream-master. Fork uses current cell API — verified. |
+| `#13194` | SWA KV cache support (MERGED) | In upstream-master. Fork rejects SWA correctly — verified. |
+| `#12253` | KV shift/defrag correctness (CLOSED/fixed) | Fix in upstream. Fork has shift guard — verified. |
+| `#11213` | KV cells unified refactor (CLOSED/not merged) | Decomposed into #12695, #13194. No action needed. |
+| `#17450` | Unified KV buffer default (CLOSED/not planned) | Cosmetic issue. Fork tests with kv_unified=true — verified. |
+| `#20032` | Fused multiply-add for Q4/Q5/Q6_K (MERGED) | Inherited performance gain via upstream sync. |
+| `#20250` | Metal mul_mv_ext for BF16/Q2_K/Q3_K (MERGED) | Inherited performance gain via upstream sync. |
+| `#14363` | High-throughput mode / virtual sequences (MERGED) | Inherited; not yet tested with compaction. |
 
-## Upstream Issues NOT YET Addressed
+### Open Issues Relevant to This Fork
 
 | Issue/PR | Description | Risk | Action |
 |----------|-------------|------|--------|
-| `#11213` | `llama_kv_cells_unified` refactor | HIGH — may break KV cell iteration | Audit compaction code |
-| `#17450` | Unified KV buffer default | MEDIUM — layout assumptions | Test with unified KV |
-| `#14847` / `#15650` | Flash attention Metal stability | LOW — V0 uses non-flash | Monitor for V1 FA work |
-| `#9551` | Vulkan KV quantization needs FA | LOW — Apple Silicon only target | N/A for current hardware |
+| `#11970` | KV cache truncated on `/v1/chat/completions` | MEDIUM — silent context loss collides with compaction | Monitor; add test with chat completions API |
+| `#11577` | Feature request: resize existing context | LOW — compaction achieves similar goal | Monitor for API changes |
+| `#19116` | Assert in kv-cache using Qwen3-VL | LOW — VL models use M-RoPE, already rejected | Confirm M-RoPE guard handles this |
+| `#6685` | Server crash with defrag at parallel=32 | LOW — defrag removed | No action needed |
+| `#19307` | GLM 4.7 Flash not working with flash attention | LOW — separate from compaction | Monitor for FA fixes |
 
-## Performance Roadmap Items NOT Addressed
+### Server/Runtime Upstream Bugs (from prior adversarial reviews)
 
-| Item | Description | Priority | Blocked By |
-|------|-------------|----------|-----------|
-| B4: GPU solver path | Forces CPU for all solver math | HIGH | Requires Metal compute shader for solver |
-| Self-study production speed | 3.6 min at 4K context | MEDIUM | Algorithmic — needs orders-of-magnitude speedup |
-| OMP production speed | >23 min for 2x on 14B | LOW | Known infeasible; quality comparison only |
-| Flash attention + non-zero beta | Requires FlashBias | BLOCKED | Waiting on upstream FlashBias (arXiv:2505.12044) |
-| Hybrid recurrent+attention | Mamba layers have no KV | DEFERRED | Architecture not in ModelAI target models |
-| M-RoPE edge cases | Multi-position models | DEFERRED | No ModelAI models use M-RoPE |
+These are upstream llama-server bugs that affect ModelAI's use case. They are NOT in this fork's implementation scope but should be tracked:
+
+| Issue/PR | Severity | Description |
+|----------|----------|-------------|
+| `#19679` | Critical | Random crash on Apple Metal (grammar stack empty) |
+| `#19304` | Critical | Crash at 86K context / 50+ tool calls |
+| `#19051` | Critical | Server fails open when JSON schema grammar parsing fails |
+| `#19010` | Critical | Stack overflow from crafted JSON Schema pattern |
+| `#16710` | Critical | Server crash on faulty tool call |
+| `#17391` | Major | Segfault under repeated structured output |
+| `#12171` | Major | llama-server inference 3x slower than llama-cli |
+| `#19758` | Major | Reverse port not closed after SSE stream |
+| `#17387` | Major | `/slots/0?action=erase` hangs indefinitely |
+
+---
+
+## Known Quality Issues
+
+| Model | Context | Ratio | Pipeline | Cosine | Status |
+|-------|---------|-------|----------|--------|--------|
+| DeepSeek-R1-14B | 8K | 4x | nonuniform | **0.211** | **CRITICAL** — Phase 1A.1 |
+| DeepSeek-R1-14B | 4K | 4x | nonuniform | **0.773** | **CRITICAL** — Phase 1A.1 |
+| Qwen3-14B | 8K | 8x | select | 0.973 | Minor outlier — investigate in Phase 6 |
+| Qwen3-14B | 16K | 8x | select | 0.987 | Slightly below other models |
+| All other test points | 4K-32K | 2x-8x | select | >0.99 | PASS |
+
+---
+
+## Performance Roadmap Items
+
+| Item | Status | Notes |
+|------|--------|-------|
+| B1: Batch V extraction | **DONE** | llama-kv-cache.cpp:1043-1079 |
+| B2: Eliminate dual K/V extraction | **DONE** | llama-kv-compact-pipeline.cpp:67-71 (head_cache_entry) |
+| B3: NEON vectorization | **DONE** | llama-kv-compact-math.h:16-52 |
+| B4: GPU solver path | DEFERRED | Requires Metal compute shader |
+| B5: Graph tensor caching | PARTIAL | Commit `a63dd655`; GPU materialization deferred |
+| Self-study production speed | DEFERRED | 3.6 min at 4K; algorithmic redesign needed |
+| OMP production speed | DEFERRED | >23 min for 2x on 14B; quality comparison only |
+| FA + non-zero beta | BLOCKED | Waiting on FlashBias (arXiv:2505.12044) |
+| Hybrid recurrent+attention | DEFERRED | No ModelAI target models use Mamba |
+| M-RoPE edge cases | DEFERRED | No ModelAI models use M-RoPE; guard at llama-kv-cache.cpp:1130-1143 |
+
+---
+
+## Testing Gaps to Close
+
+| Gap | Priority | Action |
+|-----|----------|--------|
+| No end-to-end test for quantized K through full pipeline | Major | Add Q8_0 K extraction + solver test |
+| No 128K context validation | Major | Phase 3 |
+| No negative tests for unsupported configurations | Major | Add SWA, MLA, hybrid rejection tests |
+| No server integration test with real HTTP clients | Major | Phase 4.3 |
+| Self-study pipeline blocked (dim mismatch) | Minor | Pending runtime diagnostics |
+| 32K compaction throughput not re-measured after tensor caching | Minor | Re-measure in Phase 6 |
+| Missing timing data for 4K compaction tests | Minor | Phase 6.3 |
+
+---
 
 ## Execution Order
 
 ```
-Phase 1: Upstream Bug Sync Verification
+Phase 1A: Critical Bug Fixes (nonuniform pipeline, pp512 regression, decode regression, Gemma3 guard)
     |
-Phase 2: Performance Bottleneck Fixes (B1, B2, B3)
+Phase 1B: Upstream Bug Sync Verification (DONE — all 6 items verified, tests added)
     |
-Phase 3: 128K Context Validation (Qwen3-8B, 14B)
+Phase 2: Performance Bottleneck Fixes (B1/B2/B3 DONE; B5 verify; B4 deferred)
     |
-Phase 4: Architecture Support (FA zero-beta verify, SWA, server verify)
+Phase 3: 128K Context Validation (Qwen3-8B, 14B) + compaction time profiling
+    |
+Phase 4: Architecture Support (FA zero-beta verify, SWA partial, server verify)
     |
 Phase 5: Documentation Completeness
     |
-Phase 6: Comprehensive Benchmark Suite
+Phase 6: Comprehensive Benchmark Suite + fill timing gaps
     |
 Phase 7: Adversarial Review (mandatory break-fix-review loop)
     |
     RELEASE GATE
 ```
 
-Phases 1-2 can partially overlap. Phase 3 depends on Phase 2 (perf fixes reduce compaction time for long contexts). Phases 4-5 can run in parallel. Phase 6 depends on all code changes being complete. Phase 7 is always last.
+Phase 1A is BLOCKING. Phase 1B is complete. B1/B2/B3 are complete.
+Phase 3 depends on Phase 1A fixes (decode regression affects long-context benchmarks).
+Phases 4-5 can run in parallel after Phase 1A.
+Phase 6 depends on all code changes being complete.
+Phase 7 is always last.
+
+---
+
+## Beta Deployment Constraints
+
+From `MODELAI_COMPREHENSIVE_REVIEW_AND_RECOMMENDATIONS.md`:
+
+1. **Only expose `select` pipeline** — nonuniform has critical bugs (Phase 1A.1)
+2. **Disable Gemma3-12B** — SWA decode broken upstream (Phase 1A.4)
+3. **modelai-llama.cpp binary must be bundled** — users don't build from source
+4. **Ollama fallback required** — if modelai-llama.cpp fails to start, fall back to Ollama
+5. **KV compaction is opt-in for beta** — enable by default only at 32GB+ hardware
+6. **Default models by tier:**
+   - 8GB: Qwen3-8B Q4_K_M (2x compaction only)
+   - 16GB: Qwen3-14B Q4_K_M (2x-4x compaction)
+   - 32GB: Qwen3-30B-A3B Q4_K_M (2x-8x compaction)
+   - 64GB+: Qwen3-30B-A3B Q4_K_M (2x-16x compaction, 128K context feasible)

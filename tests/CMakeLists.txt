@@ -269,6 +269,10 @@ llama_build_and_test(test-kv-compact-quality.cpp LABEL "model" ARGS -m "${MODEL_
 target_include_directories(test-kv-compact-quality PRIVATE ${PROJECT_SOURCE_DIR})
 set_tests_properties(test-kv-compact-quality PROPERTIES FIXTURES_REQUIRED test-download-model)
 
+llama_build_and_test(test-kv-compact-pipeline-integration.cpp LABEL "model" ARGS -m "${MODEL_DEST}")
+target_include_directories(test-kv-compact-pipeline-integration PRIVATE ${PROJECT_SOURCE_DIR})
+set_tests_properties(test-kv-compact-pipeline-integration PROPERTIES FIXTURES_REQUIRED test-download-model)
+
 llama_build(test-kv-compact-workload.cpp)
 target_include_directories(test-kv-compact-workload PRIVATE ${PROJECT_SOURCE_DIR})
 
