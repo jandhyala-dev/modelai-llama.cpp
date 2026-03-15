@@ -2,7 +2,7 @@
 
 **Repo:** `jandhyala-dev/modelai-llama.cpp`
 **Branch:** `modelai-main`
-**Tracking commit:** `57606905` (updated 2026-03-14)
+**Tracking commit:** `626c1664` (updated 2026-03-14)
 
 This document tracks all known bugs affecting modelai-llama.cpp, organized by source (internal, upstream, ModelAI integration). Each bug has a severity, status, root cause analysis, and resolution plan.
 
@@ -124,7 +124,7 @@ Replaced host pointer swap with `ggml_backend_tensor_set()` in all three `set_in
 - All other test points > 0.99
 - Qwen3-14B at 16K/8x: 0.987 (also slightly below average)
 
-**Status:** Above the 0.95 threshold. Investigate in Phase 6 with additional test points (8K/6x, 8K/10x) to characterize the quality curve.
+**Status:** Above the 0.95 threshold. Investigate in Phase 4.3 with additional test points (8K/6x, 8K/10x) to characterize the quality curve.
 
 ---
 

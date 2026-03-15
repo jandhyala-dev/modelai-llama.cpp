@@ -2,7 +2,7 @@
 
 **Plan commit:** `(this commit)`
 **Previous plan commit:** `57606905`
-**Code baseline commit:** `3d5132b1` (Phase 1A fixes applied)
+**Code baseline commit:** `63cd5d9a` (Phase 1A fixes + BUG-R01/R02 applied)
 **Upstream base:** `0cd4f472` (upstream-master)
 **Date:** 2026-03-14
 **Owner:** Ajay Jandhyala — ajay@model-ai.app (COT Labs / ModelAI)
@@ -16,6 +16,7 @@
 | 2026-03-14 | v3 | Code implementation: BUG-I01 FIXED (nonuniform fallback), BUG-I02 FIXED (B5 GPU-resident tensors), BUG-U01 MITIGATED (SWA warning), BUG-U02 investigated. |
 | 2026-03-14 | v4 | **Complete rewrite.** All phases through Phase 7 with explicit tests for each code fix, benchmark test plan, out-of-scope delineation, risk register. Structured for adversarial plan review. |
 | 2026-03-14 | v5 | **Reviewer 2 fixes.** Quality thresholds aligned to fork-summary (0.95/0.90/0.85). Added: Phase 5.3 pipeline allowlist, Phase 7.6 W1-W3, quality metric reconciliation, staging buffer verification test, mock-based guard tests, server CI tests (streaming/props/models/contract-version), statistical methodology, slot isolation method, CUDA/iSWA/old-commit risks. Fixed: Phase 5 numbering, bug tracker plan references, release checklist count (37). |
+| 2026-03-14 | v6 | **Reviewer 1 fixes (GO Conditional → GO).** F-1: W4-W6 aligned to CI policy (research report, 3 concurrent sessions, save/restore). F-2: Release checklist Pre-Release merged with actual checklist (14 items). F-3: 128K time estimate corrected (25-60s). F-4: Code baseline updated to `63cd5d9a`, Phase 3.3.2 references `std::atomic<bool>`. F-5: Phase 7.1 metrics expanded to all 12 CI-required. F-6: Thermal management protocol added. F-7: Phase 3.6 serialization test added. F-8: Bug tracker BUG-I05 text + tracking commit fixed. F-9: Self-study dim mismatch added to out-of-scope. |
 
 ---
 
@@ -175,9 +176,9 @@ All 6 upstream issues verified safe/compatible. Integration tests added in `test
 
 **Test 3.3.2 — Warning fires once only (static guard)**
 
-- Assert: The `static bool warned_swa` guard prevents duplicate warnings
+- Assert: The `std::atomic<bool> warned_swa` guard (BUG-R02, commit `63cd5d9a`) with `exchange(true)` prevents duplicate warnings — only the first thread to call `exchange()` sees `false` and enters the warning block
 - Implementation note: This is difficult to test in isolation because `static` state persists across test cases in the same process. Verify by code review + manual testing. Do NOT add a test that depends on log output parsing — that is fragile.
-- Why: Thread-safe static initialization (C++11 guarantee) means the flag is safe, but verifying it fires exactly once across multiple calls requires log capture which is not reliable in ctest.
+- Why: The `std::atomic<bool>` with `exchange(true)` pattern provides thread-safe one-time-fire semantics. Verifying it fires exactly once across multiple calls requires log capture which is not reliable in ctest.
 
 ---
 
@@ -238,7 +239,25 @@ All 6 upstream issues verified safe/compatible. Integration tests added in `test
 
 ---
 
-#### 3.6 Test Registration and Build
+#### 3.6 Serialization with Compacted Prefix Test
+
+**What to test:** State save/restore with an active compacted prefix produces correct results after restore.
+
+**File to modify:** `tests/test-kv-compact-pipeline-integration.cpp`
+
+**Test 3.6.1 — Save and restore with compacted prefix**
+
+- Setup: Load model, fill KV cache, run select pipeline at 2x to create compacted prefix
+- Action: Save state via `llama_state_save_file()`, restore via `llama_state_load_file()`
+- Assert: Restored compacted prefix is valid (non-null, correct dimensions)
+- Assert: Post-restore decode produces finite logits
+- Assert: Post-restore logit cosine vs pre-save logits >= 0.99 (save/restore should be lossless)
+- Why: Serialization with compacted prefix is in the Release Gate adversarial review scope (line 758) but had no automated regression test. If serialization drops or corrupts the compacted prefix, post-restore inference quality degrades silently.
+- Implementation note: If `llama_state_save_file` does not yet handle compacted prefix state, this test will expose the gap. Document the behavior regardless.
+
+---
+
+#### 3.7 Test Registration and Build
 
 **File to modify:** `tests/CMakeLists.txt`
 
@@ -600,14 +619,22 @@ Run select pipeline across all 4 models at all context/ratio combinations. 3 rep
 
 **Note:** These thresholds match the fork-summary quality tests and are consistent with existing benchmark data (e.g., select/2x/4K = 0.973, select/4x/4K = 0.928). The CI policy (`docs/modelai-ci-policy.md`) uses "perplexity delta" as a complementary metric — see [Quality Metric Reconciliation](#quality-metric-reconciliation) below.
 
-**Metrics per run:**
-1. `logit_cosine` — primary quality metric
-2. `compaction_time_ms` — must not be null
-3. `baseline_decode_tok_s` — must not be null
-4. `compacted_decode_tok_s` — must not be null
-5. `active_n_kv` — verify matches target
-6. `solver_time_ms` — if solver pipeline
-7. `query_gen_time_ms` — if applicable
+**Metrics per run (all 12 CI-required per `docs/modelai-ci-policy.md` lines 107-120):**
+1. `model_name_quant` — model name and quantization (e.g., "Qwen3-14B Q4_K_M")
+2. `backend` — backend used (e.g., "Metal", "CPU")
+3. `flash_attn` — flash attention on/off
+4. `compaction_ratio` — compaction on/off and ratio (e.g., "2x", "off")
+5. `prefill_latency_ms` — prefill latency in milliseconds
+6. `first_token_latency_ms` — first-token latency in milliseconds
+7. `decode_tok_s` — decode throughput tok/s (both baseline and compacted)
+8. `allocated_kv_bytes` — allocated KV cache size in bytes
+9. `active_n_kv` — active KV length after compaction
+10. `logit_cosine` — quality delta vs full cache (primary quality metric)
+11. `query_gen_time_ms` — query generation time (if applicable)
+12. `solver_time_ms` — solver time (if solver pipeline)
+
+**Additional timing metrics (must not be null):**
+- `compaction_time_ms` — total compaction time
 
 **Statistical methodology:**
 - Record mean ± standard deviation for each test point across 3 reps
@@ -615,6 +642,7 @@ Run select pipeline across all 4 models at all context/ratio combinations. 3 rep
 - Pass/fail uses the **mean** value, not individual runs
 - For flagged marginal points: run 2 additional reps (total 5) to narrow the confidence interval
 - Include 1 warmup run per model (not counted) to avoid Metal shader compilation bias on first run
+- **Thermal management:** Allow 2-minute cool-down between model switches. Randomize model/context order across the test matrix to distribute thermal effects. Record ambient temperature at start and end of session. If warmup throughput degrades >10% between first and last model, note thermal impact in benchmark report.
 
 **Pass criteria:** ALL test point **means** meet quality threshold for their compression ratio. No null timing data.
 
@@ -637,7 +665,7 @@ Run select pipeline across all 4 models at all context/ratio combinations. 3 rep
 
 **Additional 128K metrics:**
 - Peak memory usage (via `ggml_backend_buffer_get_size`)
-- Compaction time (expected: 10-15s based on O(n²) scaling)
+- Compaction time (expected: 25-60s based on O(n²) extrapolation from 32K data: 3100ms × (128/32)² ≈ 50s)
 - Whether chunked pipeline is needed
 
 **Quality thresholds:**
@@ -684,9 +712,9 @@ Per `docs/modelai-ci-policy.md`, workloads W4-W6 have not been measured:
 
 | Workload | Description | Test Plan |
 |----------|-------------|-----------|
-| W4 | Multi-turn conversation (3+ turns, 4K total) | Server API: 3 chat completions turns, compact between turns, verify quality |
-| W5 | Concurrent slots (parallel=2) | Server API: 2 parallel completions, compact slot 0, verify slot 1 unaffected |
-| W6 | Long-running session (>50 decode batches) | CLI: prompt 4K tokens, decode 500 tokens, compact, decode 500 more |
+| W4 | Full research report generation | CLI: load Qwen3-14B, prompt with 16K research context, compact at 2x, generate 2K-token report. Measure: compaction time, decode tok/s, report coherence (manual review). |
+| W5 | 3 concurrent sessions on 32GB | Server API: `--parallel 3`, fill 3 slots with different prompts (4K each), compact slot 0, verify slots 1-2 unaffected. Measure: per-slot decode tok/s, slot isolation (logit cosine >= 0.999 for non-compacted slots). |
+| W6 | Save/restore + continue | CLI: fill KV to 4K, compact at 2x, save state (`llama_state_save_file`), restore state (`llama_state_load_file`), continue generation for 128 tokens. Assert: restored compacted prefix is valid, post-restore generation coherent. |
 
 **Pass criteria:** No crashes, no quality degradation below threshold, correct state isolation between slots.
 
@@ -768,29 +796,33 @@ Per the hostile review protocol's mandatory testing-review loop:
 
 #### Release Checklist Execution
 
-Per `docs/modelai-release-checklist.md`, all 37 items must be checked (10 pre-release + 8 release + 10 post-release + 9 release notes fields):
+Per `docs/modelai-release-checklist.md`, all items must be checked. The plan merges the actual checklist items with additional V1 gates (marked with *):
 
-**Pre-Release (10 items):**
-- [ ] All Phase 7 benchmark results committed
-- [ ] All tests pass (ctest -L main)
-- [ ] Server tests pass (pytest test_compact.py)
-- [ ] Bug tracker has no Critical or Major OPEN items
-- [ ] Documentation is current (Phase 6 complete)
-- [ ] Adversarial review PASS verdict
-- [ ] Release notes drafted
-- [ ] Binary built and tested
+**Pre-Release (14 items — 10 from checklist + 4 V1 additions):**
+- [ ] All CI passes on `modelai-main`
+- [ ] Upstream base commit identified and recorded
+- [ ] Included milestone scope identified
+- [ ] All milestone tests pass (ctest -L main + pytest test_compact.py)
+- [ ] Benchmark results collected for W1-W6 (Phase 7 complete)
+- [ ] Benchmark results compared to previous release
+- [ ] Known limitations documented
+- [ ] Supported platform/model/backend matrix documented
 - [ ] Rollback path verified
 - [ ] ModelAI compatibility smoke tests pass
+- [ ] *Bug tracker has no Critical or Major OPEN items
+- [ ] *Adversarial review PASS verdict (hostile review protocol)
+- [ ] *Release notes drafted
+- [ ] *Documentation is current (Phase 6 complete)
 
 **Release (8 items):**
-- [ ] Tag created
-- [ ] Binary archived
-- [ ] Release notes published
-- [ ] Supabase model metadata updated
-- [ ] ModelAI server integration tested
-- [ ] Rollback procedure documented
-- [ ] Monitoring alerts configured
-- [ ] Stakeholders notified
+- [ ] Create annotated tag on `modelai-main`
+- [ ] Record upstream provenance in tag message: `Based on ggml-org/llama.cpp@<sha>`
+- [ ] Build platform-specific binaries
+- [ ] Publish or archive release artifacts
+- [ ] Update ModelAI dependency pin to the new engine tag/SHA
+- [ ] Record benchmark delta from previous release
+- [ ] Update release notes
+- [ ] Record known caveats and unsupported matrix
 
 **Post-Release (10 items):**
 - [ ] ModelAI smoke tests pass against released engine tag
@@ -809,6 +841,8 @@ Per `docs/modelai-release-checklist.md`, all 37 items must be checked (10 pre-re
 - [ ] Included milestone range
 - [ ] Supported platform/backend matrix, unsupported matrix
 - [ ] Benchmark summary, known limitations, rollback target
+
+**Total: 41 items** (14 pre-release + 8 release + 10 post-release + 9 release notes fields)
 
 ---
 
@@ -842,6 +876,7 @@ These items are NOT part of V1. Each has a documented reason for deferral.
 | Hybrid recurrent+attention | No ModelAI target models use Mamba/RWKV. Guard exists. | Not planned |
 | M-RoPE edge cases | No ModelAI models use M-RoPE. Guard exists at `llama-kv-cache.cpp:1130-1143`. | Not planned |
 | Self-study production speed | 3.6 min at 4K — needs algorithmic redesign, not incremental fix | PR-7 |
+| Self-study pipeline dim mismatch | Known blocker — self-study generates queries that may have dimension mismatch with model KV heads. Requires upstream investigation. | PR-7 |
 | OMP production speed | >23 min for 2x on 14B — quality-comparison-only pipeline | Not planned |
 | CUDA backend testing | No CUDA hardware available for V1 testing | Phase 3+ of CI policy |
 
