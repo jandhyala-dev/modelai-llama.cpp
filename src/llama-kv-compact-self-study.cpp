@@ -1051,9 +1051,16 @@ bool llama_kv_compact_chunked_self_study_from_live_kv(
     std::vector<std::vector<head_q_entry>> q_cache(layouts.size());
 
     const uint32_t norm_sample_n = std::min(256u, n_prefix_tokens);
-    std::vector<llama_pos> norm_sample_pos(
-        prefix_positions.begin(),
-        prefix_positions.begin() + norm_sample_n);
+    std::vector<llama_pos> norm_sample_pos;
+    norm_sample_pos.reserve(norm_sample_n);
+    {
+        // Uniform strided sampling across the full prefix to avoid bias
+        // from system-prompt-heavy early positions.
+        const uint32_t stride = std::max(1u, n_prefix_tokens / norm_sample_n);
+        for (uint32_t i = 0; i < norm_sample_n && i * stride < n_prefix_tokens; ++i) {
+            norm_sample_pos.push_back(prefix_positions[i * stride]);
+        }
+    }
 
     double q_norm_sum = 0.0, k_norm_sum = 0.0;
     uint32_t n_heads_seen = 0;
