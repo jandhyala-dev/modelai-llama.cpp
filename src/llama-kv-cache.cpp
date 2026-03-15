@@ -832,6 +832,20 @@ bool llama_kv_cache::compacted_prefix_self_study_from_live_kv(
     return ok;
 }
 
+bool llama_kv_cache::compacted_prefix_chunked_self_study_from_live_kv(
+        struct llama_context * ctx,
+        llama_seq_id seq_id,
+        uint32_t target_tokens,
+        llama_pos live_suffix_pos0,
+        const llama_kv_compact_self_study_config & config,
+        llama_kv_compact_self_study_stats * stats,
+        llama_pos p0,
+        uint32_t chunk_size) {
+    const bool ok = llama_kv_compact_chunked_self_study_from_live_kv(ctx, *this, seq_id, target_tokens, live_suffix_pos0, config, stats, p0, chunk_size);
+    if (ok) { compacted_prefix_last_method = "chunked-self-study"; }
+    return ok;
+}
+
 bool llama_kv_cache::compacted_prefix_nonuniform_from_live_kv(
         llama_seq_id seq_id,
         uint32_t target_tokens,

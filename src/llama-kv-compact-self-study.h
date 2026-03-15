@@ -198,3 +198,36 @@ bool llama_kv_compact_self_study_from_live_kv(
         const llama_kv_compact_self_study_config & config,
         llama_kv_compact_self_study_stats * stats = nullptr,
         llama_pos p0 = 0);
+
+// ---------------------------------------------------------------------------
+// Chunked self-study pipeline (Phase 6)
+// ---------------------------------------------------------------------------
+
+// Chunked self-study: combines chunked selection with real Q-capture.
+//
+// For long-context prefixes (>chunk_size tokens), splits the prefix into
+// fixed-size chunks, scores real Q against per-chunk K using Metal GPU,
+// selects top-k per chunk with proportional budgets, then runs full-prefix
+// solver with the globally merged selection set.
+//
+// Pipeline:
+//   1. Multi-round Q-capture generation (same as self-study)
+//   2. GQA regroup + subsample + Q/K norm matching per head
+//   3. Per-chunk scoring with proportional budget allocation:
+//      - Extract chunk K, score normalized Q against it (Metal GPU)
+//      - Top-k per chunk, merge globally
+//   4. Full-prefix solver: extract full K/V, fit beta + V, write payloads
+//
+// Delegates to non-chunked self-study if prefix <= chunk_size.
+//
+// Caller contract: same as llama_kv_compact_self_study_from_live_kv.
+bool llama_kv_compact_chunked_self_study_from_live_kv(
+        struct llama_context * ctx,
+        llama_kv_cache       & kv,
+        llama_seq_id           seq_id,
+        uint32_t               target_tokens,
+        llama_pos              live_suffix_pos0,
+        const llama_kv_compact_self_study_config & config,
+        llama_kv_compact_self_study_stats * stats = nullptr,
+        llama_pos p0 = 0,
+        uint32_t chunk_size = 8192);

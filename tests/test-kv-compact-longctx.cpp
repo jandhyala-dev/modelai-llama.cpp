@@ -5,7 +5,7 @@
 // evaluation (2,086 questions) and LongHealth MC evaluation (400 questions,
 // 60K-token patient records) for paper-aligned accuracy measurement.
 //
-// Pipelines: baseline, select, solver, omp, self_study, nonuniform, chunked, on_policy
+// Pipelines: baseline, select, solver, omp, self_study, chunked_self_study, nonuniform, chunked, on_policy
 //
 // Usage:
 //   # Single pipeline run:
@@ -168,6 +168,11 @@ static support_classification classify_support(
     // Chunked: experimental (designed for 8K+ contexts, overhead at small ctx).
     if (pipeline == "chunked") {
         return {"experimental", "chunked_pipeline_overhead"};
+    }
+
+    // Chunked self-study: experimental (real Q-capture + chunked selection).
+    if (pipeline == "chunked_self_study") {
+        return {"experimental", "chunked_self_study_overhead"};
     }
 
     // On-policy: experimental (two-pass overhead, best quality but slow).
@@ -362,13 +367,19 @@ static bool run_compaction(llama_kv_cache * kv, llama_context * ctx,
     if (pipeline == "on_policy") {
         return kv->compacted_prefix_on_policy_from_live_kv(ctx, 0, target, live_suffix_pos0, stats);
     }
-    if (pipeline == "self_study") {
+    if (pipeline == "self_study" || pipeline == "chunked_self_study") {
         llama_kv_compact_self_study_config cfg;
         cfg.n_generate = 256;
         cfg.max_queries_per_kv_head = 1024;
         llama_kv_compact_self_study_stats ss_stats = {};
-        bool ok = kv->compacted_prefix_self_study_from_live_kv(
-            ctx, 0, target, live_suffix_pos0, cfg, &ss_stats);
+        bool ok;
+        if (pipeline == "chunked_self_study") {
+            ok = kv->compacted_prefix_chunked_self_study_from_live_kv(
+                ctx, 0, target, live_suffix_pos0, cfg, &ss_stats);
+        } else {
+            ok = kv->compacted_prefix_self_study_from_live_kv(
+                ctx, 0, target, live_suffix_pos0, cfg, &ss_stats);
+        }
         if (stats) {
             stats->query_generation_time_ms = ss_stats.generation_time_ms + ss_stats.q_capture_time_ms;
             stats->solver_time_ms           = ss_stats.solver_time_ms;
@@ -893,9 +904,10 @@ int main(int argc, char ** argv) {
     const std::string pipeline = env_pipeline ? env_pipeline : "select";
     if (pipeline != "baseline" && pipeline != "select" &&
         pipeline != "solver"   && pipeline != "omp" &&
-        pipeline != "self_study" && pipeline != "nonuniform" &&
+        pipeline != "self_study" && pipeline != "chunked_self_study" &&
+        pipeline != "nonuniform" &&
         pipeline != "chunked" && pipeline != "on_policy") {
-        return fail("PIPELINE must be 'baseline', 'select', 'solver', 'omp', 'self_study', 'nonuniform', 'chunked', or 'on_policy'");
+        return fail("PIPELINE must be 'baseline', 'select', 'solver', 'omp', 'self_study', 'chunked_self_study', 'nonuniform', 'chunked', or 'on_policy'");
     }
 
     const char * env_ratio = std::getenv("RATIO");

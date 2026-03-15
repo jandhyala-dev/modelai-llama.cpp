@@ -123,6 +123,9 @@ bool llama_kv_compact_on_policy_from_live_kv(
         float lambda = 1e-6f,
         uint32_t n_generate_q = 128);
 
-// Self-study pipeline is declared in llama-kv-compact-self-study.h
-// (llama_kv_compact_self_study_from_live_kv) — requires llama_context
-// for Q-capture generation via cb_eval.
+// Self-study pipelines are declared in llama-kv-compact-self-study.h
+// (llama_kv_compact_self_study_from_live_kv and
+// llama_kv_compact_chunked_self_study_from_live_kv) — require llama_context
+// for Q-capture generation via cb_eval.  The chunked variant (Phase 6)
+// splits long prefixes into chunks for per-chunk scoring + selection,
+// then runs full-prefix solver with globally merged selections.

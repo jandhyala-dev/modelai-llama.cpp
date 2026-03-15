@@ -1,5 +1,6 @@
 #include "llama-kv-compact-self-study.h"
 #include "llama-kv-compact-select.h"
+#include "llama-kv-compact-pipeline.h"
 #include "llama-kv-compact-solver-metal.h"
 #include "llama-kv-cache.h"
 #include "llama-kv-compacted-prefix.h"
@@ -14,6 +15,7 @@
 #include <chrono>
 #include <cmath>
 #include <cstring>
+#include <numeric>
 #include <random>
 
 // ---------------------------------------------------------------------------
@@ -541,6 +543,22 @@ bool llama_kv_compact_self_study_from_live_kv(
 
     const uint32_t total_generate = eff_n_generate * eff_n_rounds;
 
+    // Q-capture sufficiency check: if estimated queries < target_tokens, the
+    // NNLS solver becomes underdetermined and produces NaN/extreme weights.
+    // Fall back to the proven select pipeline which uses K-as-surrogate-Q.
+    {
+        const uint32_t n_head_kv = layouts[0].n_head_kv;
+        const uint32_t n_rep = n_head_q / std::max(1u, n_head_kv);
+        const uint32_t estimated_queries = total_generate * n_rep;
+        if (estimated_queries < target_tokens) {
+            LLAMA_LOG_WARN("self-study: Q-capture insufficient (%u queries < %u targets) — "
+                           "falling back to select pipeline for stable quality\n",
+                           estimated_queries, target_tokens);
+            return llama_kv_compact_select_from_live_kv(kv, seq_id, target_tokens, live_suffix_pos0,
+                                                         nullptr, p0);
+        }
+    }
+
     llama_q_capture_state q_state;
     q_state.reset((int32_t)n_layer, n_embd_head, n_head_q, total_generate);
 
@@ -569,6 +587,28 @@ bool llama_kv_compact_self_study_from_live_kv(
                 stats->n_layers_with_q++;
             }
             stats->n_dim_mismatches += q_state.layers[il].n_dim_mismatches;
+        }
+    }
+
+    // Post-capture sufficiency verification: use ACTUAL captured token count
+    // rather than pre-capture estimate (which may be wrong for some models).
+    {
+        uint32_t actual_tokens = 0;
+        for (int il = 0; il < q_state.n_layers; ++il) {
+            if (q_state.layers[il].n_tokens > 0) {
+                actual_tokens = q_state.layers[il].n_tokens;
+                break;
+            }
+        }
+        const uint32_t n_head_kv_l0 = layouts[0].n_head_kv;
+        const uint32_t n_rep = n_head_q / std::max(1u, n_head_kv_l0);
+        const uint32_t actual_queries = actual_tokens * n_rep;
+        if (actual_queries < target_tokens) {
+            LLAMA_LOG_WARN("self-study: post-capture insufficiency (%u tokens captured, "
+                           "%u queries < %u targets) — falling back to select pipeline\n",
+                           actual_tokens, actual_queries, target_tokens);
+            return llama_kv_compact_select_from_live_kv(kv, seq_id, target_tokens, live_suffix_pos0,
+                                                         nullptr, p0);
         }
     }
 
@@ -701,7 +741,7 @@ bool llama_kv_compact_self_study_from_live_kv(
         /* lambda           */ config.lambda,
         /* nnls_iters       */ config.nnls_iters,
         /* nnls_lower_bound */ 1e-12f,
-        /* nnls_upper_bound */ 0.0f,
+        /* nnls_upper_bound */ 100.0f,   // prevent extreme betas from underdetermined NNLS
     };
 
     bool solver_ok = true;
@@ -747,31 +787,63 @@ bool llama_kv_compact_self_study_from_live_kv(
                 break;
             }
 
-            // Beta diagnostics.
-            if (stats) {
-                float beta_norm_sq = 0.0f;
-                uint32_t beta_zero_count = 0;
-                for (uint32_t bi = 0; bi < (uint32_t)beta.size(); ++bi) {
-                    beta_norm_sq += beta[bi] * beta[bi];
-                    if (std::fabs(beta[bi]) < 1e-6f) {
-                        beta_zero_count++;
-                    }
+            // Beta quality check (MIT zerobeta fallback).
+            // Extreme beta norms indicate the NNLS solver produced poor weights,
+            // making the softmax design matrix ill-conditioned.  Zero the betas
+            // and use direct V selection instead (MIT: zerobeta=True).
+            float beta_norm_sq = 0.0f;
+            uint32_t beta_zero_count = 0;
+            for (uint32_t bi = 0; bi < (uint32_t)beta.size(); ++bi) {
+                beta_norm_sq += beta[bi] * beta[bi];
+                if (std::fabs(beta[bi]) < 1e-6f) {
+                    beta_zero_count++;
                 }
-                beta_norm_sum += std::sqrt(beta_norm_sq);
+            }
+            const float beta_norm = std::sqrt(beta_norm_sq);
+            const bool zerobeta = (beta_norm > 50.0f);
+
+            if (zerobeta) {
+                std::fill(beta.begin(), beta.end(), 0.0f);
+                if (li == 0 && head == 0) {
+                    LLAMA_LOG_WARN("self-study: extreme beta_norm (%.1f) — using zerobeta + direct V\n",
+                                   beta_norm);
+                }
+            }
+
+            if (stats) {
+                beta_norm_sum += beta_norm;
                 beta_sparsity_sum += (float)beta_zero_count / std::max<uint32_t>(1, (uint32_t)beta.size());
                 fit_residual_sum += head_residual;
                 n_beta_heads_seen++;
             }
 
-            // Least-squares V fitting
+            // Least-squares V fitting with direct fallback (MIT c2_method='direct')
             if (layout.n_embd_head_v > 0) {
                 llama_kv_compact_matrix compacted_v;
-                if (!llama_kv_compact_fit_values(
-                            entry.queries, entry.k, full_v,
-                            compacted_k, beta, solver_opts,
-                            compacted_v)) {
-                    solver_ok = false;
-                    break;
+                bool v_fit_ok = false;
+
+                if (!zerobeta) {
+                    v_fit_ok = llama_kv_compact_fit_values(
+                                entry.queries, entry.k, full_v,
+                                compacted_k, beta, solver_opts,
+                                compacted_v);
+                    // Check fitted V for NaN/Inf
+                    if (v_fit_ok) {
+                        for (float val : compacted_v.data) {
+                            if (!std::isfinite(val)) {
+                                v_fit_ok = false;
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                if (!v_fit_ok) {
+                    // Direct V selection (MIT c2_method='direct')
+                    if (!gather_matrix_rows(full_v, selected_local, compacted_v)) {
+                        solver_ok = false;
+                        break;
+                    }
                 }
                 write_compacted_payload(dst_layer.v_data, layout.type_v,
                                         n_selected, head,
@@ -824,5 +896,525 @@ bool llama_kv_compact_self_study_from_live_kv(
 
     LLAMA_LOG_INFO("self-study: pipeline complete — %u prefix → %u selected (seq %d)\n",
                    n_prefix_tokens, n_selected, seq_id);
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// Chunked self-study pipeline (Phase 6)
+// ---------------------------------------------------------------------------
+
+bool llama_kv_compact_chunked_self_study_from_live_kv(
+        struct llama_context * ctx,
+        llama_kv_cache       & kv,
+        llama_seq_id           seq_id,
+        uint32_t               target_tokens,
+        llama_pos              live_suffix_pos0,
+        const llama_kv_compact_self_study_config & config,
+        llama_kv_compact_self_study_stats * stats,
+        llama_pos p0,
+        uint32_t chunk_size) {
+
+    if (seq_id < 0 || target_tokens == 0 || live_suffix_pos0 <= p0) {
+        return false;
+    }
+
+    // --- Validate cache state ---
+    std::vector<llama_pos> prefix_positions;
+    if (!kv.compacted_prefix_seq_positions(seq_id, p0, live_suffix_pos0, prefix_positions)) {
+        return false;
+    }
+    if (prefix_positions.empty()) {
+        return false;
+    }
+
+    const auto & layouts = kv.get_compacted_prefix()->get_layouts();
+    if (layouts.empty()) {
+        return false;
+    }
+
+    const uint32_t n_prefix_tokens = (uint32_t)prefix_positions.size();
+
+    // Delegate to non-chunked self-study if prefix fits in one chunk.
+    if (n_prefix_tokens <= chunk_size) {
+        return llama_kv_compact_self_study_from_live_kv(
+                ctx, kv, seq_id, target_tokens, live_suffix_pos0,
+                config, stats, p0);
+    }
+
+    // ===== Phase 1: Multi-round Q-capture generation =====
+    const auto & model_hparams = ctx->get_model().hparams;
+    const uint32_t n_layer     = model_hparams.n_layer;
+    const uint32_t n_embd_head = model_hparams.n_embd_head_k(0);
+    const uint32_t n_head_q    = model_hparams.n_head(0);
+
+    uint32_t eff_n_rounds   = std::max(1u, std::min(config.n_rounds, (uint32_t)LLAMA_KV_COMPACT_MAX_ROUNDS));
+    uint32_t eff_n_generate = config.n_generate;
+
+    // Memory budget guard (M-01 fix).
+    if (config.max_q_capture_mb > 0) {
+        const size_t bytes_per_token = (size_t)n_layer * n_head_q * n_embd_head * sizeof(float);
+        const size_t budget_bytes    = (size_t)config.max_q_capture_mb * 1024 * 1024;
+        const size_t requested_bytes = bytes_per_token * eff_n_generate * eff_n_rounds;
+
+        if (requested_bytes > budget_bytes && bytes_per_token > 0) {
+            const uint32_t max_total_tokens = (uint32_t)(budget_bytes / bytes_per_token);
+            eff_n_generate = std::max(1u, max_total_tokens / eff_n_rounds);
+            if (eff_n_generate < 100 && eff_n_rounds > 1) {
+                eff_n_rounds   = std::max(1u, max_total_tokens / config.n_generate);
+                eff_n_generate = std::max(1u, max_total_tokens / eff_n_rounds);
+            }
+            LLAMA_LOG_WARN("chunked self-study: Q-capture memory guard — reduced from %u×%u to %u×%u tokens "
+                           "(%u MB budget, %.2f MB/token)\n",
+                           config.n_generate, config.n_rounds, eff_n_generate, eff_n_rounds,
+                           config.max_q_capture_mb,
+                           (float)bytes_per_token / (1024.0f * 1024.0f));
+        }
+    }
+
+    const uint32_t total_generate = eff_n_generate * eff_n_rounds;
+
+    // Q-capture sufficiency check: if estimated queries < target_tokens, the
+    // NNLS solver becomes underdetermined and produces NaN/extreme weights.
+    // Fall back to the proven select pipeline which uses K-as-surrogate-Q.
+    {
+        const uint32_t n_head_kv = layouts[0].n_head_kv;
+        const uint32_t n_rep = n_head_q / std::max(1u, n_head_kv);
+        const uint32_t estimated_queries = total_generate * n_rep;
+        if (estimated_queries < target_tokens) {
+            LLAMA_LOG_WARN("chunked self-study: Q-capture insufficient (%u queries < %u targets) — "
+                           "falling back to select pipeline for stable quality\n",
+                           estimated_queries, target_tokens);
+            return llama_kv_compact_select_from_live_kv(kv, seq_id, target_tokens, live_suffix_pos0,
+                                                         nullptr, p0);
+        }
+    }
+
+    llama_q_capture_state q_state;
+    q_state.reset((int32_t)n_layer, n_embd_head, n_head_q, total_generate);
+
+    const auto t_gen_start = std::chrono::steady_clock::now();
+    bool any_generated = false;
+    for (uint32_t round = 0; round < eff_n_rounds; ++round) {
+        const float temp = config.temperatures[round];
+        if (llama_kv_compact_self_study_generate(ctx, q_state, eff_n_generate, seq_id, temp, 42 + round)) {
+            any_generated = true;
+        } else if (round == 0) {
+            return false;
+        }
+    }
+    if (!any_generated) {
+        return false;
+    }
+    const auto t_gen_end = std::chrono::steady_clock::now();
+
+    // Q-capture layer diagnostics.
+    if (stats) {
+        stats->n_layers_with_q  = 0;
+        stats->n_dim_mismatches = 0;
+        for (int il = 0; il < q_state.n_layers; ++il) {
+            if (q_state.layers[il].n_tokens > 0) {
+                stats->n_layers_with_q++;
+            }
+            stats->n_dim_mismatches += q_state.layers[il].n_dim_mismatches;
+        }
+    }
+
+    // Post-capture sufficiency verification: use ACTUAL captured token count
+    // rather than pre-capture estimate (which may be wrong for some models).
+    {
+        uint32_t actual_tokens = 0;
+        for (int il = 0; il < q_state.n_layers; ++il) {
+            if (q_state.layers[il].n_tokens > 0) {
+                actual_tokens = q_state.layers[il].n_tokens;
+                break;
+            }
+        }
+        const uint32_t n_head_kv_l0 = layouts[0].n_head_kv;
+        const uint32_t n_rep = n_head_q / std::max(1u, n_head_kv_l0);
+        const uint32_t actual_queries = actual_tokens * n_rep;
+        if (actual_queries < target_tokens) {
+            LLAMA_LOG_WARN("chunked self-study: post-capture insufficiency (%u tokens captured, "
+                           "%u queries < %u targets) — falling back to select pipeline\n",
+                           actual_tokens, actual_queries, target_tokens);
+            return llama_kv_compact_select_from_live_kv(kv, seq_id, target_tokens, live_suffix_pos0,
+                                                         nullptr, p0);
+        }
+    }
+
+    // ===== Phase 2: Precompute + normalize Q per layer/head =====
+    // GQA regroup, subsample, then normalize Q to match K scale using a
+    // small K sample from the prefix (avoids extracting full K just for norms).
+
+    struct head_q_entry {
+        llama_kv_compact_matrix queries;  // [n_queries, n_embd_head]
+    };
+    std::vector<std::vector<head_q_entry>> q_cache(layouts.size());
+
+    const uint32_t norm_sample_n = std::min(256u, n_prefix_tokens);
+    std::vector<llama_pos> norm_sample_pos(
+        prefix_positions.begin(),
+        prefix_positions.begin() + norm_sample_n);
+
+    double q_norm_sum = 0.0, k_norm_sum = 0.0;
+    uint32_t n_heads_seen = 0;
+
+    for (size_t li = 0; li < layouts.size(); ++li) {
+        const auto & layout = layouts[li];
+        q_cache[li].resize(layout.n_head_kv);
+
+        for (uint32_t head = 0; head < layout.n_head_kv; ++head) {
+            auto & entry = q_cache[li][head];
+
+            // GQA regroup
+            if (!llama_q_capture_regroup_for_kv_head(
+                        q_state, (int32_t)layout.layer_id,
+                        head, layout.n_head_kv, entry.queries)) {
+                return false;
+            }
+
+            // Subsample to max_queries_per_kv_head
+            llama_q_capture_subsample(entry.queries, config.max_queries_per_kv_head);
+
+            // Extract a small K sample for Q/K norm matching.
+            std::vector<float> sample_k_data;
+            if (!kv.compacted_prefix_copy_k_head_f32(
+                        (int32_t)layout.layer_id, seq_id, head,
+                        norm_sample_pos, sample_k_data)) {
+                return false;
+            }
+            llama_kv_compact_matrix sample_k(norm_sample_n, layout.n_embd_head_k);
+            sample_k.data = std::move(sample_k_data);
+
+            float q_norm = compute_row_norm_mean(entry.queries);
+            float k_norm = compute_row_norm_mean(sample_k);
+
+            if (stats) {
+                q_norm_sum += q_norm;
+                k_norm_sum += k_norm;
+                n_heads_seen++;
+            }
+
+            // Normalize Q to match K scale (same fix as non-chunked self-study).
+            if (q_norm > 1e-8f && k_norm > 1e-8f) {
+                float scale = k_norm / q_norm;
+                for (size_t i = 0; i < entry.queries.data.size(); ++i) {
+                    entry.queries.data[i] *= scale;
+                }
+            }
+        }
+    }
+
+    // ===== Phase 3: Chunked scoring + selection =====
+    uint32_t n_chunks = (n_prefix_tokens + chunk_size - 1) / chunk_size;
+
+    // Merge chunks if more chunks than target tokens.
+    if (n_chunks > target_tokens) {
+        chunk_size = (n_prefix_tokens + target_tokens - 1) / target_tokens;
+        n_chunks   = (n_prefix_tokens + chunk_size - 1) / chunk_size;
+    }
+
+    // Compute chunk boundaries and proportional budgets.
+    std::vector<uint32_t> chunk_starts(n_chunks);
+    std::vector<uint32_t> chunk_sizes_v(n_chunks);
+    std::vector<uint32_t> chunk_budgets(n_chunks);
+
+    uint32_t budget_allocated = 0;
+    for (uint32_t c = 0; c < n_chunks; ++c) {
+        chunk_starts[c]  = c * chunk_size;
+        chunk_sizes_v[c] = std::min(chunk_size, n_prefix_tokens - chunk_starts[c]);
+        chunk_budgets[c] = (uint32_t)std::round(
+            (float)target_tokens * (float)chunk_sizes_v[c] / (float)n_prefix_tokens);
+        chunk_budgets[c] = std::max(chunk_budgets[c], 1u);
+        budget_allocated += chunk_budgets[c];
+    }
+
+    // Adjust budgets to hit exact target.
+    if (budget_allocated > target_tokens) {
+        std::vector<uint32_t> order(n_chunks);
+        std::iota(order.begin(), order.end(), 0);
+        std::sort(order.begin(), order.end(), [&](uint32_t a, uint32_t b) {
+            return chunk_budgets[a] < chunk_budgets[b];
+        });
+        uint32_t excess = budget_allocated - target_tokens;
+        for (uint32_t idx : order) {
+            if (excess == 0) break;
+            uint32_t reduce = std::min(chunk_budgets[idx], excess);
+            chunk_budgets[idx] -= reduce;
+            excess -= reduce;
+        }
+    } else if (budget_allocated < target_tokens) {
+        chunk_budgets[n_chunks - 1] += target_tokens - budget_allocated;
+    }
+
+    // Per-chunk scoring with Metal GPU.
+    auto * metal_ctx = llama_kv_compact_metal_create();
+
+    const auto t_query_start = std::chrono::steady_clock::now();
+
+    std::vector<uint32_t> all_selected_local;
+    all_selected_local.reserve(target_tokens);
+
+    for (uint32_t c = 0; c < n_chunks; ++c) {
+        const uint32_t cs = chunk_starts[c];
+        const uint32_t cn = chunk_sizes_v[c];
+        const uint32_t cb = std::min(chunk_budgets[c], cn);
+
+        if (cb == 0) continue;
+
+        std::vector<llama_pos> chunk_positions(
+            prefix_positions.begin() + cs,
+            prefix_positions.begin() + cs + cn);
+
+        std::vector<float> chunk_scores(cn, 0.0f);
+
+        for (size_t li = 0; li < layouts.size(); ++li) {
+            const auto & layout = layouts[li];
+
+            for (uint32_t head = 0; head < layout.n_head_kv; ++head) {
+                const auto & q_entry = q_cache[li][head];
+
+                // Extract chunk K from live cache.
+                std::vector<float> k_data;
+                if (!kv.compacted_prefix_copy_k_head_f32(
+                            (int32_t)layout.layer_id, seq_id, head,
+                            chunk_positions, k_data)) {
+                    llama_kv_compact_metal_free(metal_ctx);
+                    return false;
+                }
+
+                llama_kv_compact_matrix chunk_k(cn, layout.n_embd_head_k);
+                chunk_k.data = std::move(k_data);
+
+                // Score normalized Q against chunk K.
+                if (metal_ctx) {
+                    std::vector<float> head_scores(cn, 0.0f);
+                    if (llama_kv_compact_metal_attention_scores(
+                                metal_ctx,
+                                q_entry.queries.data.data(), q_entry.queries.rows, q_entry.queries.cols,
+                                chunk_k.data.data(), chunk_k.rows,
+                                head_scores.data())) {
+                        for (uint32_t ki = 0; ki < cn; ++ki) {
+                            chunk_scores[ki] += head_scores[ki];
+                        }
+                    } else {
+                        llama_kv_compact_accumulate_attention_scores(
+                                q_entry.queries, chunk_k, chunk_scores);
+                    }
+                } else {
+                    llama_kv_compact_accumulate_attention_scores(
+                            q_entry.queries, chunk_k, chunk_scores);
+                }
+            }
+        }
+
+        // Top-k selection within this chunk.
+        const std::vector<uint32_t> chunk_selected = llama_kv_compact_select_topk(chunk_scores, cb);
+
+        // Map chunk-local indices to global prefix indices.
+        for (uint32_t idx : chunk_selected) {
+            all_selected_local.push_back(cs + idx);
+        }
+    }
+
+    llama_kv_compact_metal_free(metal_ctx);
+    metal_ctx = nullptr;
+
+    const auto t_query_end = std::chrono::steady_clock::now();
+
+    // Sort and cap global selection.
+    std::sort(all_selected_local.begin(), all_selected_local.end());
+    if (all_selected_local.size() > target_tokens) {
+        all_selected_local.resize(target_tokens);
+    }
+    const uint32_t actual_selected = (uint32_t)all_selected_local.size();
+
+    // Convert to positions.
+    std::vector<llama_pos> selected_positions;
+    selected_positions.reserve(actual_selected);
+    for (uint32_t idx : all_selected_local) {
+        selected_positions.push_back(prefix_positions[idx]);
+    }
+
+    // ===== Phase 4: Configure store + full-prefix solver =====
+    const llama_pos seq_max = kv.seq_pos_max(seq_id);
+    const uint32_t logical_token_count = seq_max >= 0 ? (uint32_t)(seq_max + 1) : (uint32_t)live_suffix_pos0;
+    if (!kv.compacted_prefix_configure(seq_id, logical_token_count, selected_positions, live_suffix_pos0)) {
+        return false;
+    }
+
+    auto * seq = kv.get_compacted_prefix()->get_seq(seq_id);
+    if (seq == nullptr || !seq->enabled || seq->layers.size() != layouts.size()) {
+        kv.compacted_prefix_clear(seq_id, true);
+        return false;
+    }
+
+    const auto t_solver_start = std::chrono::steady_clock::now();
+    const llama_kv_compact_solver_opts solver_opts = {
+        /* lambda           */ config.lambda,
+        /* nnls_iters       */ config.nnls_iters,
+        /* nnls_lower_bound */ 1e-12f,
+        /* nnls_upper_bound */ 100.0f,   // prevent extreme betas from underdetermined NNLS
+    };
+
+    bool solver_ok = true;
+    uint32_t actual_queries_per_head = 0;
+
+    double beta_norm_sum = 0.0, beta_sparsity_sum = 0.0;
+    double fit_residual_sum = 0.0;
+    uint32_t n_beta_heads_seen = 0;
+
+    for (size_t li = 0; li < layouts.size() && solver_ok; ++li) {
+        const auto & layout = layouts[li];
+        auto & dst_layer = seq->layers[li];
+
+        for (uint32_t head = 0; head < layout.n_head_kv && solver_ok; ++head) {
+            auto & q_entry = q_cache[li][head];
+
+            if (li == 0 && head == 0) {
+                actual_queries_per_head = q_entry.queries.rows;
+            }
+
+            // Extract full-prefix K for solver.
+            std::vector<float> full_k_data;
+            if (!kv.compacted_prefix_copy_k_head_f32(
+                        (int32_t)layout.layer_id, seq_id, head,
+                        prefix_positions, full_k_data)) {
+                solver_ok = false;
+                break;
+            }
+            llama_kv_compact_matrix full_k(n_prefix_tokens, layout.n_embd_head_k);
+            full_k.data = std::move(full_k_data);
+
+            // V extraction
+            std::vector<float> full_v_data;
+            if (!kv.compacted_prefix_copy_v_head_f32(
+                        (int32_t)layout.layer_id, seq_id, head,
+                        prefix_positions, full_v_data)) {
+                solver_ok = false;
+                break;
+            }
+            llama_kv_compact_matrix full_v(n_prefix_tokens, layout.n_embd_head_v);
+            full_v.data = std::move(full_v_data);
+
+            // Gather selected K rows.
+            llama_kv_compact_matrix compacted_k;
+            if (!gather_matrix_rows(full_k, all_selected_local, compacted_k)) {
+                solver_ok = false;
+                break;
+            }
+
+            // NNLS beta fitting (Q already normalized from Phase 2).
+            std::vector<float> beta;
+            float head_residual = 0.0f;
+            if (!llama_kv_compact_fit_beta(q_entry.queries, full_k,
+                                            compacted_k, solver_opts,
+                                            beta, stats ? &head_residual : nullptr)) {
+                solver_ok = false;
+                break;
+            }
+
+            // Beta quality check (MIT zerobeta fallback).
+            float beta_norm_sq = 0.0f;
+            uint32_t beta_zero_count = 0;
+            for (uint32_t bi = 0; bi < (uint32_t)beta.size(); ++bi) {
+                beta_norm_sq += beta[bi] * beta[bi];
+                if (std::fabs(beta[bi]) < 1e-6f) {
+                    beta_zero_count++;
+                }
+            }
+            const float beta_norm = std::sqrt(beta_norm_sq);
+            const bool zerobeta = (beta_norm > 50.0f);
+
+            if (zerobeta) {
+                std::fill(beta.begin(), beta.end(), 0.0f);
+                if (li == 0 && head == 0) {
+                    LLAMA_LOG_WARN("chunked self-study: extreme beta_norm (%.1f) — using zerobeta + direct V\n",
+                                   beta_norm);
+                }
+            }
+
+            if (stats) {
+                beta_norm_sum     += beta_norm;
+                beta_sparsity_sum += (float)beta_zero_count / std::max<uint32_t>(1, (uint32_t)beta.size());
+                fit_residual_sum  += head_residual;
+                n_beta_heads_seen++;
+            }
+
+            // Least-squares V fitting with direct fallback (MIT c2_method='direct')
+            if (layout.n_embd_head_v > 0) {
+                llama_kv_compact_matrix compacted_v;
+                bool v_fit_ok = false;
+
+                if (!zerobeta) {
+                    v_fit_ok = llama_kv_compact_fit_values(
+                                q_entry.queries, full_k, full_v,
+                                compacted_k, beta, solver_opts,
+                                compacted_v);
+                    if (v_fit_ok) {
+                        for (float val : compacted_v.data) {
+                            if (!std::isfinite(val)) {
+                                v_fit_ok = false;
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                if (!v_fit_ok) {
+                    if (!gather_matrix_rows(full_v, all_selected_local, compacted_v)) {
+                        solver_ok = false;
+                        break;
+                    }
+                }
+                write_compacted_payload(dst_layer.v_data, layout.type_v,
+                                        actual_selected, head,
+                                        layout.n_embd_head_v, compacted_v);
+            }
+
+            // Write compacted K payload.
+            write_compacted_payload(dst_layer.k_data, layout.type_k,
+                                    actual_selected, head,
+                                    layout.n_embd_head_k, compacted_k);
+
+            // Write beta.
+            for (uint32_t token = 0; token < actual_selected; ++token) {
+                dst_layer.beta_data[size_t(head) * actual_selected + token] = beta[token];
+            }
+        }
+    }
+    const auto t_solver_end = std::chrono::steady_clock::now();
+
+    if (!solver_ok) {
+        kv.compacted_prefix_clear(seq_id, true);
+        return false;
+    }
+
+    // --- Populate stats ---
+    if (stats) {
+        stats->generation_time_ms = std::chrono::duration<double, std::milli>(t_gen_end - t_gen_start).count();
+        stats->q_capture_time_ms  = std::chrono::duration<double, std::milli>(t_query_end - t_query_start).count();
+        stats->solver_time_ms     = std::chrono::duration<double, std::milli>(t_solver_end - t_solver_start).count();
+        stats->n_tokens_generated = q_state.layers.empty() ? 0 : q_state.layers[0].n_tokens;
+        stats->n_queries_per_head = actual_queries_per_head;
+        stats->n_prefix_tokens    = n_prefix_tokens;
+        stats->n_selected_tokens  = actual_selected;
+
+        stats->q_norm_mean       = (n_heads_seen > 0) ? (float)(q_norm_sum / n_heads_seen) : 0.0f;
+        stats->k_norm_mean       = (n_heads_seen > 0) ? (float)(k_norm_sum / n_heads_seen) : 0.0f;
+        stats->beta_norm_mean    = (n_beta_heads_seen > 0) ? (float)(beta_norm_sum / n_beta_heads_seen) : 0.0f;
+        stats->beta_sparsity     = (n_beta_heads_seen > 0) ? (float)(beta_sparsity_sum / n_beta_heads_seen) : 0.0f;
+        stats->fit_residual_mean = (n_beta_heads_seen > 0) ? (float)(fit_residual_sum / n_beta_heads_seen) : 0.0f;
+
+        LLAMA_LOG_INFO("chunked_self_study diagnostics: n_chunks=%u layers_with_q=%u "
+                       "q_norm=%.4f k_norm=%.4f beta_norm=%.4f beta_sparsity=%.4f "
+                       "fit_residual=%.6f\n",
+                       n_chunks, stats->n_layers_with_q,
+                       stats->q_norm_mean, stats->k_norm_mean,
+                       stats->beta_norm_mean, stats->beta_sparsity,
+                       stats->fit_residual_mean);
+    }
+
+    LLAMA_LOG_INFO("chunked self-study: pipeline complete — %u prefix (%u chunks of %u) → %u selected (seq %d)\n",
+                   n_prefix_tokens, n_chunks, chunk_size, actual_selected, seq_id);
     return true;
 }

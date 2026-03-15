@@ -2201,13 +2201,13 @@ private:
                     // All implemented methods (superset)
                     static const std::set<std::string> valid_methods = {
                         "select", "solver", "omp", "self_study",
-                        "nonuniform", "chunked", "on_policy",
+                        "chunked_self_study", "nonuniform", "chunked", "on_policy",
                     };
                     // V1 beta allowlist — configurable via LLAMA_COMPACT_ALLOWED_METHODS
                     const auto & v1_allowlist = get_compact_allowed_methods();
 
                     if (valid_methods.find(method) == valid_methods.end()) {
-                        send_error(task, "Invalid compaction method. Supported: select, solver, omp, self_study, nonuniform, chunked, on_policy", ERROR_TYPE_INVALID_REQUEST);
+                        send_error(task, "Invalid compaction method. Supported: select, solver, omp, self_study, chunked_self_study, nonuniform, chunked, on_policy", ERROR_TYPE_INVALID_REQUEST);
                         break;
                     }
                     if (v1_allowlist.find(method) == v1_allowlist.end()) {
@@ -2222,7 +2222,7 @@ private:
                     }
 
                     // Support envelope warnings (warn, do not block).
-                    if (method == "self_study") {
+                    if (method == "self_study" || method == "chunked_self_study") {
                         SRV_WRN("compaction method '%s' is experimental "
                                 "(quality proven but pipeline overhead is high) — proceeding at caller's risk\n", method.c_str());
                     }
@@ -2286,6 +2286,14 @@ private:
                         ss_config.lambda                  = cp.lambda;
                         llama_kv_compact_self_study_stats ss_stats;
                         ok = kv->compacted_prefix_self_study_from_live_kv(ctx, seq_id, target_tokens, live_suffix_pos0, ss_config, &ss_stats, cp.p0);
+                    } else if (method == "chunked_self_study") {
+                        llama_kv_compact_self_study_config ss_config;
+                        ss_config.n_generate              = cp.n_generate;
+                        ss_config.max_queries_per_kv_head = cp.max_queries_per_kv_head;
+                        ss_config.nnls_iters              = cp.nnls_iters;
+                        ss_config.lambda                  = cp.lambda;
+                        llama_kv_compact_self_study_stats ss_stats;
+                        ok = kv->compacted_prefix_chunked_self_study_from_live_kv(ctx, seq_id, target_tokens, live_suffix_pos0, ss_config, &ss_stats, cp.p0);
                     } else if (method == "nonuniform") {
                         llama_kv_compact_pipeline_stats stats;
                         ok = kv->compacted_prefix_nonuniform_from_live_kv(seq_id, target_tokens, live_suffix_pos0, &stats, cp.p0, cp.max_queries, cp.nnls_iters, cp.lambda);

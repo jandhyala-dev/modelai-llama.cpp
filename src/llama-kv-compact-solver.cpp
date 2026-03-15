@@ -211,6 +211,53 @@ bool solve_least_squares_underdetermined(
     return true;
 }
 
+// Single-RHS underdetermined solver: (XXᵀ + λI)z = y, w = Xᵀz
+// Uses n×n system instead of t×t when n < t, avoiding O(t²) memory.
+bool solve_vector_least_squares_underdetermined(
+        const llama_kv_compact_matrix & x,
+        const std::vector<float> & y,
+        float lambda,
+        std::vector<float> & out) {
+    const uint32_t n = x.rows;
+    const uint32_t t = x.cols;
+
+    if (n == 0 || t == 0 || y.size() != n) {
+        return false;
+    }
+
+    // Build XXᵀ (n × n) — much smaller than XᵀX (t × t) when n < t
+    std::vector<float> xxt(size_t(n) * n, 0.0f);
+    for (uint32_t i = 0; i < n; ++i) {
+        for (uint32_t j = 0; j <= i; ++j) {
+            float sum = dot_row(x.row(i), x.row(j), t);
+            xxt[size_t(i) * n + j] = sum;
+            xxt[size_t(j) * n + i] = sum;
+        }
+    }
+
+    symmetrize_inplace(xxt, n);
+    for (uint32_t i = 0; i < n; ++i) {
+        xxt[size_t(i) * n + i] += lambda;
+    }
+
+    // Solve (XXᵀ + λI)z = y
+    std::vector<float> z(y.begin(), y.end());
+    if (!solve_spd_cholesky(xxt, n, z, 1)) {
+        return false;
+    }
+
+    // w = Xᵀz
+    out.resize(t);
+    for (uint32_t i = 0; i < t; ++i) {
+        float sum = 0.0f;
+        for (uint32_t r = 0; r < n; ++r) {
+            sum += x(r, i) * z[r];
+        }
+        out[i] = sum;
+    }
+    return true;
+}
+
 // Single-RHS version for NNLS beta fitting
 bool solve_vector_least_squares_sym(
         const llama_kv_compact_matrix & x,
@@ -545,30 +592,73 @@ bool solve_nnls_v2(
 
     const float min_val = (opts.nnls_lower_bound > 0.0f) ? opts.nnls_lower_bound : 1e-12f;
     bool solved = false;
+    const bool underdetermined = (n < t);
 
-    // Phase 1: Try LAPACK sgels (QR-based, condition κ)
-#if LLAMA_KV_COMPACT_HAS_LAPACK
-    if (!solved) {
-        solved = solve_vector_least_squares_lapack(m, target, weights_out);
-        if (solved) {
-            // Check for NaN — MIT base.py:500-505
-            for (float w : weights_out) {
-                if (!std::isfinite(w)) {
-                    solved = false;
+    // Helper: check for NaN/Inf in weights
+    auto has_nonfinite = [](const std::vector<float> & w) -> bool {
+        for (float v : w) {
+            if (!std::isfinite(v)) return true;
+        }
+        return false;
+    };
+
+    // For underdetermined systems, compute XXᵀ diagonal average to scale λ.
+    float diag_avg = 0.0f;
+    if (underdetermined) {
+        for (uint32_t qi = 0; qi < n; ++qi) {
+            const float * row = m.row(qi);
+            float row_sq = 0.0f;
+            for (uint32_t ki = 0; ki < t; ++ki) {
+                row_sq += row[ki] * row[ki];
+            }
+            diag_avg += row_sq;
+        }
+        diag_avg /= std::max(n, 1u);
+
+        // Underdetermined system (more unknowns than equations).
+        // sgels min-norm solution produces many near-zero weights that get
+        // clamped, forcing remaining weights to extreme values (beta_norm>>100).
+        // Use XXᵀ ridge formulation with adaptive λ for a smooth solution.
+        float lam = std::max(0.01f * diag_avg, 1e-2f);
+        for (int attempt = 0; attempt < 5; ++attempt) {
+            if (solve_vector_least_squares_underdetermined(m, target, lam, weights_out)) {
+                if (!has_nonfinite(weights_out)) {
+                    solved = true;
                     break;
                 }
             }
+            lam *= 10.0f;
+        }
+    }
+
+    // Phase 1: Try LAPACK sgels (QR-based, condition κ) — overdetermined only
+#if LLAMA_KV_COMPACT_HAS_LAPACK
+    if (!solved && !underdetermined) {
+        solved = solve_vector_least_squares_lapack(m, target, weights_out);
+        if (solved && has_nonfinite(weights_out)) {
+            solved = false;
         }
     }
 #endif
 
     // Phase 2: Cholesky fallback with symmetrization — MIT base.py:510-530
     if (!solved) {
-        float lam = 1e-6f;  // MIT default fallback lambda
+        float lam = underdetermined ? std::max(0.1f * diag_avg, 1e-1f) : 1e-6f;
         for (int attempt = 0; attempt < 5; ++attempt) {
-            if (solve_vector_least_squares_sym(m, target, lam, weights_out)) {
-                solved = true;
-                break;
+            if (underdetermined) {
+                if (solve_vector_least_squares_underdetermined(m, target, lam, weights_out)) {
+                    if (!has_nonfinite(weights_out)) {
+                        solved = true;
+                        break;
+                    }
+                }
+            } else {
+                if (solve_vector_least_squares_sym(m, target, lam, weights_out)) {
+                    if (!has_nonfinite(weights_out)) {
+                        solved = true;
+                        break;
+                    }
+                }
             }
             lam *= 10.0f;
         }
@@ -656,16 +746,22 @@ bool solve_values_v2(
     }
 #endif
 
+    // Helper: check if matrix contains NaN/Inf
+    auto matrix_has_nonfinite = [](const llama_kv_compact_matrix & m) -> bool {
+        for (float v : m.data) {
+            if (!std::isfinite(v)) return true;
+        }
+        return false;
+    };
+
     // Tier 2: Cholesky with symmetrization and ridge
     float lam = std::max(effective_lambda, 1e-8f);
     if (n < t) {
-        // Underdetermined: (XXᵀ + λI)Z = Y, C = XᵀZ
-        if (solve_least_squares_underdetermined(x, y, lam, out)) {
+        if (solve_least_squares_underdetermined(x, y, lam, out) && !matrix_has_nonfinite(out)) {
             return true;
         }
     } else {
-        // Overdetermined: (XᵀX + λI)C = XᵀY
-        if (solve_least_squares_cholesky_sym(x, y, lam, out)) {
+        if (solve_least_squares_cholesky_sym(x, y, lam, out) && !matrix_has_nonfinite(out)) {
             return true;
         }
     }
@@ -674,11 +770,11 @@ bool solve_values_v2(
     for (int attempt = 0; attempt < 5; ++attempt) {
         lam = std::max(lam * 10.0f, 1e-4f);
         if (n < t) {
-            if (solve_least_squares_underdetermined(x, y, lam, out)) {
+            if (solve_least_squares_underdetermined(x, y, lam, out) && !matrix_has_nonfinite(out)) {
                 return true;
             }
         } else {
-            if (solve_least_squares_cholesky_sym(x, y, lam, out)) {
+            if (solve_least_squares_cholesky_sym(x, y, lam, out) && !matrix_has_nonfinite(out)) {
                 return true;
             }
         }
