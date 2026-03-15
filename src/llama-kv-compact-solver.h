@@ -24,12 +24,20 @@ struct llama_kv_compact_matrix {
     float   operator()(uint32_t r, uint32_t c) const { return data[size_t(r) * cols + c]; }
 };
 
+// Ridge scaling modes matching MIT reference (algorithms/base.py:146-161)
+enum llama_kv_compact_ridge_scale {
+    LLAMA_KV_COMPACT_RIDGE_SPECTRAL  = 0, // λ × σ_max(X)² with frobenius fallback
+    LLAMA_KV_COMPACT_RIDGE_FROBENIUS = 1, // λ × (‖X‖²_F / t)
+    LLAMA_KV_COMPACT_RIDGE_FIXED     = 2, // λ (raw)
+};
+
 struct llama_kv_compact_solver_opts {
-    float lambda = 1e-6f;
-    int   nnls_iters = 2;          // paper uses 0 (OMP) or 2 (HighestAttnKeys)
-    float nnls_lower_bound = 0.05f; // paper: e^{-3} ≈ 0.05, prevents near-zero weights
-    float nnls_upper_bound = 20.0f; // paper: e^3 ≈ 20.1
-    bool  spectral_ridge = false;   // scale lambda by spectral norm of design matrix
+    float lambda          = 1e-6f;
+    int   nnls_iters      = 0;       // V2: 0 = lstsq+clamp (MIT default), >0 = PGD refinement
+    float nnls_lower_bound = 1e-12f; // V2: MIT default (was 0.05 in V1)
+    float nnls_upper_bound = 0.0f;   // V2: 0 = no upper bound (MIT default; was 20.0 in V1)
+
+    llama_kv_compact_ridge_scale ridge_scale = LLAMA_KV_COMPACT_RIDGE_SPECTRAL;
 };
 
 struct llama_kv_compact_quality_metrics {

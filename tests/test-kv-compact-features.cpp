@@ -188,34 +188,34 @@ int main() {
         compacted_k(0, 0) = keys(0, 0); compacted_k(0, 1) = keys(0, 1);
         compacted_k(1, 0) = keys(2, 0); compacted_k(1, 1) = keys(2, 1);
 
-        // Without spectral ridge.
+        // Without spectral ridge (fixed mode).
         llama_kv_compact_solver_opts opts_no_sr = {};
-        opts_no_sr.spectral_ridge = false;
+        opts_no_sr.ridge_scale = LLAMA_KV_COMPACT_RIDGE_FIXED;
         opts_no_sr.lambda = 1e-6f;
-        opts_no_sr.nnls_iters = 2;
+        opts_no_sr.nnls_iters = 0;
 
         std::vector<float> beta_no_sr;
         float err_no_sr = 0.0f;
         check(llama_kv_compact_fit_beta(queries, keys, compacted_k,
                                          opts_no_sr, beta_no_sr, &err_no_sr),
-              "fit_beta without spectral_ridge succeeds");
+              "fit_beta without spectral ridge succeeds");
 
         // With spectral ridge.
         llama_kv_compact_solver_opts opts_sr = opts_no_sr;
-        opts_sr.spectral_ridge = true;
+        opts_sr.ridge_scale = LLAMA_KV_COMPACT_RIDGE_SPECTRAL;
 
         std::vector<float> beta_sr;
         float err_sr = 0.0f;
         check(llama_kv_compact_fit_beta(queries, keys, compacted_k,
                                          opts_sr, beta_sr, &err_sr),
-              "fit_beta with spectral_ridge succeeds");
+              "fit_beta with spectral ridge succeeds");
 
         check(beta_sr.size() == beta_no_sr.size(),
-              "spectral_ridge produces same-size beta");
+              "spectral ridge produces same-size beta");
 
         // Both should produce finite values.
         for (size_t i = 0; i < beta_sr.size(); ++i) {
-            check(std::isfinite(beta_sr[i]), "spectral_ridge beta is finite");
+            check(std::isfinite(beta_sr[i]), "spectral ridge beta is finite");
         }
 
         // V fitting with spectral ridge.
@@ -229,9 +229,9 @@ int main() {
         check(llama_kv_compact_fit_values(queries, keys, full_v,
                                            compacted_k, beta_sr, opts_sr,
                                            compacted_v),
-              "fit_values with spectral_ridge succeeds");
+              "fit_values with spectral ridge succeeds");
         check(compacted_v.rows == 2 && compacted_v.cols == 2,
-              "spectral_ridge V has correct shape");
+              "spectral ridge V has correct shape");
     }
 
     // -----------------------------------------------------------------------

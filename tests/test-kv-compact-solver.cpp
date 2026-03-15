@@ -63,8 +63,8 @@ int main() {
 
     llama_kv_compact_solver_opts opts = {};
     opts.lambda = 1e-6f;
-    opts.nnls_iters = 2;
-    opts.nnls_upper_bound = 20.0f;
+    opts.nnls_iters = 0;       // V2: lstsq+clamp (MIT default)
+    opts.nnls_upper_bound = 0.0f;  // V2: no upper bound
 
     std::vector<float> beta;
     float partition_rel_err = 0.0f;

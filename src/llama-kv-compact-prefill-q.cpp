@@ -278,9 +278,9 @@ bool llama_kv_compact_prefill_q_with_captured_state(
     const llama_kv_compact_solver_opts solver_opts = {
         /* lambda           */ config.lambda,
         /* nnls_iters       */ config.nnls_iters,
-        /* nnls_lower_bound */ 0.05f,
-        /* nnls_upper_bound */ 20.0f,
-        /* spectral_ridge   */ false,
+        /* nnls_lower_bound */ 1e-12f,
+        /* nnls_upper_bound */ 0.0f,
+        /* ridge_scale      */ LLAMA_KV_COMPACT_RIDGE_SPECTRAL,
     };
 
     for (size_t li = 0; li < layouts.size(); ++li) {

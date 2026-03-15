@@ -176,8 +176,8 @@ bool llama_kv_compact_fit_from_live_kv(
     const llama_kv_compact_solver_opts solver_opts = {
         /* lambda           */ lambda,
         /* nnls_iters       */ nnls_iters,
-        /* nnls_lower_bound */ 0.05f,
-        /* nnls_upper_bound */ 20.0f,
+        /* nnls_lower_bound */ 1e-12f,
+        /* nnls_upper_bound */ 0.0f,
     };
 
     for (size_t li = 0; li < layouts.size(); ++li) {
@@ -374,8 +374,8 @@ bool llama_kv_compact_omp_from_live_kv(
     const llama_kv_compact_solver_opts solver_opts = {
         /* lambda           */ lambda,
         /* nnls_iters       */ nnls_iters,
-        /* nnls_lower_bound */ 0.05f,
-        /* nnls_upper_bound */ 20.0f,
+        /* nnls_lower_bound */ 1e-12f,
+        /* nnls_upper_bound */ 0.0f,
     };
 
     for (size_t li = 0; li < layouts.size(); ++li) {
@@ -821,9 +821,9 @@ bool llama_kv_compact_nonuniform_from_live_kv(
     const llama_kv_compact_solver_opts solver_opts = {
         /* lambda           */ lambda,
         /* nnls_iters       */ nnls_iters,
-        /* nnls_lower_bound */ 0.05f,
-        /* nnls_upper_bound */ 20.0f,
-        /* spectral_ridge   */ false,
+        /* nnls_lower_bound */ 1e-12f,
+        /* nnls_upper_bound */ 0.0f,
+        /* ridge_scale      */ LLAMA_KV_COMPACT_RIDGE_SPECTRAL,
     };
 
     head_idx = 0;
@@ -1132,9 +1132,9 @@ bool llama_kv_compact_chunked_from_live_kv(
     const llama_kv_compact_solver_opts solver_opts = {
         /* lambda           */ lambda,
         /* nnls_iters       */ nnls_iters,
-        /* nnls_lower_bound */ 0.05f,
-        /* nnls_upper_bound */ 20.0f,
-        /* spectral_ridge   */ false,
+        /* nnls_lower_bound */ 1e-12f,
+        /* nnls_upper_bound */ 0.0f,
+        /* ridge_scale      */ LLAMA_KV_COMPACT_RIDGE_SPECTRAL,
     };
 
     for (size_t li = 0; li < layouts.size(); ++li) {

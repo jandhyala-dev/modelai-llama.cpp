@@ -585,8 +585,8 @@ bool llama_kv_compact_self_study_from_live_kv(
     const llama_kv_compact_solver_opts solver_opts = {
         /* lambda           */ config.lambda,
         /* nnls_iters       */ config.nnls_iters,
-        /* nnls_lower_bound */ 0.05f,
-        /* nnls_upper_bound */ 20.0f,
+        /* nnls_lower_bound */ 1e-12f,
+        /* nnls_upper_bound */ 0.0f,
     };
 
     bool solver_ok = true;
