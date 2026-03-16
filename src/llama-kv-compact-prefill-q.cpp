@@ -369,6 +369,11 @@ bool llama_kv_compact_refit_single_layer(
         return false;
     }
 
+    // Precondition: execution must be enabled so that Q-capture generation
+    // used the compacted prefix, making the captured Q reflect the current
+    // compacted state (sequential dependency).
+    GGML_ASSERT(kv.compacted_prefix_execution_enabled(seq_id));
+
     // Resolve model layer ID → layout.
     llama_compacted_prefix_layer_layout layout;
     if (!kv.compacted_prefix_layer_layout_for_solver(il, layout)) {
