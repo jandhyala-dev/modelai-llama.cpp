@@ -1,0 +1,191 @@
+ggml_metal_device_init: tensor API disabled for pre-M5 and pre-A19 devices
+ggml_metal_library_init: using embedded metal library
+ggml_metal_library_init: loaded in 0.007 sec
+ggml_metal_rsets_init: creating a residency set collection (keep_alive = 180 s)
+ggml_metal_device_init: GPU name:   MTL0
+ggml_metal_device_init: GPU family: MTLGPUFamilyApple8  (1008)
+ggml_metal_device_init: GPU family: MTLGPUFamilyCommon3 (3003)
+ggml_metal_device_init: GPU family: MTLGPUFamilyMetal4  (5002)
+ggml_metal_device_init: simdgroup reduction   = true
+ggml_metal_device_init: simdgroup matrix mul. = true
+ggml_metal_device_init: has unified memory    = true
+ggml_metal_device_init: has bfloat            = true
+ggml_metal_device_init: has tensor            = false
+ggml_metal_device_init: use residency sets    = true
+ggml_metal_device_init: use shared buffers    = true
+ggml_metal_device_init: recommendedMaxWorkingSetSize  = 26800.60 MB
+build: 8444 (561ab598) with AppleClang 17.0.0.17000604 for Darwin arm64
+common_init_result: fitting params to device memory, for bugs during this step try to reproduce them with -fit off, or provide --verbose logs if the bug only occurs with -fit on
+llama_params_fit_impl: projected to use 9507 MiB of device memory vs. 25558 MiB of free device memory
+llama_params_fit_impl: will leave 16050 >= 1024 MiB of free device memory, no changes needed
+llama_params_fit: successfully fit params to free device memory
+llama_params_fit: fitting params to free memory took 0.09 seconds
+llama_model_load_from_file_impl: using device MTL0 (Apple M2 Pro) (unknown id) - 25558 MiB free
+llama_model_loader: loaded meta data with 33 key-value pairs and 243 tensors from /Users/ajayjandhyala/.ollama/models/blobs/sha256-fd7b6731c33c57f61767612f56517460ec2d1e2e5a3f0163e0eb3d8d8cb5df20 (version GGUF V3 (latest))
+llama_model_loader: Dumping metadata keys/values. Note: KV overrides do not apply in this output.
+llama_model_loader: - kv   0:                       general.architecture str              = phi3
+llama_model_loader: - kv   1:                               general.type str              = model
+llama_model_loader: - kv   2:                               general.name str              = Phi 4
+llama_model_loader: - kv   3:                            general.version str              = 4
+llama_model_loader: - kv   4:                       general.organization str              = Microsoft
+llama_model_loader: - kv   5:                           general.basename str              = phi
+llama_model_loader: - kv   6:                         general.size_label str              = 15B
+llama_model_loader: - kv   7:                            general.license str              = mit
+llama_model_loader: - kv   8:                       general.license.link str              = https://huggingface.co/microsoft/phi-...
+llama_model_loader: - kv   9:                               general.tags arr[str,7]       = ["phi", "nlp", "math", "code", "chat"...
+llama_model_loader: - kv  10:                          general.languages arr[str,1]       = ["en"]
+llama_model_loader: - kv  11:                        phi3.context_length u32              = 16384
+llama_model_loader: - kv  12:  phi3.rope.scaling.original_context_length u32              = 16384
+llama_model_loader: - kv  13:                      phi3.embedding_length u32              = 5120
+llama_model_loader: - kv  14:                   phi3.feed_forward_length u32              = 17920
+llama_model_loader: - kv  15:                           phi3.block_count u32              = 40
+llama_model_loader: - kv  16:                  phi3.attention.head_count u32              = 40
+llama_model_loader: - kv  17:               phi3.attention.head_count_kv u32              = 10
+llama_model_loader: - kv  18:      phi3.attention.layer_norm_rms_epsilon f32              = 0.000010
+llama_model_loader: - kv  19:                  phi3.rope.dimension_count u32              = 128
+llama_model_loader: - kv  20:                        phi3.rope.freq_base f32              = 250000.000000
+llama_model_loader: - kv  21:                          general.file_type u32              = 15
+llama_model_loader: - kv  22:              phi3.attention.sliding_window u32              = 131072
+llama_model_loader: - kv  23:                       tokenizer.ggml.model str              = gpt2
+llama_model_loader: - kv  24:                         tokenizer.ggml.pre str              = dbrx
+llama_model_loader: - kv  25:                      tokenizer.ggml.tokens arr[str,100352]  = ["!", "\"", "#", "$", "%", "&", "'", ...
+llama_model_loader: - kv  26:                  tokenizer.ggml.token_type arr[i32,100352]  = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, ...
+llama_model_loader: - kv  27:                      tokenizer.ggml.merges arr[str,100000]  = ["Ġ Ġ", "ĠĠ ĠĠ", "i n", "Ġ t",...
+llama_model_loader: - kv  28:                tokenizer.ggml.bos_token_id u32              = 100257
+llama_model_loader: - kv  29:                tokenizer.ggml.eos_token_id u32              = 100257
+llama_model_loader: - kv  30:            tokenizer.ggml.padding_token_id u32              = 100257
+llama_model_loader: - kv  31:                    tokenizer.chat_template str              = {% for message in messages %}{% if (m...
+llama_model_loader: - kv  32:               general.quantization_version u32              = 2
+llama_model_loader: - type  f32:   81 tensors
+llama_model_loader: - type q4_K:  101 tensors
+llama_model_loader: - type q5_K:   40 tensors
+llama_model_loader: - type q6_K:   21 tensors
+print_info: file format = GGUF V3 (latest)
+print_info: file type   = Q4_K - Medium
+print_info: file size   = 8.43 GiB (4.94 BPW) 
+load_hparams: Phi SWA is currently disabled - results might be suboptimal for some models (see https://github.com/ggml-org/llama.cpp/pull/13676)
+load: 0 unused tokens
+load: printing all EOG tokens:
+load:   - 100257 ('<|endoftext|>')
+load:   - 100265 ('<|im_end|>')
+load: special tokens cache size = 96
+load: token to piece cache size = 0.6151 MB
+print_info: arch                  = phi3
+print_info: vocab_only            = 0
+print_info: no_alloc              = 0
+print_info: n_ctx_train           = 16384
+print_info: n_embd                = 5120
+print_info: n_embd_inp            = 5120
+print_info: n_layer               = 40
+print_info: n_head                = 40
+print_info: n_head_kv             = 10
+print_info: n_rot                 = 128
+print_info: n_swa                 = 0
+print_info: is_swa_any            = 0
+print_info: n_embd_head_k         = 128
+print_info: n_embd_head_v         = 128
+print_info: n_gqa                 = 4
+print_info: n_embd_k_gqa          = 1280
+print_info: n_embd_v_gqa          = 1280
+print_info: f_norm_eps            = 0.0e+00
+print_info: f_norm_rms_eps        = 1.0e-05
+print_info: f_clamp_kqv           = 0.0e+00
+print_info: f_max_alibi_bias      = 0.0e+00
+print_info: f_logit_scale         = 0.0e+00
+print_info: f_attn_scale          = 0.0e+00
+print_info: n_ff                  = 17920
+print_info: n_expert              = 0
+print_info: n_expert_used         = 0
+print_info: n_expert_groups       = 0
+print_info: n_group_used          = 0
+print_info: causal attn           = 1
+print_info: pooling type          = 0
+print_info: rope type             = 2
+print_info: rope scaling          = linear
+print_info: freq_base_train       = 250000.0
+print_info: freq_scale_train      = 1
+print_info: n_ctx_orig_yarn       = 16384
+print_info: rope_yarn_log_mul     = 0.0000
+print_info: rope_finetuned        = unknown
+print_info: model type            = 14B
+print_info: model params          = 14.66 B
+print_info: general.name          = Phi 4
+print_info: vocab type            = BPE
+print_info: n_vocab               = 100352
+print_info: n_merges              = 100000
+print_info: BOS token             = 100257 '<|endoftext|>'
+print_info: EOS token             = 100257 '<|endoftext|>'
+print_info: EOT token             = 100265 '<|im_end|>'
+print_info: PAD token             = 100257 '<|endoftext|>'
+print_info: LF token              = 198 'Ċ'
+print_info: FIM PRE token         = 100258 '<|fim_prefix|>'
+print_info: FIM SUF token         = 100260 '<|fim_suffix|>'
+print_info: FIM MID token         = 100259 '<|fim_middle|>'
+print_info: EOG token             = 100257 '<|endoftext|>'
+print_info: EOG token             = 100265 '<|im_end|>'
+print_info: max token length      = 256
+load_tensors: loading model tensors, this can take a while... (mmap = true, direct_io = false)
+load_tensors: offloading output layer to GPU
+load_tensors: offloading 39 repeating layers to GPU
+load_tensors: offloaded 41/41 layers to GPU
+load_tensors:   CPU_Mapped model buffer size =   275.62 MiB
+load_tensors:  MTL0_Mapped model buffer size =  8630.33 MiB
+.........................................................................................
+common_init_result: added <|endoftext|> logit bias = -inf
+common_init_result: added <|im_end|> logit bias = -inf
+llama_context: constructing llama_context
+llama_context: n_seq_max     = 1
+llama_context: n_ctx         = 4096
+llama_context: n_ctx_seq     = 4096
+llama_context: n_batch       = 2048
+llama_context: n_ubatch      = 512
+llama_context: causal_attn   = 1
+llama_context: flash_attn    = disabled
+llama_context: kv_unified    = true
+llama_context: freq_base     = 250000.0
+llama_context: freq_scale    = 1
+llama_context: n_ctx_seq (4096) < n_ctx_train (16384) -- the full capacity of the model will not be utilized
+ggml_metal_init: allocating
+ggml_metal_init: found device: Apple M2 Pro
+ggml_metal_init: picking default device: Apple M2 Pro
+ggml_metal_init: use fusion         = true
+ggml_metal_init: use concurrency    = true
+ggml_metal_init: use graph optimize = true
+llama_context:        CPU  output buffer size =     0.38 MiB
+llama_kv_cache:       MTL0 KV buffer size =   800.00 MiB
+llama_kv_cache: size =  800.00 MiB (  4096 cells,  40 layers,  1/1 seqs), K (f16):  400.00 MiB, V (f16):  400.00 MiB
+sched_reserve: reserving ...
+sched_reserve:       MTL0 compute buffer size =   353.01 MiB
+sched_reserve:        CPU compute buffer size =    33.01 MiB
+sched_reserve: graph nodes  = 1366
+sched_reserve: graph splits = 2
+sched_reserve: reserve took 18.25 ms, sched copies = 1
+common_init_from_params: warming up the model with an empty run - please wait ... (--no-warmup to disable)
+set_execution_enabled: compacted prefix enabled — 40/40 layers zero-beta (flash-eligible)
+=== KV Compaction Workload Test ===
+model:          sha256-fd7b6731c33c57f61767612f56517460ec2d1e2e5a3f0163e0eb3d8d8cb5df20
+params:         14.7B
+backend:        metal
+pipeline:       select
+n_ctx:          4096
+prefix_tokens:  3276
+live_suffix:    656 (pos >= 2620)
+continuation:   16 tokens (for tok/s)
+workload_class: W3 (production)
+
+prefilling 3276 tokens...
+prefill: 19505.2ms (168.0 tok/s)
+baseline decode: 14.7 tok/s (16 tokens in 1087.9ms)
+
+/Users/ajayjandhyala/dev/whippet/modelai-llama.cpp/ggml/src/ggml-backend.cpp:1774: GGML_ASSERT((int)sched->hash_set.size >= graph->n_nodes + graph->n_leafs) failed
+WARNING: Using native backtrace. Set GGML_BACKTRACE_LLDB for more info.
+WARNING: GGML_BACKTRACE_LLDB may cause native MacOS Terminal.app to crash.
+See: https://github.com/ggml-org/llama.cpp/pull/17869
+0   libggml-base.0.9.7.dylib            0x0000000102a7136c ggml_print_backtrace + 276
+1   libggml-base.0.9.7.dylib            0x0000000102a71558 ggml_abort + 156
+2   libggml-base.0.9.7.dylib            0x0000000102a8f8ec ggml_backend_sched_alloc_graph + 596
+3   libllama.0.0.8444.dylib             0x00000001033d36dc _ZN13llama_context14process_ubatchERK12llama_ubatch14llm_graph_typeP22llama_memory_context_iR11ggml_status + 840
+4   libllama.0.0.8444.dylib             0x00000001033d5054 _ZN13llama_context6decodeERK11llama_batch + 2296
+5   libllama.0.0.8444.dylib             0x00000001033d9858 llama_decode + 20
+6   test-kv-compact-workload            0x0000000102418a38 main + 3984
+7   dyld                                0x0000000186e25d54 start + 7184

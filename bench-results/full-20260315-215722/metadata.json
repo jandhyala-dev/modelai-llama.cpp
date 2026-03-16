@@ -1,0 +1,10 @@
+{
+  "timestamp": "20260315-215722",
+  "hardware": {
+    "cpu": "Apple M2 Pro",
+    "memory": "32GB",
+    "gpu": "Apple Metal (unified)"
+  },
+  "modelai_commit": "fcdfb56c",
+  "upstream_commit": "34818ea"
+}

@@ -1,0 +1,208 @@
+ggml_metal_device_init: tensor API disabled for pre-M5 and pre-A19 devices
+ggml_metal_library_init: using embedded metal library
+ggml_metal_library_init: loaded in 0.006 sec
+ggml_metal_rsets_init: creating a residency set collection (keep_alive = 180 s)
+ggml_metal_device_init: GPU name:   MTL0
+ggml_metal_device_init: GPU family: MTLGPUFamilyApple8  (1008)
+ggml_metal_device_init: GPU family: MTLGPUFamilyCommon3 (3003)
+ggml_metal_device_init: GPU family: MTLGPUFamilyMetal4  (5002)
+ggml_metal_device_init: simdgroup reduction   = true
+ggml_metal_device_init: simdgroup matrix mul. = true
+ggml_metal_device_init: has unified memory    = true
+ggml_metal_device_init: has bfloat            = true
+ggml_metal_device_init: has tensor            = false
+ggml_metal_device_init: use residency sets    = true
+ggml_metal_device_init: use shared buffers    = true
+ggml_metal_device_init: recommendedMaxWorkingSetSize  = 26800.60 MB
+build: 8444 (561ab598) with AppleClang 17.0.0.17000604 for Darwin arm64
+common_init_result: fitting params to device memory, for bugs during this step try to reproduce them with -fit off, or provide --verbose logs if the bug only occurs with -fit on
+llama_params_fit_impl: projected to use 7043 MiB of device memory vs. 25558 MiB of free device memory
+llama_params_fit_impl: will leave 18515 >= 1024 MiB of free device memory, no changes needed
+llama_params_fit: successfully fit params to free device memory
+llama_params_fit: fitting params to free memory took 0.18 seconds
+llama_model_load_from_file_impl: using device MTL0 (Apple M2 Pro) (unknown id) - 25558 MiB free
+llama_model_loader: loaded meta data with 29 key-value pairs and 464 tensors from /Users/ajayjandhyala/.ollama/models/blobs/sha256-ff1d1fc78170d787ee1201778e2dd65ea211654ca5fb7d69b5a2e7b123a50373 (version GGUF V3 (latest))
+llama_model_loader: Dumping metadata keys/values. Note: KV overrides do not apply in this output.
+llama_model_loader: - kv   0:                       general.architecture str              = gemma2
+llama_model_loader: - kv   1:                               general.name str              = gemma-2-9b-it
+llama_model_loader: - kv   2:                      gemma2.context_length u32              = 8192
+llama_model_loader: - kv   3:                    gemma2.embedding_length u32              = 3584
+llama_model_loader: - kv   4:                         gemma2.block_count u32              = 42
+llama_model_loader: - kv   5:                 gemma2.feed_forward_length u32              = 14336
+llama_model_loader: - kv   6:                gemma2.attention.head_count u32              = 16
+llama_model_loader: - kv   7:             gemma2.attention.head_count_kv u32              = 8
+llama_model_loader: - kv   8:    gemma2.attention.layer_norm_rms_epsilon f32              = 0.000001
+llama_model_loader: - kv   9:                gemma2.attention.key_length u32              = 256
+llama_model_loader: - kv  10:              gemma2.attention.value_length u32              = 256
+llama_model_loader: - kv  11:                          general.file_type u32              = 2
+llama_model_loader: - kv  12:              gemma2.attn_logit_softcapping f32              = 50.000000
+llama_model_loader: - kv  13:             gemma2.final_logit_softcapping f32              = 30.000000
+llama_model_loader: - kv  14:            gemma2.attention.sliding_window u32              = 4096
+llama_model_loader: - kv  15:                       tokenizer.ggml.model str              = llama
+llama_model_loader: - kv  16:                         tokenizer.ggml.pre str              = default
+llama_model_loader: - kv  17:                      tokenizer.ggml.tokens arr[str,256000]  = ["<pad>", "<eos>", "<bos>", "<unk>", ...
+llama_model_loader: - kv  18:                      tokenizer.ggml.scores arr[f32,256000]  = [0.000000, 0.000000, 0.000000, 0.0000...
+llama_model_loader: - kv  19:                  tokenizer.ggml.token_type arr[i32,256000]  = [3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, ...
+llama_model_loader: - kv  20:                tokenizer.ggml.bos_token_id u32              = 2
+llama_model_loader: - kv  21:                tokenizer.ggml.eos_token_id u32              = 1
+llama_model_loader: - kv  22:            tokenizer.ggml.unknown_token_id u32              = 3
+llama_model_loader: - kv  23:            tokenizer.ggml.padding_token_id u32              = 0
+llama_model_loader: - kv  24:               tokenizer.ggml.add_bos_token bool             = true
+llama_model_loader: - kv  25:               tokenizer.ggml.add_eos_token bool             = false
+llama_model_loader: - kv  26:                    tokenizer.chat_template str              = {{ bos_token }}{% if messages[0]['rol...
+llama_model_loader: - kv  27:            tokenizer.ggml.add_space_prefix bool             = false
+llama_model_loader: - kv  28:               general.quantization_version u32              = 2
+llama_model_loader: - type  f32:  169 tensors
+llama_model_loader: - type q4_0:  294 tensors
+llama_model_loader: - type q6_K:    1 tensors
+print_info: file format = GGUF V3 (latest)
+print_info: file type   = Q4_0
+print_info: file size   = 5.06 GiB (4.71 BPW) 
+load: 99 unused tokens
+load: control-looking token:    213 '</s>' was not control-type; this is probably a bug in the model. its type will be overridden
+load: special_eos_id is not in special_eog_ids - the tokenizer config may be incorrect
+load: printing all EOG tokens:
+load:   - 1 ('<eos>')
+load:   - 107 ('<end_of_turn>')
+load:   - 213 ('</s>')
+load: special tokens cache size = 109
+load: token to piece cache size = 1.6014 MB
+print_info: arch                  = gemma2
+print_info: vocab_only            = 0
+print_info: no_alloc              = 0
+print_info: n_ctx_train           = 8192
+print_info: n_embd                = 3584
+print_info: n_embd_inp            = 3584
+print_info: n_layer               = 42
+print_info: n_head                = 16
+print_info: n_head_kv             = 8
+print_info: n_rot                 = 256
+print_info: n_swa                 = 4096
+print_info: is_swa_any            = 1
+print_info: n_embd_head_k         = 256
+print_info: n_embd_head_v         = 256
+print_info: n_gqa                 = 2
+print_info: n_embd_k_gqa          = 2048
+print_info: n_embd_v_gqa          = 2048
+print_info: f_norm_eps            = 0.0e+00
+print_info: f_norm_rms_eps        = 1.0e-06
+print_info: f_clamp_kqv           = 0.0e+00
+print_info: f_max_alibi_bias      = 0.0e+00
+print_info: f_logit_scale         = 0.0e+00
+print_info: f_attn_scale          = 6.2e-02
+print_info: n_ff                  = 14336
+print_info: n_expert              = 0
+print_info: n_expert_used         = 0
+print_info: n_expert_groups       = 0
+print_info: n_group_used          = 0
+print_info: causal attn           = 1
+print_info: pooling type          = 0
+print_info: rope type             = 2
+print_info: rope scaling          = linear
+print_info: freq_base_train       = 10000.0
+print_info: freq_scale_train      = 1
+print_info: freq_base_swa         = 10000.0
+print_info: freq_scale_swa        = 1
+print_info: n_embd_head_k_swa     = 256
+print_info: n_embd_head_v_swa     = 256
+print_info: n_rot_swa             = 256
+print_info: n_ctx_orig_yarn       = 8192
+print_info: rope_yarn_log_mul     = 0.0000
+print_info: rope_finetuned        = unknown
+print_info: model type            = 9B
+print_info: model params          = 9.24 B
+print_info: general.name          = gemma-2-9b-it
+print_info: vocab type            = SPM
+print_info: n_vocab               = 256000
+print_info: n_merges              = 0
+print_info: BOS token             = 2 '<bos>'
+print_info: EOS token             = 1 '<eos>'
+print_info: EOT token             = 107 '<end_of_turn>'
+print_info: UNK token             = 3 '<unk>'
+print_info: PAD token             = 0 '<pad>'
+print_info: LF token              = 227 '<0x0A>'
+print_info: EOG token             = 1 '<eos>'
+print_info: EOG token             = 107 '<end_of_turn>'
+print_info: EOG token             = 213 '</s>'
+print_info: max token length      = 93
+load_tensors: loading model tensors, this can take a while... (mmap = true, direct_io = false)
+load_tensors: offloading output layer to GPU
+load_tensors: offloading 41 repeating layers to GPU
+load_tensors: offloaded 43/43 layers to GPU
+load_tensors:   CPU_Mapped model buffer size =   717.77 MiB
+load_tensors:  MTL0_Mapped model buffer size =  5185.21 MiB
+..............................................................................
+common_init_result: added <eos> logit bias = -inf
+common_init_result: added <end_of_turn> logit bias = -inf
+common_init_result: added </s> logit bias = -inf
+llama_context: constructing llama_context
+llama_context: n_seq_max     = 1
+llama_context: n_ctx         = 4096
+llama_context: n_ctx_seq     = 4096
+llama_context: n_batch       = 2048
+llama_context: n_ubatch      = 512
+llama_context: causal_attn   = 1
+llama_context: flash_attn    = disabled
+llama_context: kv_unified    = true
+llama_context: freq_base     = 10000.0
+llama_context: freq_scale    = 1
+llama_context: n_ctx_seq (4096) < n_ctx_train (8192) -- the full capacity of the model will not be utilized
+ggml_metal_init: allocating
+ggml_metal_init: found device: Apple M2 Pro
+ggml_metal_init: picking default device: Apple M2 Pro
+ggml_metal_init: use fusion         = true
+ggml_metal_init: use concurrency    = true
+ggml_metal_init: use graph optimize = true
+llama_context:        CPU  output buffer size =     0.98 MiB
+llama_kv_cache_iswa: creating non-SWA KV cache, size = 4096 cells
+llama_kv_cache:       MTL0 KV buffer size =   672.00 MiB
+llama_kv_cache: size =  672.00 MiB (  4096 cells,  21 layers,  1/1 seqs), K (f16):  336.00 MiB, V (f16):  336.00 MiB
+llama_kv_cache_iswa: creating     SWA KV cache, size = 4096 cells
+llama_kv_cache:       MTL0 KV buffer size =   672.00 MiB
+llama_kv_cache: size =  672.00 MiB (  4096 cells,  21 layers,  1/1 seqs), K (f16):  336.00 MiB, V (f16):  336.00 MiB
+sched_reserve: reserving ...
+sched_reserve:       MTL0 compute buffer size =   514.00 MiB
+sched_reserve:        CPU compute buffer size =    46.01 MiB
+sched_reserve: graph nodes  = 1858
+sched_reserve: graph splits = 2
+sched_reserve: reserve took 23.64 ms, sched copies = 1
+common_init_from_params: warming up the model with an empty run - please wait ... (--no-warmup to disable)
+compacted_prefix_runtime_supported: compacted prefix not supported for SWA sub-cache (n_swa=4096, swa_type=1) — models like Gemma3 use iSWA; compaction only applies to the base (non-SWA) cache
+set_execution_enabled: compacted prefix enabled — 21/21 layers zero-beta (flash-eligible)
+set_execution_enabled: compacted prefix enabled — 21/21 layers zero-beta (flash-eligible)
+set_execution_enabled: compacted prefix enabled — 21/21 layers zero-beta (flash-eligible)
+set_execution_enabled: compacted prefix enabled — 21/21 layers zero-beta (flash-eligible)
+set_execution_enabled: compacted prefix enabled — 21/21 layers zero-beta (flash-eligible)
+set_execution_enabled: compacted prefix enabled — 21/21 layers zero-beta (flash-eligible)
+~llama_context:        CPU compute buffer size of 215.0013 MiB, does not match expectation of  46.0137 MiB
+ggml_metal_free: deallocating
+=== KV Compaction Workload Test ===
+model:          sha256-ff1d1fc78170d787ee1201778e2dd65ea211654ca5fb7d69b5a2e7b123a50373
+params:         9.2B
+backend:        metal
+pipeline:       select
+n_ctx:          4096
+prefix_tokens:  3276
+live_suffix:    656 (pos >= 2620)
+continuation:   16 tokens (for tok/s)
+workload_class: W2 (standard)
+
+prefilling 3276 tokens...
+prefill: 11252.2ms (291.1 tok/s)
+baseline decode: 21.9 tok/s (16 tokens in 730.2ms)
+
+  2x | cos=0.9994 (>= 0.95 PASS) | compact=446.0ms | baseline=21.9 tok/s | compacted=8.3 tok/s | active_n_kv=768
+  4x | cos=0.9984 (>= 0.90 PASS) | compact=372.4ms | baseline=21.9 tok/s | compacted=10.2 tok/s | active_n_kv=768
+  8x | cos=0.9968 (>= 0.85 PASS) | compact=331.5ms | baseline=21.9 tok/s | compacted=12.0 tok/s | active_n_kv=768
+  10x | cos=0.9915 (>= 0.80 PASS) | compact=314.7ms | baseline=21.9 tok/s | compacted=12.4 tok/s | active_n_kv=768
+  20x | cos=0.8274 (>= 0.70 PASS) | compact=296.0ms | baseline=21.9 tok/s | compacted=13.1 tok/s | active_n_kv=768
+  50x | cos=0.7817 (>= 0.50 PASS) | compact=288.5ms | baseline=21.9 tok/s | compacted=13.9 tok/s | active_n_kv=768
+
+=== Summary ===
+model=sha256-ff1d1fc78170d787ee1201778e2dd65ea211654ca5fb7d69b5a2e7b123a50373 pipeline=select backend=metal prefix=2620
+  2x: cos=0.9994 (>= 0.95) PASS | compact=446.0ms | decode=21.9->8.3 tok/s | n_kv=768
+  4x: cos=0.9984 (>= 0.90) PASS | compact=372.4ms | decode=21.9->10.2 tok/s | n_kv=768
+  8x: cos=0.9968 (>= 0.85) PASS | compact=331.5ms | decode=21.9->12.0 tok/s | n_kv=768
+  10x: cos=0.9915 (>= 0.80) PASS | compact=314.7ms | decode=21.9->12.4 tok/s | n_kv=768
+  20x: cos=0.8274 (>= 0.70) PASS | compact=296.0ms | decode=21.9->13.1 tok/s | n_kv=768
+  50x: cos=0.7817 (>= 0.50) PASS | compact=288.5ms | decode=21.9->13.9 tok/s | n_kv=768
