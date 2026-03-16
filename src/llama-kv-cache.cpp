@@ -1125,15 +1125,35 @@ const std::string & llama_kv_cache::compacted_prefix_method() const {
 }
 
 bool llama_kv_cache::compacted_prefix_forces_non_flash() const {
-    // Non-zero-beta methods require the non-flash attention path.
-    // "select" uses zero beta and is flash-compatible.
-    // All other pipelines (solver/fit, omp, nonuniform, chunked, on_policy,
-    // self_study) produce non-zero beta and require non-flash.
+    // Phase 7: check actual beta values, not method name.
+    // With zerobeta fallback (Phase 6), solver/self_study pipelines may
+    // produce all-zero betas, making them flash-compatible.
+    // Returns true only if ANY active sequence has non-zero beta in any layer.
     if (!has_compacted_prefix()) {
         return false;
     }
-    const auto & m = compacted_prefix_last_method;
-    return m != "select";
+    // Compaction currently enforces seq_id == 0.
+    const auto * state = compacted_prefix.get_seq(0);
+    if (state && state->is_execution_enabled() && !state->is_zero_beta()) {
+        return true;
+    }
+    return false;
+}
+
+bool llama_kv_cache::compacted_prefix_layer_zero_beta(llama_seq_id seq_id, int32_t il) const {
+    const auto * state = compacted_prefix.get_seq(seq_id);
+    if (!state || !state->is_execution_enabled()) {
+        return true;
+    }
+    auto it = map_layer_ids.find(il);
+    if (it == map_layer_ids.end()) {
+        return true;
+    }
+    const int32_t ikv = it->second;
+    if ((size_t)ikv >= state->layers.size()) {
+        return true;
+    }
+    return state->layers[ikv].is_zero_beta();
 }
 
 bool llama_kv_cache::compacted_prefix_runtime_supported() const {
@@ -3138,6 +3158,10 @@ uint32_t llama_kv_cache_context::compacted_prefix_n_tokens() const {
 
 bool llama_kv_cache_context::compacted_prefix_zero_beta() const {
     return compacted_exec.zero_beta;
+}
+
+bool llama_kv_cache_context::compacted_prefix_layer_zero_beta(int32_t il) const {
+    return kv->compacted_prefix_layer_zero_beta(compacted_exec.seq_id, il);
 }
 
 void llama_kv_cache_context::set_input_compacted_prefix_mask(ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const {

@@ -265,6 +265,10 @@ public:
     const std::string & compacted_prefix_method() const;
     bool compacted_prefix_forces_non_flash() const;
 
+    // Per-layer zero-beta query for flash attention eligibility (Phase 7).
+    // Returns true if the specified layer has all-zero betas (flash-eligible).
+    bool compacted_prefix_layer_zero_beta(llama_seq_id seq_id, int32_t il) const;
+
     //
     // graph_build API
     //
@@ -567,6 +571,7 @@ public:
     llama_seq_id compacted_prefix_seq_id() const;
     uint32_t compacted_prefix_n_tokens() const;
     bool compacted_prefix_zero_beta() const;
+    bool compacted_prefix_layer_zero_beta(int32_t il) const;
 
     void set_input_compacted_prefix_mask(ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const;
     void set_input_compacted_prefix_k   (ggml_tensor * dst, int32_t il) const;

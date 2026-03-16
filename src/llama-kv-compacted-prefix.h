@@ -36,6 +36,14 @@ public:
         void clear(bool data);
 
         size_t allocated_bytes() const;
+
+        // Per-layer zero-beta cache for flash attention eligibility.
+        // Updated when beta values are written or cleared.
+        void update_zero_beta_cache();
+        bool is_zero_beta() const { return zero_beta_cached; }
+
+    private:
+        bool zero_beta_cached = true;
     };
 
     struct sequence_state {

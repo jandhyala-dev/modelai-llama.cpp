@@ -288,6 +288,7 @@ public:
         ggml_tensor * k = nullptr;    // [n_embd_head_k, n_head_kv, n_prefix, 1]
         ggml_tensor * v = nullptr;    // [n_embd_head_v, n_head_kv, n_prefix, 1]
         ggml_tensor * kq_b = nullptr; // [n_prefix, n_tokens, n_head, 1]
+        bool layer_zero_beta = false; // Phase 7: per-layer zero-beta flag for flash eligibility
     };
 
     llm_graph_input_attn_kv(
@@ -321,7 +322,8 @@ public:
             int64_t n_embd_head_v,
             int64_t n_tokens,
             int64_t n_head,
-            int64_t n_head_kv);
+            int64_t n_head_kv,
+            bool layer_zero_beta = false);
 
     const compacted_prefix_layer_input * get_compacted_prefix_layer(int32_t il) const;
 
@@ -419,7 +421,8 @@ public:
             int64_t n_embd_head_v,
             int64_t n_tokens,
             int64_t n_head,
-            int64_t n_head_kv);
+            int64_t n_head_kv,
+            bool layer_zero_beta = false);
 
     const compacted_prefix_layer_input * get_compacted_prefix_layer(int32_t il) const;
 

@@ -2,6 +2,7 @@
 
 #include "ggml.h"
 #include "llama-io.h"
+#include "llama-impl.h"
 
 #include <algorithm>
 #include <cstring>
@@ -219,10 +220,21 @@ void llama_compacted_prefix_store::layer_storage::clear(bool data) {
     k_data.clear();
     beta_data.clear();
     v_data.clear();
+    zero_beta_cached = true;
     if (data) {
         k_data.shrink_to_fit();
         beta_data.shrink_to_fit();
         v_data.shrink_to_fit();
+    }
+}
+
+void llama_compacted_prefix_store::layer_storage::update_zero_beta_cache() {
+    zero_beta_cached = true;
+    for (float b : beta_data) {
+        if (b != 0.0f) {
+            zero_beta_cached = false;
+            return;
+        }
     }
 }
 
@@ -286,11 +298,20 @@ bool llama_compacted_prefix_store::sequence_state::set_execution_enabled(bool en
     }
 
     const uint32_t n_tokens = logical_positions.size();
-    for (const auto & layer : layers) {
+    int32_t n_zero_beta = 0;
+    for (auto & layer : layers) {
         if (layer.n_compacted_tokens != n_tokens) {
             return false;
         }
+        // Update per-layer zero-beta cache before execution begins.
+        layer.update_zero_beta_cache();
+        if (layer.is_zero_beta()) {
+            n_zero_beta++;
+        }
     }
+
+    LLAMA_LOG_INFO("%s: compacted prefix enabled — %d/%zu layers zero-beta (flash-eligible)\n",
+                   __func__, n_zero_beta, layers.size());
 
     execution_enabled = true;
     return true;
@@ -302,10 +323,8 @@ bool llama_compacted_prefix_store::sequence_state::is_execution_enabled() const 
 
 bool llama_compacted_prefix_store::sequence_state::is_zero_beta() const {
     for (const auto & layer : layers) {
-        for (float b : layer.beta_data) {
-            if (b != 0.0f) {
-                return false;
-            }
+        if (!layer.is_zero_beta()) {
+            return false;
         }
     }
     return true;

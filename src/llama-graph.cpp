@@ -472,23 +472,29 @@ llm_graph_input_attn_kv::compacted_prefix_layer_input * llm_graph_input_attn_kv:
         int64_t n_embd_head_v,
         int64_t n_tokens,
         int64_t n_head,
-        int64_t n_head_kv) {
+        int64_t n_head_kv,
+        bool layer_zero_beta) {
     for (auto & layer : compacted_prefix_layers) {
         if (layer.il == il) {
             return &layer;
         }
     }
 
+    // Phase 7: per-layer flash eligibility.
+    // Skip kq_b creation if either the whole sequence or this layer has zero beta.
+    const bool effective_zero_beta = compacted_prefix_is_zero_beta || layer_zero_beta;
+
     ggml_tensor * kq_b_tensor = nullptr;
-    if (!compacted_prefix_is_zero_beta) {
+    if (!effective_zero_beta) {
         kq_b_tensor = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, compacted_prefix_n_tokens, n_tokens, n_head, 1);
     }
 
     compacted_prefix_layers.push_back({
-        /* .il   = */ il,
-        /* .k    = */ ggml_new_tensor_4d(ctx, type_k, n_embd_head_k, n_head_kv, compacted_prefix_n_tokens, 1),
-        /* .v    = */ ggml_new_tensor_4d(ctx, type_v, n_embd_head_v, n_head_kv, compacted_prefix_n_tokens, 1),
-        /* .kq_b = */ kq_b_tensor,
+        /* .il              = */ il,
+        /* .k               = */ ggml_new_tensor_4d(ctx, type_k, n_embd_head_k, n_head_kv, compacted_prefix_n_tokens, 1),
+        /* .v               = */ ggml_new_tensor_4d(ctx, type_v, n_embd_head_v, n_head_kv, compacted_prefix_n_tokens, 1),
+        /* .kq_b            = */ kq_b_tensor,
+        /* .layer_zero_beta = */ effective_zero_beta,
     });
 
     auto & layer = compacted_prefix_layers.back();
@@ -588,23 +594,28 @@ llm_graph_input_attn_kv_iswa::compacted_prefix_layer_input * llm_graph_input_att
         int64_t n_embd_head_v,
         int64_t n_tokens,
         int64_t n_head,
-        int64_t n_head_kv) {
+        int64_t n_head_kv,
+        bool layer_zero_beta) {
     for (auto & layer : compacted_prefix_layers) {
         if (layer.il == il) {
             return &layer;
         }
     }
 
+    // Phase 7: per-layer flash eligibility.
+    const bool effective_zero_beta = compacted_prefix_is_zero_beta || layer_zero_beta;
+
     ggml_tensor * kq_b_tensor = nullptr;
-    if (!compacted_prefix_is_zero_beta) {
+    if (!effective_zero_beta) {
         kq_b_tensor = ggml_new_tensor_4d(ctx, GGML_TYPE_F32, compacted_prefix_n_tokens, n_tokens, n_head, 1);
     }
 
     compacted_prefix_layers.push_back({
-        /* .il   = */ il,
-        /* .k    = */ ggml_new_tensor_4d(ctx, type_k, n_embd_head_k, n_head_kv, compacted_prefix_n_tokens, 1),
-        /* .v    = */ ggml_new_tensor_4d(ctx, type_v, n_embd_head_v, n_head_kv, compacted_prefix_n_tokens, 1),
-        /* .kq_b = */ kq_b_tensor,
+        /* .il              = */ il,
+        /* .k               = */ ggml_new_tensor_4d(ctx, type_k, n_embd_head_k, n_head_kv, compacted_prefix_n_tokens, 1),
+        /* .v               = */ ggml_new_tensor_4d(ctx, type_v, n_embd_head_v, n_head_kv, compacted_prefix_n_tokens, 1),
+        /* .kq_b            = */ kq_b_tensor,
+        /* .layer_zero_beta = */ effective_zero_beta,
     });
 
     auto & layer = compacted_prefix_layers.back();
@@ -2093,26 +2104,20 @@ static std::unique_ptr<llm_graph_input_attn_kv> build_attn_inp_kv_impl(
             GGML_ASSERT(n_stream == 1 && "P3 compacted-prefix execution currently supports a single attention stream");
 
             const bool zero_beta = mctx_cur->compacted_prefix_zero_beta();
-            if (!zero_beta && cparams.flash_attn) {
-                LLAMA_LOG_WARN("%s: flash_attn overridden — non-zero compacted beta forces standard attention path\n", __func__);
-            }
 
             inp->compacted_prefix_active = true;
             inp->compacted_prefix_is_zero_beta = zero_beta;
             inp->compacted_prefix_n_tokens = mctx_cur->compacted_prefix_n_tokens();
 
-            const ggml_type mask_type = (cparams.flash_attn && zero_beta) ? GGML_TYPE_F16 : GGML_TYPE_F32;
+            // Phase 7: always create masks as F32 when compacted prefix is active.
+            // Per-layer flash eligibility casts masks to F16 in build_attn() as needed.
             inp->compacted_kq_mask = ggml_new_tensor_4d(
-                    ctx0, mask_type,
+                    ctx0, GGML_TYPE_F32,
                     inp->compacted_prefix_n_tokens, ubatch.n_tokens / n_stream, 1, n_stream);
             ggml_set_input(inp->compacted_kq_mask);
 
-            if (cparams.flash_attn && zero_beta) {
-                // Zero-beta compacted prefix is compatible with flash attention.
-                inp->self_kq_mask_cnv = ggml_cast(ctx0, inp->self_kq_mask, GGML_TYPE_F16);
-            } else {
-                inp->self_kq_mask_cnv = inp->self_kq_mask;
-            }
+            // Keep self mask as F32; per-layer cast to F16 happens in build_attn().
+            inp->self_kq_mask_cnv = inp->self_kq_mask;
         } else {
             inp->self_kq_mask_cnv = cparams.flash_attn ? ggml_cast(ctx0, inp->self_kq_mask, GGML_TYPE_F16) : inp->self_kq_mask;
         }
@@ -2170,10 +2175,10 @@ ggml_tensor * llm_graph_context::build_attn(
     ggml_tensor * kq_mask_combined = kq_mask;
 
     if (inp->has_compacted_prefix()) {
-        const bool zero_beta = inp->compacted_prefix_is_zero_beta;
-        // Note: if !zero_beta && cparams.flash_attn, build_attn_mha will
-        // correctly disable flash (kq_b != nullptr). The override is logged
-        // once per decode in build_inp_attn_kv, not per layer here.
+        // Phase 7: per-layer flash eligibility.
+        // Query per-layer zero-beta status from the KV cache context.
+        const bool layer_zb = inp->mctx->compacted_prefix_layer_zero_beta(il);
+        const bool zero_beta = inp->compacted_prefix_is_zero_beta || layer_zb;
 
         const int64_t live_n_kv = k->ne[2];
 
@@ -2186,7 +2191,8 @@ ggml_tensor * llm_graph_context::build_attn(
                 hparams.n_embd_head_v(il),
                 n_tokens,
                 hparams.n_head(il),
-                hparams.n_head_kv(il));
+                hparams.n_head_kv(il),
+                layer_zb);
 
         GGML_ASSERT(compacted != nullptr);
 
@@ -2203,6 +2209,10 @@ ggml_tensor * llm_graph_context::build_attn(
         if (zero_beta) {
             // Zero-beta path: no kq_b needed, compatible with flash attention.
             // kq_b_combined stays as the incoming kq_b (nullptr for most models).
+            // Phase 7: cast mask to F16 for flash attention if needed.
+            if (cparams.flash_attn && kq_mask_combined->type != GGML_TYPE_F16) {
+                kq_mask_combined = ggml_cast(ctx0, kq_mask_combined, GGML_TYPE_F16);
+            }
         } else if (kq_b) {
             GGML_ASSERT(kq_b->ne[1] == compacted->kq_b->ne[1] && "compacted-prefix kq_b concat does not support broadcast token dimensions");
             GGML_ASSERT(kq_b->ne[2] == compacted->kq_b->ne[2] && "compacted-prefix kq_b concat requires matching head dimensions");
@@ -2388,9 +2398,9 @@ ggml_tensor * llm_graph_context::build_attn(
 
     // Compacted prefix: only for base (non-SWA) layers.
     if (!is_swa && inp->has_compacted_prefix()) {
-        const bool zero_beta = inp->compacted_prefix_is_zero_beta;
-        // Note: if !zero_beta && cparams.flash_attn, build_attn_mha will
-        // correctly disable flash (kq_b != nullptr). Logged in build_inp_attn_kv_iswa.
+        // Phase 7: per-layer flash eligibility.
+        const bool layer_zb = mctx_cur->compacted_prefix_layer_zero_beta(il);
+        const bool zero_beta = inp->compacted_prefix_is_zero_beta || layer_zb;
 
         const int64_t live_n_kv = k->ne[2];
 
@@ -2403,7 +2413,8 @@ ggml_tensor * llm_graph_context::build_attn(
                 hparams.n_embd_head_v(il),
                 n_tokens,
                 hparams.n_head(il),
-                hparams.n_head_kv(il));
+                hparams.n_head_kv(il),
+                layer_zb);
 
         GGML_ASSERT(compacted != nullptr);
 
@@ -2419,6 +2430,10 @@ ggml_tensor * llm_graph_context::build_attn(
 
         if (zero_beta) {
             // Zero-beta path: no kq_b needed, compatible with flash attention.
+            // Phase 7: cast mask to F16 for flash attention if needed.
+            if (cparams.flash_attn && kq_mask_combined->type != GGML_TYPE_F16) {
+                kq_mask_combined = ggml_cast(ctx0, kq_mask_combined, GGML_TYPE_F16);
+            }
         } else if (kq_b) {
             GGML_ASSERT(kq_b->ne[1] == compacted->kq_b->ne[1] && "compacted-prefix kq_b concat does not support broadcast token dimensions");
             GGML_ASSERT(kq_b->ne[2] == compacted->kq_b->ne[2] && "compacted-prefix kq_b concat requires matching head dimensions");
@@ -2548,25 +2563,18 @@ llm_graph_input_attn_kv_iswa * llm_graph_context::build_attn_inp_kv_iswa() const
             GGML_ASSERT(n_stream == 1 && "iSWA compacted-prefix execution currently supports a single attention stream");
 
             const bool zero_beta = mctx_cur->get_base()->compacted_prefix_zero_beta();
-            if (!zero_beta && cparams.flash_attn) {
-                LLAMA_LOG_WARN("%s: flash_attn overridden — non-zero compacted beta forces standard attention path (iSWA)\n", __func__);
-            }
 
             inp->compacted_prefix_active = true;
             inp->compacted_prefix_is_zero_beta = zero_beta;
             inp->compacted_prefix_n_tokens = mctx_cur->get_base()->compacted_prefix_n_tokens();
 
-            const ggml_type mask_type = (cparams.flash_attn && zero_beta) ? GGML_TYPE_F16 : GGML_TYPE_F32;
+            // Phase 7: always F32 masks; per-layer cast to F16 in build_attn().
             inp->compacted_kq_mask = ggml_new_tensor_4d(
-                    ctx0, mask_type,
+                    ctx0, GGML_TYPE_F32,
                     inp->compacted_prefix_n_tokens, ubatch.n_tokens / n_stream, 1, n_stream);
             ggml_set_input(inp->compacted_kq_mask);
 
-            if (cparams.flash_attn && zero_beta) {
-                inp->self_kq_mask_cnv = ggml_cast(ctx0, inp->self_kq_mask, GGML_TYPE_F16);
-            } else {
-                inp->self_kq_mask_cnv = inp->self_kq_mask;
-            }
+            inp->self_kq_mask_cnv = inp->self_kq_mask;
             ggml_set_name(inp->self_kq_mask_cnv, "self_kq_mask_cnv");
         } else {
             inp->self_kq_mask_cnv = cparams.flash_attn ? ggml_cast(ctx0, inp->self_kq_mask, GGML_TYPE_F16) : inp->self_kq_mask;
