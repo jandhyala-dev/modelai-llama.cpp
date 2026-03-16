@@ -748,7 +748,8 @@ json server_task_result_cmpl_final::to_json_oaicompat() {
             {"prompt_tokens",     n_prompt_tokens},
             {"total_tokens",      n_decoded + n_prompt_tokens}
         }},
-        {"id", oaicompat_cmpl_id}
+        {"id", oaicompat_cmpl_id},
+        {"id_slot", id_slot},
     };
 
     // extra fields for debugging purposes
@@ -800,7 +801,8 @@ json server_task_result_cmpl_final::to_json_oaicompat_chat() {
             {"prompt_tokens",     n_prompt_tokens},
             {"total_tokens",      n_decoded + n_prompt_tokens}
         }},
-        {"id", oaicompat_cmpl_id}
+        {"id", oaicompat_cmpl_id},
+        {"id_slot", id_slot},
     };
 
     // extra fields for debugging purposes
@@ -943,6 +945,7 @@ json server_task_result_cmpl_final::to_json_oaicompat_resp() {
         {"object",       "response"},
         {"output",       output},
         {"status",       "completed"},
+        {"id_slot",      id_slot},
         {"usage",        json {
             {"input_tokens",  n_prompt_tokens},
             {"output_tokens", n_decoded},
@@ -1120,6 +1123,7 @@ json server_task_result_cmpl_final::to_json_anthropic() {
         {"model", oaicompat_model},
         {"stop_reason", stop_reason},
         {"stop_sequence", stopping_word.empty() ? nullptr : json(stopping_word)},
+        {"id_slot", id_slot},
         {"usage", {
             {"input_tokens", n_prompt_tokens},
             {"output_tokens", n_decoded}
