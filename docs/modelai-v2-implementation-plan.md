@@ -861,70 +861,111 @@ out = (exp(LSE_prefix - m) × out_prefix + exp(LSE_live - m) × out_live) / (exp
 
 ## Phase 8: High Compression (10-50x) + On-Policy (GAP-07)
 
-**Goal:** Enable 10-20x production compression and 50x research capability.
+**Goal:** Enable 10-20x production compression and 50x research capability. Extend on-policy compaction from 2-pass heuristic to iterative refinement and per-layer sequential modes.
 
-**Dependencies:** Phases 2-6 must be complete.
+**Dependencies:** Phases 2-7 must be complete.
 
-### 8.1 Production 10x Profile
+**Novel extensions:** Iterative and sequential on-policy are novel extensions beyond the MIT reference implementation (`omp.py`/`base.py`). There is no external reference to verify against; correctness relies on quality-gated convergence and solver residual monitoring.
 
-| Component | Method | MIT Source |
-|-----------|--------|-----------|
-| Query generation | Prefill-Q + self-study (2000 × 3 rounds, varied temperature) | `self_study.py` |
-| Key selection | top-k with nonuniform per-head budgets (swap solver) | `solver.py` |
-| Beta fitting | LAPACK sgels + clamp (MIT default) | `base.py:471-605` |
-| V fitting | sgels → cholesky cascade with spectral ridge | `base.py:240-420` |
-| GPU acceleration | Metal shaders for attention scores + softmax | Phase 3 |
+### 8.1 Single-Layer Refit Utility + Residual Reporting
 
-**Note:** Production 10x uses top-k selection (not OMP) — deliberate speed/quality trade-off. OMP gives ~2-5% better quality at 10x but is significantly slower.
+**Files:** `src/llama-kv-compact-prefill-q.cpp` (modified), `src/llama-kv-compact-prefill-q.h` (modified), `src/llama-kv-cache.cpp` (modified), `src/llama-kv-cache.h` (modified), `src/llama-kv-compact-pipeline.h` (modified)
 
-### 8.2 Research 50x Profile
+**8.1a — Residual output:** Add `float mean_partition_sum_relative_error` to `llama_kv_compact_pipeline_stats` and `llama_kv_compact_prefill_q_stats`. Aggregate per-head `partition_sum_relative_error` from `fit_beta()` across all layers/heads. Add same aggregation to `fit_from_live_kv()` so initial K-as-Q pass produces a baseline residual for quality gate comparison.
 
-Uses OMP with progressive schedule, drop-key refinement, greedy+swap budgets. Quality ~15-25% loss. Research-only.
+**8.1b — Tensor cache invalidation:** Add `compacted_prefix_bump_version()` to `llama_kv_cache` — increments version counter and invalidates tensor cache. Called after `refit_single_layer` modifies layer data in place.
 
-### 8.3 On-Policy — Extend Existing Code (GAP-07)
+**8.1c — Single-layer refit function:** New `llama_kv_compact_refit_single_layer()` extracted from the solver loop in `prefill_q_with_captured_state()` (lines 286-334). Takes model layer ID (not layout index), resolves internally via `compacted_prefix_layer_layout_for_solver()`. Re-fits beta/V for one layer using new Q, without re-selecting positions. Precondition: live KV cache must not be reclaimed.
 
-**Current state:** `llama-kv-compact-on-policy.cpp` (90 lines) implements a 2-pass approach:
-- Pass 1: Standard solver (K-as-Q surrogates)
-- Pass 2: Generate continuation, capture Q, re-run solver
+### 8.2 Iterative On-Policy Refinement
 
-**Extension for MIT's per-layer sequential mode:**
+**Files:** `src/llama-kv-compact-on-policy.cpp` (modified), `src/llama-kv-compact-on-policy.h` (NEW), `src/llama-kv-compact-pipeline.h` (modified), `src/llama-kv-cache.h` (modified), `src/llama-kv-cache.cpp` (modified)
 
-```
-FOR layer = 0 to n_layers-1:
-    IF layer == 0:
-        queries = original_queries
-    ELSE:
-        Materialize compacted layers 0..layer-1 into temp cache
-        Forward pass through temp cache → capture Q at layer
-        queries = captured_Q
-    compact(layer, queries)
-```
+New `llama_kv_compact_iterative_on_policy_from_live_kv()` with config struct containing `n_on_policy_passes` (0 = K-as-Q only, 1 = existing 2-pass, 2+ = iterative) and `quality_min_improvement` threshold (default 0.5%).
 
-**Estimated cost:** n_layers × forward_pass_time ≈ ~60-120s for 40-layer 14B.
-**With GPU (Phase 3):** attention scores computed on GPU, reducing to ~30-60s.
-**Decision:** Opt-in experimental. Current 2-pass approach is the default.
+**Algorithm:** Initial K-as-Q fit, then for each on-policy pass: enable execution, generate continuation with Q-capture, re-solve all layers, apply quality gate (stop if relative residual improvement < threshold), clear Q-capture state. Quality gate uses mean `partition_sum_relative_error` from `fit_beta()`.
 
-### 8.4 Hyperparameter Sweep
+**Chunked interaction:** Initial pass uses `fit_from_live_kv()` on full prefix. Subsequent iterations use non-chunked `prefill_q_with_captured_state()` because compacted prefix is already short.
 
-After Phases 2+4 are complete, before Phase 8 integration:
-- Sweep `ridge_lambda` values [1e-8, 1e-6, 1e-4, 1e-2] on 3 models (stories15M, Qwen3-8B, DeepSeek-R1-8B)
+### 8.3 Per-Layer Sequential On-Policy (Experimental)
+
+**Files:** `src/llama-kv-compact-on-policy.cpp` (modified), `src/llama-kv-compact-on-policy.h` (modified), `src/llama-kv-compact-pipeline.h` (modified), `src/llama-kv-cache.h` (modified), `src/llama-kv-cache.cpp` (modified)
+
+New `llama_kv_compact_sequential_on_policy_from_live_kv()`. Iterates over compacted layouts (not model layers — SWA layers automatically skipped). For each layer: generate continuation with Q-capture, call `refit_single_layer()`, clear Q-capture. Next generation sees refitted layer, exploiting sequential dependency.
+
+**Key invariant:** Mutation during active execution is safe because `can_reuse()` returns false when `compacted_prefix_active` (Phase 7), forcing graph rebuild each decode. `bump_version()` invalidates tensor cache after each refit.
+
+**Cost:** `layouts.size()` × `n_generate_q` full forward passes. Qwen3-14B (40 layers, 64 tokens): ~45s total.
+
+### 8.4 High-Compression Auto-Tuning
+
+**Files:** `tools/server/server-context.cpp` (modified), `tools/server/server-task.h` (modified)
+
+When `ratio >= 10.0`, auto-apply stronger solver parameters for fields at sentinel values (`UINT32_MAX` for integers, negative for floats):
+
+| Parameter | Default (ratio < 10) | Auto (ratio >= 10) |
+|---|---|---|
+| max_queries | 256 | 512 |
+| nnls_iters | 2 | 4 |
+| lambda | 1e-6 | 1e-5 |
+| n_generate | 256 | 512 |
+| n_on_policy_passes | 1 | 2 |
+| max_queries_per_kv_head | 1024 | 2048 |
+
+Server timeout scaled by `n_on_policy_passes + 1` (or `layouts.size()` for sequential) to avoid premature abort.
+
+### 8.5 High-Compression Test Scaffolding
+
+**Files:** `tests/test-kv-compact-workload.cpp` (modified), `tests/test-kv-compact-prefill-q.cpp` (new or modified)
+
+Extend ratio/threshold arrays to `{2, 4, 8, 10, 20, 50}` / `{0.95, 0.90, 0.85, 0.80, 0.70, 0.50}`. Add unit tests for `refit_single_layer`, iterative quality gate, sequential loop iteration count, version counter bump.
+
+### 8.6 Server Dispatch
+
+**Files:** `tools/server/server-context.cpp` (modified), `tools/server/server-task.h` (modified)
+
+- `"on_policy"` with `n_on_policy_passes >= 1` dispatches to iterative function (supersedes existing 2-pass call)
+- `"sequential_on_policy"` dispatches to sequential function
+- `"on_policy"` with `n_on_policy_passes == 0` dispatches to `fit_from_live_kv()` (K-as-Q only)
+
+### 8.7 Hyperparameter Sweep (Deferred to CI)
+
+- Sweep `ridge_lambda` values [1e-8, 1e-6, 1e-4, 1e-2] on 3 models
 - Sweep `n_generate` values [500, 1000, 2000, 5000]
 - Record cosine at 2x, 4x, 10x for each combination
-- Select optimal hyperparameters for production profile
+- Deferred: requires model files not available on dev machine
 
-This step addresses Reviewer 1's concern that the three gap fixes (NNLS, ridge, queries) interact nonlinearly and may require re-tuning.
+### 8.8 Testing
 
-### 8.5 Testing
+- [ ] 10x compression: cosine >= 0.88 on all standard causal models (CI)
+- [ ] 20x compression: cosine >= 0.85 on Qwen3-8B, Qwen3-30B-A3B (CI)
+- [ ] 50x compression: cosine measured and documented (no pass/fail threshold, CI)
+- [ ] Iterative on-policy: quality gate stops non-improving iterations
+- [ ] Sequential on-policy: iterates layouts.size() times, not n_layers times
+- [ ] On-policy at 10x: cosine delta vs off-policy measured on 3 models (CI)
+- [ ] Unit tests pass without model files
 
-- [ ] 10x compression: cosine >= 0.88 on all standard causal models (excluding DeepSeek-R1 until investigated)
-- [ ] 20x compression: cosine >= 0.85 on Qwen3-8B, Qwen3-30B-A3B
-- [ ] 50x compression: cosine measured and documented (no pass/fail threshold)
-- [ ] On-policy at 10x: cosine delta vs off-policy measured on 3 models
-- [ ] Hyperparameter sweep results documented
+### 8.9 Risks
 
-### 8.6 Estimated Effort
+| Risk | Severity | Mitigation |
+|---|---|---|
+| Stale tensor cache after refit | Resolved | `bump_version()` invalidates cache |
+| Quality gate unimplementable | Resolved | Residual aggregation in `fit_beta()` |
+| Live KV reclaimed during loop | Medium | Documented precondition: no reclaim until pipeline returns |
+| Sequential on-policy cost (~45s) | Medium | Experimental flag; cost transparent in stats |
+| Iterative convergence unknown | Medium | Quality gate stops non-improving iterations; CI validation |
+| 50x quality insufficient | Low | Informational threshold (0.50); tunable via config |
 
-**Medium-High.** 5-7 days (revised from 4-5 — on-policy cache-building complexity + hyperparameter sweep).
+### 8.10 Commit Structure
+
+1. `kv-compact: Phase 8a — single-layer refit utility + residual reporting` (8.1)
+2. `kv-compact: Phase 8b — iterative on-policy with quality gate` (8.2, 8.4, 8.6 iterative dispatch)
+3. `kv-compact: Phase 8c — per-layer sequential on-policy` (8.3, 8.6 sequential dispatch)
+4. `kv-compact: Phase 8d — high-compression test scaffolding` (8.5)
+
+### 8.11 Estimated Effort
+
+**Medium-High.** 5-7 days (on-policy cache-building complexity + quality gate + sequential mode).
 
 ---
 
