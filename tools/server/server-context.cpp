@@ -2321,8 +2321,8 @@ private:
                     // requires execution_enabled to return true.
                     if (params_base.flash_attn_type != LLAMA_FLASH_ATTN_TYPE_DISABLED
                             && kv->compacted_prefix_forces_non_flash()) {
-                        LLAMA_LOG_WARN("compaction method '%s' produced non-zero beta with flash_attn enabled "
-                                       "— falling back to non-flash attention path\n", method.c_str());
+                        LLAMA_LOG_WARN("compaction method '%s' produced non-zero beta on some layers — "
+                                       "those layers use standard attention, zero-beta layers still use flash\n", method.c_str());
                     }
 
                     bool reclaimed = false;
