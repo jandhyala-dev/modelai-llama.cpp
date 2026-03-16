@@ -35,6 +35,7 @@ struct llama_kv_compact_prefill_q_stats {
     uint32_t n_selected_tokens    = 0;
     uint32_t n_queries_per_head   = 0;
     uint32_t n_layers_with_q      = 0;
+    float    mean_partition_sum_relative_error = 0.0f;  // Phase 8: mean residual
 };
 
 // Repeat-prefill Q-capture compaction pipeline.
@@ -87,3 +88,24 @@ bool llama_kv_compact_prefill_q_with_captured_state(
         const llama_kv_compact_prefill_q_config & config,
         llama_kv_compact_prefill_q_stats * stats = nullptr,
         llama_pos p0 = 0);
+
+// Re-fit beta and V for a single layer using captured Q, without re-selecting
+// positions.  The selected positions from the initial solve are preserved.
+//
+// Phase 8: Used by sequential on-policy mode to refit one layer at a time
+// after generating continuation tokens with Q-capture.
+//
+// Preconditions:
+//   - The live KV cache must NOT have been reclaimed (refit reads full prefix K
+//     from the live cache).
+//   - Compacted prefix must be configured with selected positions.
+//   - il is a model layer ID (not a layout index) — resolved internally.
+//
+// Returns false if the layer is unmapped (e.g. SWA layer) or solver fails.
+// On failure, previous layer data is kept intact.
+bool llama_kv_compact_refit_single_layer(
+        llama_kv_cache       & kv,
+        llama_seq_id           seq_id,
+        int32_t                il,
+        llama_q_capture_state & q_state,
+        const llama_kv_compact_prefill_q_config & config);

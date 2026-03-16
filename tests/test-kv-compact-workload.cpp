@@ -313,17 +313,19 @@ int main(int argc, char ** argv) {
                     baseline_decode_tok_s, continuation_tokens, burst_ms);
     }
 
-    // Compression ratios to test.
+    // Compression ratios to test (Phase 8: extended to 10-50x).
     // Ratio is relative to the compactable prefix (live_suffix_pos0 tokens).
-    const int ratios[] = {2, 4, 8};
+    const int ratios[] = {2, 4, 8, 10, 20, 50};
     const int n_ratios = sizeof(ratios) / sizeof(ratios[0]);
 
     // Thresholds calibrated from Qwen3-14B and Qwen3-30B-A3B select pipeline
     // results (logit cosine similarity).  Select consistently exceeds 0.98 at
-    // all ratios; these thresholds leave margin for model/architecture variance.
+    // low ratios; these thresholds leave margin for model/architecture variance.
     // Solver and OMP with surrogate queries on GQA models produce lower quality
     // and may fail these thresholds — that is expected and documented.
-    const float thresholds[] = {0.95f, 0.90f, 0.85f};
+    // Phase 8: 50x / 0.50 threshold is informational only — validates the
+    // pipeline doesn't crash, not that quality is production-ready.
+    const float thresholds[] = {0.95f, 0.90f, 0.85f, 0.80f, 0.70f, 0.50f};
 
     std::vector<workload_result> results;
     int n_fail = 0;
@@ -331,7 +333,8 @@ int main(int argc, char ** argv) {
     for (int ri = 0; ri < n_ratios; ++ri) {
         const int ratio = ratios[ri];
         const int target = live_suffix_pos0 / ratio;
-        if (target < 1) {
+        if (target < 4) {
+            std::printf("  %dx: skipped (target=%d < 4 tokens)\n", ratio, target);
             continue;
         }
 

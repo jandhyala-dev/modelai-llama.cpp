@@ -168,17 +168,19 @@ struct server_task {
     // used by SERVER_TASK_TYPE_COMPACT
     struct compact_action {
         int         id_slot             = 0;
-        std::string method              = "select"; // "select" | "solver" | "omp" | "self_study" | "chunked_self_study" | "nonuniform" | "chunked" | "on_policy"
+        std::string method              = "select"; // "select" | "solver" | "omp" | "self_study" | "chunked_self_study" | "nonuniform" | "chunked" | "on_policy" | "sequential_on_policy"
         int32_t     target_tokens       = -1;       // explicit target, or -1 to use ratio
         float       ratio               = 2.0f;     // compression ratio (used if target_tokens < 0)
         int32_t     live_suffix_tokens  = 0;         // recent tokens to keep live (default: 0 = compact all)
         llama_pos   p0                  = 0;         // start position
-        uint32_t    max_queries         = 256;       // solver/omp param
-        int         nnls_iters          = 2;         // solver/omp param (paper: 0-2)
-        float       lambda              = 1e-6f;     // solver/omp regularization
-        uint32_t    n_generate          = 256;       // self_study param
-        uint32_t    max_queries_per_kv_head = 1024;  // self_study param
+        uint32_t    max_queries         = UINT32_MAX; // solver/omp param (UINT32_MAX = auto)
+        int         nnls_iters          = -1;        // solver/omp param (-1 = auto)
+        float       lambda              = -1.0f;     // solver/omp regularization (< 0 = auto)
+        uint32_t    n_generate          = UINT32_MAX; // self_study param (UINT32_MAX = auto)
+        uint32_t    max_queries_per_kv_head = UINT32_MAX; // self_study param (UINT32_MAX = auto)
         bool        reclaim             = true;      // reclaim live KV cells after compaction
+        uint32_t    n_on_policy_passes  = UINT32_MAX; // on_policy iterations (UINT32_MAX = auto)
+        uint32_t    n_generate_q_sequential = 64;    // sequential_on_policy per-layer generation
     };
     compact_action compact_params;
 

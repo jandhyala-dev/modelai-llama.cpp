@@ -2169,7 +2169,7 @@ private:
                 {
                     if (!check_no_mtmd(task.id)) break;
 
-                    const auto & cp = task.compact_params;
+                    auto cp = task.compact_params;  // mutable copy for auto-tuning
                     const int id_slot = cp.id_slot;
 
                     // Validate slot
@@ -2201,13 +2201,14 @@ private:
                     // All implemented methods (superset)
                     static const std::set<std::string> valid_methods = {
                         "select", "solver", "omp", "self_study",
-                        "chunked_self_study", "nonuniform", "chunked", "on_policy",
+                        "chunked_self_study", "nonuniform", "chunked",
+                        "on_policy", "sequential_on_policy",
                     };
                     // V1 beta allowlist — configurable via LLAMA_COMPACT_ALLOWED_METHODS
                     const auto & v1_allowlist = get_compact_allowed_methods();
 
                     if (valid_methods.find(method) == valid_methods.end()) {
-                        send_error(task, "Invalid compaction method. Supported: select, solver, omp, self_study, chunked_self_study, nonuniform, chunked, on_policy", ERROR_TYPE_INVALID_REQUEST);
+                        send_error(task, "Invalid compaction method. Supported: select, solver, omp, self_study, chunked_self_study, nonuniform, chunked, on_policy, sequential_on_policy", ERROR_TYPE_INVALID_REQUEST);
                         break;
                     }
                     if (v1_allowlist.find(method) == v1_allowlist.end()) {
@@ -2265,6 +2266,15 @@ private:
                     const llama_pos pos_max_before = mem ? llama_memory_seq_pos_max(mem, seq_id) : -1;
                     const uint32_t n_kv_before = pos_max_before >= 0 ? (uint32_t)(pos_max_before + 1) : prompt_tokens;
 
+                    // Phase 8: Resolve auto-tuning sentinels based on compression ratio.
+                    const bool high_compression = (cp.ratio >= 10.0f);
+                    if (cp.max_queries         == UINT32_MAX) { cp.max_queries         = high_compression ? 512u  : 256u;  }
+                    if (cp.nnls_iters          < 0)           { cp.nnls_iters          = high_compression ? 4     : 2;     }
+                    if (cp.lambda              < 0.0f)        { cp.lambda              = high_compression ? 1e-5f : 1e-6f; }
+                    if (cp.n_generate          == UINT32_MAX) { cp.n_generate          = high_compression ? 512u  : 256u;  }
+                    if (cp.max_queries_per_kv_head == UINT32_MAX) { cp.max_queries_per_kv_head = high_compression ? 2048u : 1024u; }
+                    if (cp.n_on_policy_passes  == UINT32_MAX) { cp.n_on_policy_passes  = high_compression ? 2u    : 1u;    }
+
                     // Run compaction
                     const int64_t t_start = ggml_time_us();
                     bool ok = false;
@@ -2301,8 +2311,23 @@ private:
                         llama_kv_compact_pipeline_stats stats;
                         ok = kv->compacted_prefix_chunked_from_live_kv(seq_id, target_tokens, live_suffix_pos0, &stats, cp.p0, cp.max_queries, cp.nnls_iters, cp.lambda);
                     } else if (method == "on_policy") {
+                        llama_kv_compact_on_policy_config op_config;
+                        op_config.n_on_policy_passes      = cp.n_on_policy_passes;
+                        op_config.n_generate              = cp.n_generate;
+                        op_config.max_queries             = cp.max_queries;
+                        op_config.max_queries_per_kv_head = cp.max_queries_per_kv_head;
+                        op_config.nnls_iters              = cp.nnls_iters;
+                        op_config.lambda                  = cp.lambda;
                         llama_kv_compact_pipeline_stats stats;
-                        ok = kv->compacted_prefix_on_policy_from_live_kv(ctx, seq_id, target_tokens, live_suffix_pos0, &stats, cp.p0, cp.max_queries, cp.nnls_iters, cp.lambda, cp.n_generate);
+                        ok = kv->compacted_prefix_iterative_on_policy_from_live_kv(ctx, seq_id, target_tokens, live_suffix_pos0, &stats, cp.p0, op_config);
+                    } else if (method == "sequential_on_policy") {
+                        llama_kv_compact_sequential_config sq_config;
+                        sq_config.n_generate_q            = cp.n_generate_q_sequential;
+                        sq_config.max_queries_per_kv_head = cp.max_queries_per_kv_head;
+                        sq_config.nnls_iters              = cp.nnls_iters;
+                        sq_config.lambda                  = cp.lambda;
+                        llama_kv_compact_pipeline_stats stats;
+                        ok = kv->compacted_prefix_sequential_on_policy_from_live_kv(ctx, seq_id, target_tokens, live_suffix_pos0, &stats, cp.p0, sq_config);
                     }
 
                     if (!ok) {
@@ -4499,12 +4524,14 @@ void server_routes::init_routes() {
         cp.ratio               = json_value(data, "ratio",               2.0f);
         cp.live_suffix_tokens  = json_value(data, "live_suffix_tokens",  0);
         cp.p0                  = json_value(data, "p0",                  (llama_pos) 0);
-        cp.max_queries         = json_value(data, "max_queries",         (uint32_t) 256);
-        cp.nnls_iters          = json_value(data, "nnls_iters",          64);
-        cp.lambda              = json_value(data, "lambda",              1e-6f);
-        cp.n_generate          = json_value(data, "n_generate",          (uint32_t) 256);
-        cp.max_queries_per_kv_head = json_value(data, "max_queries_per_kv_head", (uint32_t) 1024);
+        cp.max_queries         = json_value(data, "max_queries",         (uint32_t) UINT32_MAX);
+        cp.nnls_iters          = json_value(data, "nnls_iters",          -1);
+        cp.lambda              = json_value(data, "lambda",              -1.0f);
+        cp.n_generate          = json_value(data, "n_generate",          (uint32_t) UINT32_MAX);
+        cp.max_queries_per_kv_head = json_value(data, "max_queries_per_kv_head", (uint32_t) UINT32_MAX);
         cp.reclaim             = json_value(data, "reclaim",             true);
+        cp.n_on_policy_passes  = json_value(data, "n_on_policy_passes",  (uint32_t) UINT32_MAX);
+        cp.n_generate_q_sequential = json_value(data, "n_generate_q_sequential", (uint32_t) 64);
 
         res->rd.post_task(std::move(task));
 

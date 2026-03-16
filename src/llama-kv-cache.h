@@ -19,6 +19,8 @@ struct llama_kv_compact_pipeline_stats;
 struct llama_kv_compact_self_study_config;
 struct llama_kv_compact_self_study_stats;
 
+#include "llama-kv-compact-on-policy.h"
+
 //
 // llama_kv_cache
 //
@@ -250,6 +252,22 @@ public:
             int nnls_iters = 2,
             float lambda = 1e-6f,
             uint32_t n_generate_q = 128);
+    bool compacted_prefix_iterative_on_policy_from_live_kv(
+            struct llama_context * ctx,
+            llama_seq_id seq_id,
+            uint32_t target_tokens,
+            llama_pos live_suffix_pos0,
+            llama_kv_compact_pipeline_stats * stats = nullptr,
+            llama_pos p0 = 0,
+            const llama_kv_compact_on_policy_config & config = {});
+    bool compacted_prefix_sequential_on_policy_from_live_kv(
+            struct llama_context * ctx,
+            llama_seq_id seq_id,
+            uint32_t target_tokens,
+            llama_pos live_suffix_pos0,
+            llama_kv_compact_pipeline_stats * stats = nullptr,
+            llama_pos p0 = 0,
+            const llama_kv_compact_sequential_config & config = {});
 
     bool compacted_prefix_layer_layout_for_solver(int32_t il, llama_compacted_prefix_layer_layout & out) const;
     bool compacted_prefix_seq_positions(llama_seq_id seq_id, llama_pos p0, llama_pos p1, std::vector<llama_pos> & out) const;
@@ -326,6 +344,11 @@ public:
     void set_input_compacted_prefix_kq_b(ggml_tensor * dst, int32_t il, llama_seq_id seq_id) const;
 
     uint64_t compacted_prefix_state_version() const { return compacted_prefix_version_counter; }
+
+    // Phase 8: Invalidate tensor cache after single-layer refit modifies layer
+    // data in place.  Forces re-materialization of cached K/V/beta tensors on
+    // the next decode.
+    void compacted_prefix_bump_version() { ++compacted_prefix_version_counter; cp_cache.invalidate(); }
 
 private:
     std::string compacted_prefix_last_method = "none";

@@ -15,6 +15,7 @@ struct llama_kv_compact_pipeline_stats {
     double total_time_ms = 0.0;
     uint32_t n_prefix_tokens = 0;
     uint32_t n_selected_tokens = 0;
+    float mean_partition_sum_relative_error = 0.0f;  // Phase 8: mean residual across all heads
 };
 
 // Full solver pipeline: selection + beta fitting + V fitting.

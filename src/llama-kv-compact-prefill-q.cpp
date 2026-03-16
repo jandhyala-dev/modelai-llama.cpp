@@ -283,6 +283,9 @@ bool llama_kv_compact_prefill_q_with_captured_state(
         /* ridge_scale      */ LLAMA_KV_COMPACT_RIDGE_SPECTRAL,
     };
 
+    double residual_sum = 0.0;
+    uint32_t residual_count = 0;
+
     for (size_t li = 0; li < layouts.size(); ++li) {
         const auto & layout = layouts[li];
         auto & dst_layer = seq->layers[li];
@@ -304,12 +307,15 @@ bool llama_kv_compact_prefill_q_with_captured_state(
                 return false;
             }
 
+            float head_residual = 0.0f;
             std::vector<float> beta;
             if (!llama_kv_compact_fit_beta(entry.queries, entry.k,
                                             compacted_k, solver_opts,
-                                            beta, nullptr)) {
+                                            beta, &head_residual)) {
                 return false;
             }
+            residual_sum += head_residual;
+            residual_count++;
 
             if (layout.n_embd_head_v > 0) {
                 llama_kv_compact_matrix compacted_v;
@@ -341,7 +347,186 @@ bool llama_kv_compact_prefill_q_with_captured_state(
         stats->n_selected_tokens  = n_selected;
         stats->n_queries_per_head = actual_queries;
         stats->n_layers_with_q    = layers_with_q;
+        stats->mean_partition_sum_relative_error = residual_count > 0
+            ? (float)(residual_sum / residual_count) : 0.0f;
     }
+
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// Phase 8: Single-layer refit
+// ---------------------------------------------------------------------------
+
+bool llama_kv_compact_refit_single_layer(
+        llama_kv_cache       & kv,
+        llama_seq_id           seq_id,
+        int32_t                il,
+        llama_q_capture_state & q_state,
+        const llama_kv_compact_prefill_q_config & config) {
+
+    if (seq_id < 0) {
+        return false;
+    }
+
+    // Resolve model layer ID → layout.
+    llama_compacted_prefix_layer_layout layout;
+    if (!kv.compacted_prefix_layer_layout_for_solver(il, layout)) {
+        return false;  // unmapped layer (e.g. SWA)
+    }
+
+    auto * store = kv.get_compacted_prefix();
+    if (!store) {
+        return false;
+    }
+    auto * seq = store->get_seq(seq_id);
+    if (!seq || !seq->enabled || seq->layers.empty()) {
+        return false;
+    }
+
+    // Find the layer storage entry matching this model layer ID.
+    const auto & layouts = store->get_layouts();
+    size_t ikv = SIZE_MAX;
+    for (size_t i = 0; i < layouts.size(); ++i) {
+        if (layouts[i].layer_id == (uint32_t) il) {
+            ikv = i;
+            break;
+        }
+    }
+    if (ikv == SIZE_MAX || ikv >= seq->layers.size()) {
+        return false;
+    }
+
+    auto & dst_layer = seq->layers[ikv];
+    const uint32_t n_selected = dst_layer.n_compacted_tokens;
+    if (n_selected == 0) {
+        return false;
+    }
+
+    // Get the selected positions from initial solve.
+    const auto & selected_positions = seq->logical_positions;
+    if (selected_positions.size() != n_selected) {
+        return false;
+    }
+
+    // Get all prefix positions (needed for full K extraction).
+    std::vector<llama_pos> all_prefix_positions;
+    if (!kv.compacted_prefix_seq_positions(seq_id, 0, seq->live_suffix_pos0, all_prefix_positions)) {
+        return false;
+    }
+    if (all_prefix_positions.empty()) {
+        return false;
+    }
+    const uint32_t n_prefix = (uint32_t) all_prefix_positions.size();
+
+    // Build index mapping: for each selected position, find its index in all_prefix_positions.
+    std::vector<uint32_t> selected_local_indices;
+    selected_local_indices.reserve(n_selected);
+    for (const auto & sel_pos : selected_positions) {
+        bool found = false;
+        for (uint32_t j = 0; j < n_prefix; ++j) {
+            if (all_prefix_positions[j] == sel_pos) {
+                selected_local_indices.push_back(j);
+                found = true;
+                break;
+            }
+        }
+        if (!found) {
+            return false;
+        }
+    }
+
+    const llama_kv_compact_solver_opts solver_opts = {
+        /* lambda           */ config.lambda,
+        /* nnls_iters       */ config.nnls_iters,
+        /* nnls_lower_bound */ 1e-12f,
+        /* nnls_upper_bound */ 0.0f,
+        /* ridge_scale      */ LLAMA_KV_COMPACT_RIDGE_SPECTRAL,
+    };
+
+    for (uint32_t head = 0; head < layout.n_head_kv; ++head) {
+        // Extract full K from live cache.
+        std::vector<float> full_k_data;
+        if (!kv.compacted_prefix_copy_k_head_f32(il, seq_id, head,
+                    all_prefix_positions, full_k_data)) {
+            return false;
+        }
+        llama_kv_compact_matrix full_k(n_prefix, layout.n_embd_head_k);
+        full_k.data = std::move(full_k_data);
+
+        // Regroup captured Q for this KV head.
+        llama_kv_compact_matrix queries;
+        if (!llama_q_capture_regroup_for_kv_head(
+                    q_state, il, head, layout.n_head_kv, queries)) {
+            // Fallback to cache-key surrogates.
+            if (!llama_kv_compact_extract_cache_key_queries(
+                        kv, seq_id, il, head,
+                        all_prefix_positions,
+                        llama_kv_compact_query_params{ config.max_queries_per_kv_head },
+                        queries)) {
+                return false;
+            }
+        } else {
+            llama_q_capture_subsample(queries, config.max_queries_per_kv_head);
+
+            // Q/K norm normalization.
+            float q_norm = row_norm_mean(queries);
+            float k_norm = row_norm_mean(full_k);
+            if (q_norm > 1e-8f && k_norm > 1e-8f) {
+                float scale = k_norm / q_norm;
+                for (size_t i = 0; i < queries.data.size(); ++i) {
+                    queries.data[i] *= scale;
+                }
+            }
+        }
+
+        // Gather compacted K rows.
+        llama_kv_compact_matrix compacted_k;
+        if (!gather_rows(full_k, selected_local_indices, compacted_k)) {
+            return false;
+        }
+
+        // Fit beta.
+        std::vector<float> beta;
+        if (!llama_kv_compact_fit_beta(queries, full_k,
+                                        compacted_k, solver_opts,
+                                        beta, nullptr)) {
+            return false;
+        }
+
+        // Fit V.
+        if (layout.n_embd_head_v > 0) {
+            std::vector<float> full_v_data;
+            if (!kv.compacted_prefix_copy_v_head_f32(il, seq_id, head,
+                        all_prefix_positions, full_v_data)) {
+                return false;
+            }
+            llama_kv_compact_matrix full_v(n_prefix, layout.n_embd_head_v);
+            full_v.data = std::move(full_v_data);
+
+            llama_kv_compact_matrix compacted_v;
+            if (!llama_kv_compact_fit_values(queries, full_k, full_v,
+                                              compacted_k, beta, solver_opts,
+                                              compacted_v)) {
+                return false;
+            }
+            write_payload(dst_layer.v_data, layout.type_v,
+                          layout.n_head_kv, n_selected, head,
+                          layout.n_embd_head_v, compacted_v);
+        }
+
+        // Write K and beta.
+        write_payload(dst_layer.k_data, layout.type_k,
+                      layout.n_head_kv, n_selected, head,
+                      layout.n_embd_head_k, compacted_k);
+        for (uint32_t token = 0; token < n_selected; ++token) {
+            dst_layer.beta_data[size_t(head) * n_selected + token] = beta[token];
+        }
+    }
+
+    // Update zero-beta cache and invalidate tensor cache.
+    dst_layer.update_zero_beta_cache();
+    kv.compacted_prefix_bump_version();
 
     return true;
 }

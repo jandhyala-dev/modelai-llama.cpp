@@ -892,6 +892,32 @@ bool llama_kv_cache::compacted_prefix_on_policy_from_live_kv(
     return ok;
 }
 
+bool llama_kv_cache::compacted_prefix_iterative_on_policy_from_live_kv(
+        struct llama_context * ctx,
+        llama_seq_id seq_id,
+        uint32_t target_tokens,
+        llama_pos live_suffix_pos0,
+        llama_kv_compact_pipeline_stats * stats,
+        llama_pos p0,
+        const llama_kv_compact_on_policy_config & config) {
+    const bool ok = llama_kv_compact_iterative_on_policy_from_live_kv(ctx, *this, seq_id, target_tokens, live_suffix_pos0, stats, p0, config);
+    if (ok) { compacted_prefix_last_method = "iterative-on-policy"; }
+    return ok;
+}
+
+bool llama_kv_cache::compacted_prefix_sequential_on_policy_from_live_kv(
+        struct llama_context * ctx,
+        llama_seq_id seq_id,
+        uint32_t target_tokens,
+        llama_pos live_suffix_pos0,
+        llama_kv_compact_pipeline_stats * stats,
+        llama_pos p0,
+        const llama_kv_compact_sequential_config & config) {
+    const bool ok = llama_kv_compact_sequential_on_policy_from_live_kv(ctx, *this, seq_id, target_tokens, live_suffix_pos0, stats, p0, config);
+    if (ok) { compacted_prefix_last_method = "sequential-on-policy"; }
+    return ok;
+}
+
 bool llama_kv_cache::compacted_prefix_layer_layout_for_solver(int32_t il, llama_compacted_prefix_layer_layout & out) const {
     const auto it = map_layer_ids.find(il);
     if (it == map_layer_ids.end()) {

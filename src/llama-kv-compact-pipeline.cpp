@@ -180,6 +180,9 @@ bool llama_kv_compact_fit_from_live_kv(
         /* nnls_upper_bound */ 0.0f,
     };
 
+    double residual_sum = 0.0;
+    uint32_t residual_count = 0;
+
     for (size_t li = 0; li < layouts.size(); ++li) {
         const auto & layout = layouts[li];
         auto & dst_layer = seq->layers[li];
@@ -207,12 +210,15 @@ bool llama_kv_compact_fit_from_live_kv(
                 return false;
             }
 
+            float head_residual = 0.0f;
             std::vector<float> beta;
             if (!llama_kv_compact_fit_beta(entry.queries, entry.k,
                                             compacted_k, solver_opts,
-                                            beta, nullptr)) {
+                                            beta, &head_residual)) {
                 return false;
             }
+            residual_sum += head_residual;
+            residual_count++;
 
             if (layout.n_embd_head_v > 0) {
                 llama_kv_compact_matrix compacted_v;
@@ -256,6 +262,8 @@ bool llama_kv_compact_fit_from_live_kv(
                              + stats->solver_time_ms;
         stats->n_prefix_tokens = n_prefix_tokens;
         stats->n_selected_tokens = n_selected;
+        stats->mean_partition_sum_relative_error = residual_count > 0
+            ? (float)(residual_sum / residual_count) : 0.0f;
     }
 
     return true;
