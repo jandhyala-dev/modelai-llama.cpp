@@ -193,7 +193,7 @@ These are upstream compatibility issues. Fix path: sync with newer upstream llam
 
 - **Flash attention with beta > 0:** non-zero-beta layers use standard attention; zero-beta layers use flash attention (Phase 7 per-layer eligibility),
 - **SWA architecture:** compaction is restricted to the base cache only; SWA sub-cache compaction is rejected by `compacted_prefix_runtime_supported()`,
-- **High compression (10-50x):** Phase 8 in progress — iterative on-policy, sequential per-layer, quality gate, auto-tuning. Quality at 50x is research-only (~23% loss per MIT benchmarks).
+- **High compression (10-50x):** Phase 8 complete — iterative on-policy, sequential per-layer, quality gate, auto-tuning. Quality at 50x is research-only (~23% loss per MIT benchmarks). Model-dependent quality validation deferred to CI.
 
 ## Runtime Strategy
 
