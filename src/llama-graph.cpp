@@ -2209,8 +2209,9 @@ ggml_tensor * llm_graph_context::build_attn(
         if (zero_beta) {
             // Zero-beta path: no kq_b needed, compatible with flash attention.
             // kq_b_combined stays as the incoming kq_b (nullptr for most models).
-            // Phase 7: cast mask to F16 for flash attention if needed.
-            if (cparams.flash_attn && kq_mask_combined->type != GGML_TYPE_F16) {
+            // Phase 7: cast mask to F16 only when flash attention will actually be used
+            // (requires both flash_attn enabled and kq_b_combined == nullptr).
+            if (cparams.flash_attn && kq_b_combined == nullptr && kq_mask_combined->type != GGML_TYPE_F16) {
                 kq_mask_combined = ggml_cast(ctx0, kq_mask_combined, GGML_TYPE_F16);
             }
         } else if (kq_b) {
@@ -2430,8 +2431,8 @@ ggml_tensor * llm_graph_context::build_attn(
 
         if (zero_beta) {
             // Zero-beta path: no kq_b needed, compatible with flash attention.
-            // Phase 7: cast mask to F16 for flash attention if needed.
-            if (cparams.flash_attn && kq_mask_combined->type != GGML_TYPE_F16) {
+            // Phase 7: cast mask to F16 only when flash attention will actually be used.
+            if (cparams.flash_attn && kq_b_combined == nullptr && kq_mask_combined->type != GGML_TYPE_F16) {
                 kq_mask_combined = ggml_cast(ctx0, kq_mask_combined, GGML_TYPE_F16);
             }
         } else if (kq_b) {
