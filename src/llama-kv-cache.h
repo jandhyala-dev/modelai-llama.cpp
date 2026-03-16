@@ -279,6 +279,7 @@ public:
 
     // Compaction capability and state queries (6b-18, 6b-19)
     bool supports_compaction() const;
+    std::string compaction_unsupported_reason() const;
     bool has_compacted_prefix() const;
     const std::string & compacted_prefix_method() const;
     bool compacted_prefix_forces_non_flash() const;

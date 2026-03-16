@@ -1134,6 +1134,18 @@ bool llama_kv_cache::supports_compaction() const {
     return compacted_prefix_runtime_supported();
 }
 
+// NOTE: must mirror the checks in compacted_prefix_runtime_supported().
+// If a new blocker is added there, add the corresponding reason here.
+std::string llama_kv_cache::compaction_unsupported_reason() const {
+    if (n_swa > 0 || swa_type != LLAMA_SWA_TYPE_NONE) {
+        return "swa_cache";
+    }
+    if (hparams.n_pos_per_embd() > 1) {
+        return "mrope_positions";
+    }
+    return "";
+}
+
 bool llama_kv_cache::has_compacted_prefix() const {
     if (!compacted_prefix_runtime_supported()) {
         return false;

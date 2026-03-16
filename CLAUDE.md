@@ -53,5 +53,5 @@ ctest --test-dir build -L main --output-on-failure
 
 ## V0 Support Matrix
 
-**Supported:** standard causal models, non-flash attention, non-quantized V, uncompacted chat-template/BOS prefix
-**Unsupported:** flash attention, quantized V, SWA, hybrid recurrent+attention, M-RoPE, public API guarantees
+**Supported:** standard causal models, non-flash attention, non-quantized V, uncompacted chat-template/BOS prefix, hybrid SSM+attention (attention layers only, if standard RoPE), iSWA (base layers only)
+**Unsupported:** flash attention, quantized V, M-RoPE/IMROPE models (Qwen3.5, Qwen2-VL, GLM4), pure recurrent (Mamba/RWKV), public API guarantees

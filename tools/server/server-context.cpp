@@ -14,6 +14,8 @@
 #include "src/llama-context.h"
 #include "src/llama-kv-cache.h"
 #include "src/llama-kv-cache-iswa.h"
+#include "src/llama-memory-hybrid.h"
+#include "src/llama-memory-hybrid-iswa.h"
 #include "src/llama-kv-compact-pipeline.h"
 #include "src/llama-kv-compact-self-study.h"
 
@@ -89,7 +91,7 @@ static const std::set<std::string> & get_compact_allowed_methods() {
     return methods;
 }
 
-// Get the base llama_kv_cache from a context (handles both plain and iSWA layouts).
+// Get the base llama_kv_cache from a context (handles plain, iSWA, and hybrid layouts).
 // Returns nullptr if the context has no KV cache or uses an unsupported memory type.
 static const llama_kv_cache * get_kv_cache_base(llama_context * ctx) {
     if (!ctx) {
@@ -106,6 +108,18 @@ static const llama_kv_cache * get_kv_cache_base(llama_context * ctx) {
     auto * kv_iswa = dynamic_cast<llama_kv_cache_iswa *>(mem);
     if (kv_iswa) {
         return kv_iswa->get_base();
+    }
+    // Hybrid models (attention + recurrent/SSM layers, e.g. Qwen3.5-35B-A3B):
+    // extract the attention KV cache, compaction applies only to attention layers.
+    // llama_memory_hybrid: non-SWA hybrid — mem_attn is llama_kv_cache directly
+    auto * hybrid = dynamic_cast<llama_memory_hybrid *>(mem);
+    if (hybrid) {
+        return hybrid->get_mem_attn();
+    }
+    // llama_memory_hybrid_iswa: SWA hybrid — mem_attn is llama_kv_cache_iswa
+    auto * hybrid_iswa = dynamic_cast<llama_memory_hybrid_iswa *>(mem);
+    if (hybrid_iswa) {
+        return hybrid_iswa->get_mem_attn()->get_base();
     }
     return nullptr;
 }
@@ -209,9 +223,13 @@ static json build_modelai_runtime_summary_from_metrics(const server_task_result_
             { "available",               metrics.compaction_available },
             { "enabled",                 metrics.compaction_enabled },
             { "method",                  metrics.compaction_method },
+            { "unsupported_reason",      metrics.compaction_unsupported_reason },
+            // backward compat: keep old field name with old semantics
             { "last_fallback_reason",    metrics.compaction_available
                                              ? (metrics.compaction_enabled ? "" : "not_configured")
-                                             : "model_unsupported" },
+                                             : (metrics.compaction_unsupported_reason.empty()
+                                                 ? "model_unsupported"
+                                                 : metrics.compaction_unsupported_reason) },
         } },
     };
 }
@@ -1997,10 +2015,13 @@ private:
                     {
                         const auto * kv = get_kv_cache_base(ctx);
                         if (kv) {
-                            res->compaction_available        = kv->supports_compaction();
-                            res->compaction_enabled          = kv->has_compacted_prefix();
-                            res->compaction_method           = kv->compacted_prefix_method();
-                            res->compaction_forces_non_flash = kv->compacted_prefix_forces_non_flash();
+                            res->compaction_available             = kv->supports_compaction();
+                            res->compaction_enabled               = kv->has_compacted_prefix();
+                            res->compaction_method                = kv->compacted_prefix_method();
+                            res->compaction_forces_non_flash      = kv->compacted_prefix_forces_non_flash();
+                            res->compaction_unsupported_reason    = kv->compaction_unsupported_reason();
+                        } else {
+                            res->compaction_unsupported_reason    = "no_kv_cache";
                         }
                     }
 
@@ -2191,7 +2212,8 @@ private:
                         break;
                     }
                     if (!kv->supports_compaction()) {
-                        send_error(task, "Compaction not supported for this model/backend configuration", ERROR_TYPE_NOT_SUPPORTED);
+                        const auto reason = kv->compaction_unsupported_reason();
+                        send_error(task, "Compaction not supported: " + (reason.empty() ? "unknown" : reason), ERROR_TYPE_NOT_SUPPORTED);
                         break;
                     }
 

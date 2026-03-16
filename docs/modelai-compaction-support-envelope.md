@@ -75,3 +75,22 @@ after compaction is similar to OMP, but the compaction step itself is slow.
 | DeepSeek-R1-14B-Q4_K_M | 4:1 | 0.999 | 0.997 | 0.994 | 0.998 | 0.996 | 0.993 | supported |
 | Qwen3-30B-A3B-Q4_K_M | 8:1 | 0.999 | 0.999 | 0.999 | — | — | — | supported |
 | Gemma-3-12B-Q4_K_M | iSWA | — | — | — | — | — | — | blocked (model load) |
+| Qwen3.5-35B-A3B-Q4_K_M | hybrid | — | — | — | — | — | — | blocked (IMROPE) |
+
+## Architecture Support Matrix
+
+| Memory Layout | KV Cache Extraction | Compaction Status |
+|---------------|-------------------|-------------------|
+| `llama_kv_cache` (standard) | Direct | Supported |
+| `llama_kv_cache_iswa` (iSWA) | `get_base()` non-SWA cache | Supported (base layers only) |
+| `llama_memory_hybrid` (SSM+attention) | `get_mem_attn()` | Supported if standard RoPE |
+| `llama_memory_hybrid_iswa` (SSM+iSWA) | `get_mem_attn()->get_base()` | Supported if standard RoPE |
+| `llama_memory_recurrent` (pure SSM) | No KV cache | N/A |
+
+### Compaction Blockers
+
+| Blocker | Reason | Affected Models |
+|---------|--------|-----------------|
+| M-RoPE / IMROPE | Multi-dimensional positions (n_pos_per_embd > 1); compaction stores scalar positions only | Qwen2-VL, Qwen3-VL, Qwen3.5, Qwen3.5-MOE, GLM4 |
+| SWA sub-cache | SWA layers use sliding window; only base (non-SWA) layers are compactable | Gemma3 SWA cache (base cache IS compactable via iSWA split) |
+| No KV cache | Pure recurrent models have no KV cache to compact | Mamba, RWKV |
