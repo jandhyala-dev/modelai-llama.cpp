@@ -138,17 +138,21 @@ bool llama_kv_compact_iterative_on_policy_from_live_kv(
         float r_cur = pass_stats.mean_partition_sum_relative_error;
 
         // Quality gate: stop if residual didn't improve enough.
+        // Compute improvement before updating r_prev, then always update
+        // r_prev to track the actual committed data's residual (since
+        // prefill_q_with_captured_state already wrote the new result).
         float denom = std::max(r_prev, 1e-12f);
         float improvement = (r_prev - r_cur) / denom;
+        float r_old = r_prev;
+        r_prev = r_cur;
         if (improvement < config.quality_min_improvement) {
             LLAMA_LOG_INFO("on-policy: pass %u residual not improved (%.6f -> %.6f, delta %.4f%%), stopping\n",
-                           pass, r_prev, r_cur, improvement * 100.0f);
+                           pass, r_old, r_cur, improvement * 100.0f);
             break;
         }
 
         LLAMA_LOG_INFO("on-policy: pass %u residual improved %.6f -> %.6f (%.2f%%)\n",
-                       pass, r_prev, r_cur, improvement * 100.0f);
-        r_prev = r_cur;
+                       pass, r_old, r_cur, improvement * 100.0f);
     }
 
     const auto t_total_end = std::chrono::steady_clock::now();

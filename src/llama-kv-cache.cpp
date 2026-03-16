@@ -901,7 +901,7 @@ bool llama_kv_cache::compacted_prefix_iterative_on_policy_from_live_kv(
         llama_pos p0,
         const llama_kv_compact_on_policy_config & config) {
     const bool ok = llama_kv_compact_iterative_on_policy_from_live_kv(ctx, *this, seq_id, target_tokens, live_suffix_pos0, stats, p0, config);
-    if (ok) { compacted_prefix_last_method = "iterative-on-policy"; }
+    if (ok) { compacted_prefix_last_method = "on-policy"; }
     return ok;
 }
 
