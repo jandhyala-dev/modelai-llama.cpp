@@ -6,16 +6,16 @@
 #
 # Usage:
 #   # Full benchmark on one model:
-#   ./scripts/bench-kv-compact-longctx.sh models/test/Qwen3-14B-Q4_K_M.gguf
+#   ./scripts/bench-kv-compact-longctx.sh /path/to/Qwen3-14B-Q4_K_M.gguf
 #
 #   # With QuALITY evaluation (4K-8K contexts):
-#   QUALITY_EVAL=1 ./scripts/bench-kv-compact-longctx.sh models/test/Qwen3-14B-Q4_K_M.gguf
+#   QUALITY_EVAL=1 ./scripts/bench-kv-compact-longctx.sh /path/to/Qwen3-14B-Q4_K_M.gguf
 #
 #   # Include self_study pipeline (6b-15b):
-#   SELF_STUDY=1 ./scripts/bench-kv-compact-longctx.sh models/test/Qwen3-14B-Q4_K_M.gguf
+#   SELF_STUDY=1 ./scripts/bench-kv-compact-longctx.sh /path/to/Qwen3-14B-Q4_K_M.gguf
 #
 #   # Smoke test (small model, quick):
-#   ./scripts/bench-kv-compact-longctx.sh models/test/stories15M-q4_0.gguf
+#   ./scripts/bench-kv-compact-longctx.sh /path/to/stories15M-q4_0.gguf
 
 set -euo pipefail
 

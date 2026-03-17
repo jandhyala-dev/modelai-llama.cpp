@@ -4,25 +4,26 @@
 
 MODELAI_BENCH="./build/bin/llama-bench"
 UPSTREAM_BENCH="/tmp/llama-upstream-bench/build/bin/llama-bench"
+MODEL_DIR="${MODELAI_MODELS_DIR:-/Users/ajayjandhyala/dev/whippet/models}"
 RESULTS_DIR="bench-results/comparison-$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$RESULTS_DIR"
 
 # Models to test (path:display_name)
 MODELS=(
-    "models/test/llama3.2-3b-q4_k_m.gguf:Llama3.2-3B"
-    "models/test/mistral-7b-q4_k_m.gguf:Mistral-7B"
-    "models/test/llama3.1-8b-q4_k_m.gguf:Llama3.1-8B"
-    "models/test/Qwen3-8B-Q4_K_M.gguf:Qwen3-8B"
-    "models/test/qwen2.5-7b-instruct-q4_k_m.gguf:Qwen2.5-7B"
-    "models/test/gemma2-9b-q4_k_m.gguf:Gemma2-9B"
-    "models/test/deepseek-r1-8b-q4_k_m.gguf:DeepSeek-R1-8B"
-    "models/test/granite3.1-dense-8b-q4_k_m.gguf:Granite3.1-8B"
-    "models/test/tinyllama-1.1b-q4_k_m.gguf:TinyLlama-1.1B"
-    "models/test/qwen2.5-coder-14b-q4_k_m.gguf:Qwen2.5-Coder-14B"
-    "models/test/Qwen3-14B-Q4_K_M.gguf:Qwen3-14B"
-    "models/test/qwen2.5-14b-instruct-q4_k_m.gguf:Qwen2.5-14B"
-    "models/test/deepseek-r1-distill-qwen-14b-q4_k_m.gguf:DeepSeek-R1-14B"
-    "models/test/Qwen3-30B-A3B-Instruct-Q4_K_M.gguf:Qwen3-30B-A3B"
+    "${MODEL_DIR}/llama3.2-3b-q4_k_m.gguf:Llama3.2-3B"
+    "${MODEL_DIR}/mistral-7b-q4_k_m.gguf:Mistral-7B"
+    "${MODEL_DIR}/llama3.1-8b-q4_k_m.gguf:Llama3.1-8B"
+    "${MODEL_DIR}/Qwen3-8B-Q4_K_M.gguf:Qwen3-8B"
+    "${MODEL_DIR}/qwen2.5-7b-instruct-q4_k_m.gguf:Qwen2.5-7B"
+    "${MODEL_DIR}/gemma2-9b-q4_k_m.gguf:Gemma2-9B"
+    "${MODEL_DIR}/deepseek-r1-8b-q4_k_m.gguf:DeepSeek-R1-8B"
+    "${MODEL_DIR}/granite3.1-dense-8b-q4_k_m.gguf:Granite3.1-8B"
+    "${MODEL_DIR}/tinyllama-1.1b-q4_k_m.gguf:TinyLlama-1.1B"
+    "${MODEL_DIR}/qwen2.5-coder-14b-q4_k_m.gguf:Qwen2.5-Coder-14B"
+    "${MODEL_DIR}/Qwen3-14B-Q4_K_M.gguf:Qwen3-14B"
+    "${MODEL_DIR}/qwen2.5-14b-instruct-q4_k_m.gguf:Qwen2.5-14B"
+    "${MODEL_DIR}/deepseek-r1-distill-qwen-14b-q4_k_m.gguf:DeepSeek-R1-14B"
+    "${MODEL_DIR}/Qwen3-30B-A3B-Instruct-Q4_K_M.gguf:Qwen3-30B-A3B"
 )
 
 run_bench_with_memory() {

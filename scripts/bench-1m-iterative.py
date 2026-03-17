@@ -21,7 +21,8 @@ SERVER_PORT = 8090
 SERVER = f"http://localhost:{SERVER_PORT}"
 SLOT = 0
 
-MODEL_PATH = "/Users/ajayjandhyala/dev/whippet/modelai-llama.cpp/models/test/Qwen3-Coder-30B-A3B-Instruct-1M-UD-Q4_K_XL.gguf"
+MODELS_DIR = os.environ.get("MODELAI_MODELS_DIR", "/Users/ajayjandhyala/dev/whippet/models")
+MODEL_PATH = os.path.join(MODELS_DIR, "Qwen3-Coder-30B-A3B-Instruct-1M-UD-Q4_K_XL.gguf")
 SERVER_BIN = "/Users/ajayjandhyala/dev/whippet/modelai-llama.cpp/build/bin/llama-server"
 
 COMPACT_RATIO = 50

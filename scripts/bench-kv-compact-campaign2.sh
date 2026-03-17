@@ -14,7 +14,7 @@
 #   ./scripts/bench-kv-compact-campaign2.sh
 #
 #   # Run single model:
-#   ./scripts/bench-kv-compact-campaign2.sh models/test/Qwen3-14B-Q4_K_M.gguf
+#   ./scripts/bench-kv-compact-campaign2.sh /path/to/Qwen3-14B-Q4_K_M.gguf
 #
 #   # Dry run (print matrix only):
 #   DRY_RUN=1 ./scripts/bench-kv-compact-campaign2.sh
@@ -33,14 +33,17 @@ if [ ! -f "$BENCH_SCRIPT" ]; then
     exit 1
 fi
 
+# Models directory
+MODEL_DIR="${MODELAI_MODELS_DIR:-/Users/ajayjandhyala/dev/whippet/models}"
+
 # All 6 production models.
 ALL_MODELS=(
-    "models/test/Qwen3-8B-Q4_K_M.gguf"
-    "models/test/Qwen3-14B-Q4_K_M.gguf"
-    "models/test/Qwen3-30B-A3B-Instruct-Q4_K_M.gguf"
-    "models/test/qwen2.5-14b-instruct-q4_k_m.gguf"
-    "models/test/deepseek-r1-distill-qwen-14b-q4_k_m.gguf"
-    "models/test/gemma-3-12b-it-Q4_K_M.gguf"
+    "${MODEL_DIR}/Qwen3-8B-Q4_K_M.gguf"
+    "${MODEL_DIR}/Qwen3-14B-Q4_K_M.gguf"
+    "${MODEL_DIR}/Qwen3-30B-A3B-Instruct-Q4_K_M.gguf"
+    "${MODEL_DIR}/qwen2.5-14b-instruct-q4_k_m.gguf"
+    "${MODEL_DIR}/deepseek-r1-distill-qwen-14b-q4_k_m.gguf"
+    "${MODEL_DIR}/gemma-3-12b-it-Q4_K_M.gguf"
 )
 
 # If model path provided as arg, use just that model.

@@ -19,7 +19,7 @@ import urllib.request
 
 # ── Configuration ────────────────────────────────────────────────────
 SERVER_BIN = os.path.join(os.path.dirname(__file__), "..", "build", "bin", "llama-server")
-MODEL_DIR = os.path.join(os.path.dirname(__file__), "..", "models", "test")
+MODEL_DIR = os.environ.get("MODELAI_MODELS_DIR", "/Users/ajayjandhyala/dev/whippet/models")
 PORT = 8090
 SERVER = f"http://localhost:{PORT}"
 CTX = 65536

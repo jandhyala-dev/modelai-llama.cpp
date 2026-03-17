@@ -27,13 +27,15 @@ COMMIT_SHA=$(cd "$MODELAI_DIR" && git rev-parse --short HEAD)
 OUT_DIR="$MODELAI_DIR/bench-results/3way-comparison-${TIMESTAMP}"
 mkdir -p "$OUT_DIR"
 
-# Models (symlinked in models/test/)
+# Models directory
+MODEL_DIR="${MODELAI_MODELS_DIR:-/Users/ajayjandhyala/dev/whippet/models}"
+
 declare -A MODELS
-MODELS[qwen3-14b]="models/test/Qwen3-14B-Q4_K_M.gguf"
-MODELS[qwen3-8b]="models/test/Qwen3-8B-Q4_K_M.gguf"
-MODELS[qwen3-30b-a3b]="models/test/Qwen3-30B-A3B-Instruct-Q4_K_M.gguf"
-MODELS[deepseek-r1-14b]="models/test/deepseek-r1-distill-qwen-14b-q4_k_m.gguf"
-MODELS[gemma3-12b]="models/test/gemma-3-12b-it-Q4_K_M.gguf"
+MODELS[qwen3-14b]="${MODEL_DIR}/Qwen3-14B-Q4_K_M.gguf"
+MODELS[qwen3-8b]="${MODEL_DIR}/Qwen3-8B-Q4_K_M.gguf"
+MODELS[qwen3-30b-a3b]="${MODEL_DIR}/Qwen3-30B-A3B-Instruct-Q4_K_M.gguf"
+MODELS[deepseek-r1-14b]="${MODEL_DIR}/deepseek-r1-distill-qwen-14b-q4_k_m.gguf"
+MODELS[gemma3-12b]="${MODEL_DIR}/gemma-3-12b-it-Q4_K_M.gguf"
 
 # Ollama model names
 declare -A OLLAMA_MODELS
@@ -239,7 +241,7 @@ run_modelai_compaction() {
 
     local output
     output=$(PIPELINE="$pipeline" RATIO="$ratio" ARTIFACT="$OUT_DIR/longctx-${model_name}-${n_ctx}-${ratio}x-${pipeline}.csv" \
-        timeout 600 "$MODELAI_LONGCTX" -m "$MODELAI_DIR/$model_path" -c "$n_ctx" -ngl 99 2>&1) || {
+        timeout 600 "$MODELAI_LONGCTX" -m "$model_path" -c "$n_ctx" -ngl 99 2>&1) || {
         echo "    FAILED (timeout or error)"
         echo "modelai-compact,${model_name},${n_ctx},compaction,0,0,${ratio},0,0,0,,,,false,longctx_failed" >> "$CSV"
         return 1
@@ -306,7 +308,7 @@ for model_name in $(echo "${!MODELS[@]}" | tr ' ' '\n' | sort); do
     echo "================================================================"
 
     # Verify model file exists
-    if [ ! -f "$MODELAI_DIR/$model_path" ]; then
+    if [ ! -f "$model_path" ]; then
         echo "  SKIP: model file not found at $model_path"
         continue
     fi
@@ -319,10 +321,10 @@ for model_name in $(echo "${!MODELS[@]}" | tr ' ' '\n' | sort); do
         run_ollama_bench "$ollama_model" "$model_name" "$n_ctx" "$PROMPT_TOKENS" "$DECODE_TOKENS" || true
 
         # 2. Upstream llama.cpp baseline
-        run_llama_bench "$UPSTREAM_BENCH" "$MODELAI_DIR/$model_path" "$n_ctx" "$PROMPT_TOKENS" "$DECODE_TOKENS" "llama.cpp" "$model_name" || true
+        run_llama_bench "$UPSTREAM_BENCH" "$model_path" "$n_ctx" "$PROMPT_TOKENS" "$DECODE_TOKENS" "llama.cpp" "$model_name" || true
 
         # 3. modelai-llama.cpp baseline (same binary, no compaction)
-        run_llama_bench "$MODELAI_BENCH" "$MODELAI_DIR/$model_path" "$n_ctx" "$PROMPT_TOKENS" "$DECODE_TOKENS" "modelai" "$model_name" || true
+        run_llama_bench "$MODELAI_BENCH" "$model_path" "$n_ctx" "$PROMPT_TOKENS" "$DECODE_TOKENS" "modelai" "$model_name" || true
 
         # 4. modelai KV compaction (select pipeline - most reliable)
         for ratio in "${COMPRESSION_RATIOS[@]}"; do

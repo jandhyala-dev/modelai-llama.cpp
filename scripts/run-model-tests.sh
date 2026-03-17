@@ -8,18 +8,20 @@ TEST_BIN="./build/bin/test-kv-compact-pipeline-integration"
 RESULTS_DIR="bench-results/model-tests-$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$RESULTS_DIR"
 
+MODEL_DIR="${MODELAI_MODELS_DIR:-/Users/ajayjandhyala/dev/whippet/models}"
+
 if [ $# -eq 0 ]; then
-    # Default: test all models in models/test/ (skip stories15M which is CI fixture)
+    # Default: test all models (skip stories15M which is CI fixture)
     MODELS=(
-        models/test/mistral-7b-q4_k_m.gguf
-        models/test/phi4-14b-q4_k_m.gguf
-        models/test/llama3.1-8b-q4_k_m.gguf
-        models/test/llama3.2-3b-q4_k_m.gguf
-        models/test/gemma2-9b-q4_k_m.gguf
-        models/test/granite3.1-dense-8b-q4_k_m.gguf
-        models/test/deepseek-r1-8b-q4_k_m.gguf
-        models/test/qwen2.5-coder-14b-q4_k_m.gguf
-        models/test/tinyllama-1.1b-q4_k_m.gguf
+        "${MODEL_DIR}/mistral-7b-q4_k_m.gguf"
+        "${MODEL_DIR}/phi4-14b-q4_k_m.gguf"
+        "${MODEL_DIR}/llama3.1-8b-q4_k_m.gguf"
+        "${MODEL_DIR}/llama3.2-3b-q4_k_m.gguf"
+        "${MODEL_DIR}/gemma2-9b-q4_k_m.gguf"
+        "${MODEL_DIR}/granite3.1-dense-8b-q4_k_m.gguf"
+        "${MODEL_DIR}/deepseek-r1-8b-q4_k_m.gguf"
+        "${MODEL_DIR}/qwen2.5-coder-14b-q4_k_m.gguf"
+        "${MODEL_DIR}/tinyllama-1.1b-q4_k_m.gguf"
     )
 else
     MODELS=("$@")

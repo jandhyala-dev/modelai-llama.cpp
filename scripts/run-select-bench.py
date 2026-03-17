@@ -23,27 +23,29 @@ from pathlib import Path
 MODELAI_DIR = Path("/Users/ajayjandhyala/dev/whippet/modelai-llama.cpp")
 UPSTREAM_DIR = Path("/Users/ajayjandhyala/dev/whippet/llama.cpp")
 
+MODELS_DIR = os.environ.get("MODELAI_MODELS_DIR", "/Users/ajayjandhyala/dev/whippet/models")
+
 MODELS = {
     "qwen3-14b": {
-        "gguf": "models/test/Qwen3-14B-Q4_K_M.gguf",
+        "gguf": f"{MODELS_DIR}/Qwen3-14B-Q4_K_M.gguf",
         "params_b": 14.0,
         "arch": "qwen3",
         "quant": "Q4_K_M",
     },
     "qwen3-8b": {
-        "gguf": "models/test/Qwen3-8B-Q4_K_M.gguf",
+        "gguf": f"{MODELS_DIR}/Qwen3-8B-Q4_K_M.gguf",
         "params_b": 8.0,
         "arch": "qwen3",
         "quant": "Q4_K_M",
     },
     "qwen3-30b-a3b": {
-        "gguf": "models/test/Qwen3-30B-A3B-Instruct-Q4_K_M.gguf",
+        "gguf": f"{MODELS_DIR}/Qwen3-30B-A3B-Instruct-Q4_K_M.gguf",
         "params_b": 30.0,
         "arch": "qwen3-moe",
         "quant": "Q4_K_M",
     },
     "deepseek-r1-14b": {
-        "gguf": "models/test/deepseek-r1-distill-qwen-14b-q4_k_m.gguf",
+        "gguf": f"{MODELS_DIR}/deepseek-r1-distill-qwen-14b-q4_k_m.gguf",
         "params_b": 14.0,
         "arch": "deepseek-r1",
         "quant": "Q4_K_M",
@@ -117,7 +119,7 @@ def run_kv_compaction(model_path, model_name, n_ctx, ratio):
 
     try:
         r = subprocess.run(
-            [str(longctx_bin), "-m", str(MODELAI_DIR / model_path), "-c", str(n_ctx), "-ngl", "99"],
+            [str(longctx_bin), "-m", str(model_path), "-c", str(n_ctx), "-ngl", "99"],
             capture_output=True, text=True, timeout=600, env=env, cwd=str(MODELAI_DIR)
         )
         output = r.stdout + r.stderr
@@ -274,7 +276,7 @@ def main():
         print(f"MODEL: {model_name} ({model_info['params_b']}B {model_info['quant']})")
         print(f"{'='*60}")
 
-        gguf_path = MODELAI_DIR / model_info["gguf"]
+        gguf_path = Path(model_info["gguf"])
         if not gguf_path.exists():
             print(f"  SKIP: {gguf_path} not found")
             continue

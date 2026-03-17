@@ -6,16 +6,16 @@
 //
 // Usage:
 //   # Smoke test (stories15M, CI-safe):
-//   ./test-kv-compact-workload -m models/test/stories15M-q4_0.gguf
+//   ./test-kv-compact-workload -m /path/to/stories15M-q4_0.gguf
 //
 //   # Production workload (14B-class model):
-//   ./test-kv-compact-workload -m models/test/Qwen3-14B-Q4_K_M.gguf -ngl 99 -c 4096
+//   ./test-kv-compact-workload -m /path/to/Qwen3-14B-Q4_K_M.gguf -ngl 99 -c 4096
 //
 //   # With specific pipeline:
-//   PIPELINE=omp ./test-kv-compact-workload -m models/test/Qwen3-14B-Q4_K_M.gguf -ngl 99
+//   PIPELINE=omp ./test-kv-compact-workload -m /path/to/Qwen3-14B-Q4_K_M.gguf -ngl 99
 //
 //   # Write CSV artifact:
-//   ARTIFACT=results.csv ./test-kv-compact-workload -m models/test/Qwen3-14B-Q4_K_M.gguf -ngl 99
+//   ARTIFACT=results.csv ./test-kv-compact-workload -m /path/to/Qwen3-14B-Q4_K_M.gguf -ngl 99
 
 #include "arg.h"
 #include "common.h"

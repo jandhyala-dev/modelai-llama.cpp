@@ -3,13 +3,13 @@
 #
 # Usage:
 #   # Run all pipelines on a 14B model:
-#   ./scripts/bench-kv-compact-workload.sh models/test/Qwen3-14B-Q4_K_M.gguf
+#   ./scripts/bench-kv-compact-workload.sh /path/to/Qwen3-14B-Q4_K_M.gguf
 #
 #   # Smoke test:
-#   ./scripts/bench-kv-compact-workload.sh models/test/stories15M-q4_0.gguf
+#   ./scripts/bench-kv-compact-workload.sh /path/to/stories15M-q4_0.gguf
 #
 #   # Custom context size:
-#   N_CTX=8192 ./scripts/bench-kv-compact-workload.sh models/test/Qwen3-14B-Q4_K_M.gguf
+#   N_CTX=8192 ./scripts/bench-kv-compact-workload.sh /path/to/Qwen3-14B-Q4_K_M.gguf
 
 set -euo pipefail
 

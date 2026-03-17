@@ -14,8 +14,8 @@
 //   - Post-compaction active_n_kv is reduced
 //
 // Usage:
-//   ./test-kv-compact-pipeline-integration -m models/test/stories15M-q4_0.gguf
-//   ./test-kv-compact-pipeline-integration -m models/test/Qwen3-14B-Q4_K_M.gguf -ngl 99
+//   ./test-kv-compact-pipeline-integration -m /path/to/stories15M-q4_0.gguf
+//   ./test-kv-compact-pipeline-integration -m /path/to/Qwen3-14B-Q4_K_M.gguf -ngl 99
 
 #include "arg.h"
 #include "common.h"

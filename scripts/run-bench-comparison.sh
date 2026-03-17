@@ -4,18 +4,19 @@
 
 MODELAI_BENCH="./build/bin/llama-bench"
 UPSTREAM_BENCH="/tmp/llama-upstream-bench/build/bin/llama-bench"
+MODEL_DIR="${MODELAI_MODELS_DIR:-/Users/ajayjandhyala/dev/whippet/models}"
 RESULTS_DIR="bench-results/comparison-$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$RESULTS_DIR"
 
 # Test matrix: representative models across architectures
 # Using pp512 (prompt processing) and tg128 (token generation)
 MODELS=(
-    "models/test/llama3.2-3b-q4_k_m.gguf:Llama3.2-3B"
-    "models/test/mistral-7b-q4_k_m.gguf:Mistral-7B"
-    "models/test/llama3.1-8b-q4_k_m.gguf:Llama3.1-8B"
-    "models/test/Qwen3-8B-Q4_K_M.gguf:Qwen3-8B"
-    "models/test/qwen2.5-7b-instruct-q4_k_m.gguf:Qwen2.5-7B"
-    "models/test/gemma2-9b-q4_k_m.gguf:Gemma2-9B"
+    "${MODEL_DIR}/llama3.2-3b-q4_k_m.gguf:Llama3.2-3B"
+    "${MODEL_DIR}/mistral-7b-q4_k_m.gguf:Mistral-7B"
+    "${MODEL_DIR}/llama3.1-8b-q4_k_m.gguf:Llama3.1-8B"
+    "${MODEL_DIR}/Qwen3-8B-Q4_K_M.gguf:Qwen3-8B"
+    "${MODEL_DIR}/qwen2.5-7b-instruct-q4_k_m.gguf:Qwen2.5-7B"
+    "${MODEL_DIR}/gemma2-9b-q4_k_m.gguf:Gemma2-9B"
 )
 
 echo "Performance Comparison: modelai-llama.cpp vs upstream llama.cpp" > "$RESULTS_DIR/comparison.txt"
