@@ -2375,6 +2375,11 @@ private:
                     bool reclaimed = false;
                     if (cp.reclaim) {
                         reclaimed = kv->compacted_prefix_reclaim_live_kv(seq_id);
+                        if (reclaimed) {
+                            // Live KV positions are gone — clear the slot's prompt cache
+                            // so update_slots() doesn't try to reuse stale token positions.
+                            slot->prompt.tokens.clear();
+                        }
                     }
 
                     const int64_t t_end = ggml_time_us();
