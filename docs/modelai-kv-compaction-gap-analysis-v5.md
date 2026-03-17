@@ -14,9 +14,11 @@
 **V4→V5 changes:**
 - Added GAP-N: SWA validation (iSWA base layers, Gemma 3)
 - Added GAP-O: MLA listed as unsupported with rationale (DeepSeek V3/R1 full)
-- Added Qwen3.5-35B-A3B architecture analysis (hybrid + IMROPE = 2 stacked blockers)
+- Added Qwen3.5-35B-A3B architecture analysis in GAP-F (hybrid + IMROPE = 2 stacked blockers, 3:1 recurrent:attention layer ratio, specific layer pattern from model loader)
 - Gap count: 15 gaps (A-O) — 10 actionable, 3 deferred, 2 validation-only
 - Added V4-N to Week 1 timeline alongside V4-C
+- Softened DeepSeek R1 distilled claim — no explicit testing in fork, expected based on architecture lineage
+- Added MIT exhaustive audit results (5 minor items reviewed, none rise to gap level)
 
 **V3→V4 changes (reviewer-driven):**
 - GAP-C: Corrected "max/sum/RMS" → "sum/RMS only"; added MAX/MEAN to gap scope (R1 Major-1)
@@ -200,6 +202,15 @@ void llama_kv_cache_set_auto_compact(ctx, threshold, params);
 3. Do NOT remap positions for IMROPE — keep original positions
 4. Requires V4-C (hybrid validation) to succeed first
 
+**Qwen3.5-35B-A3B architecture analysis (stacked blockers):**
+
+Qwen3.5-35B-A3B has TWO stacked blockers — hybrid SSM+attention (GAP-G) AND IMROPE (this gap):
+
+- **Layer pattern:** `hparams.recurrent_layer_arr[i] = ((i + 1) % full_attn_interval != 0)` with `full_attn_interval = 4` (src/llama-model.cpp:2433-2440). Every 4th layer (0-indexed: 3, 7, 11, 15, 19, 23, 27, 31, 35, 39) is full attention. Remaining 30/40 layers are recurrent (Mamba SSM). 3:1 recurrent:attention ratio.
+- **Hybrid blocker (GAP-G):** SOLVED — `get_kv_cache_base()` extracts attention-only cache via `get_mem_attn()`. Layer filter excludes recurrent layers from KV cache. Needs validation testing only.
+- **IMROPE blocker (this gap):** UNSOLVED — `QWEN35MOE` maps to `LLAMA_ROPE_TYPE_IMROPE` (src/llama-model.cpp:8841). Multi-dimensional positions via `rope_sections` (4 sections). Compacted prefix stores scalar `pos` — must be extended for multi-resolution positions.
+- **Dependency:** GAP-G (hybrid validation) must pass before attempting IMROPE work. If hybrid compaction fails on Qwen3-30B-A3B (standard RoPE), IMROPE is moot.
+
 **Effort:** ~200 lines.
 **Risk:** HIGH. Open question: should this be BLOCKED until upstream provides IMROPE compaction test vectors?
 
@@ -354,7 +365,7 @@ Compare: `select` does one-pass attention scoring (no iterative loop) → 62-185
 
 **Decision:** List as **unsupported** in V0 matrix. Not a gap to close — fundamentally different architecture that doesn't map to arXiv:2602.16284. Revisit if/when a latent-space compaction paper appears.
 
-**Note:** DeepSeek R1 *distilled* variants (Qwen-based, Llama-based) use standard KV cache and ARE supported.
+**Note:** DeepSeek R1 *distilled* variants (Qwen-based, Llama-based) are expected to use standard KV cache based on their architecture lineage. Verify via model loader (`llama_model_rope_type()` and KV cache type) before claiming support — no explicit testing has been done on distilled variants in this fork.
 
 ---
 
@@ -421,6 +432,13 @@ Compare: `select` does one-pass attention scoring (no iterative loop) → 62-185
 - Attention score pooling (GAP-C)
 - Optimization-based compaction (GAP-H, deferred)
 - OMP-full attention evaluation (GAP-I, deferred)
+
+**Additional MIT features reviewed (do not rise to gap level):**
+- `zerobeta` option — equivalent to our `select` method (zero-beta by design); ablation covered by V4-D `--no-beta` flag
+- Direct C2 nearest-neighbor fitting — alternative to LSQ C_v. Minor quality variant; our 3-tier cascade (LAPACK sgels → Cholesky → pseudoinverse) is more robust
+- Global selection methods (cross-head budget allocation in selection step) — interesting for MoE architectures but not in the paper's algorithm; revisit if influence-curve budgets (GAP-B) prove insufficient
+- Text-based chunking (sentence/paragraph boundaries) — requires tokenizer awareness; paper uses fixed-size chunks; our non-overlapping chunking is correct for selection-based approach
+- `normalize_exp_scores` / `use_abs_corr` — already implemented in our score computation pipeline
 
 **No model support** beyond dense Qwen3 (no MoE, SSM, IMROPE).
 
