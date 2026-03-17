@@ -21,6 +21,11 @@
 #include <numeric>
 #include <cstring>
 
+// Hard minimum target tokens below which compaction is refused.
+// For solver/omp pipelines, the system becomes severely underdetermined
+// when target_tokens is too small relative to the number of KV heads.
+static constexpr uint32_t LLAMA_KV_COMPACT_MIN_TARGET_TOKENS = 2;
+
 namespace {
 
 bool gather_matrix_rows(
@@ -83,6 +88,11 @@ bool llama_kv_compact_fit_from_live_kv(
         int nnls_iters,
         float lambda) {
     if (seq_id < 0 || target_tokens == 0 || live_suffix_pos0 <= p0) {
+        return false;
+    }
+    if (target_tokens < LLAMA_KV_COMPACT_MIN_TARGET_TOKENS) {
+        LLAMA_LOG_WARN("%s: target_tokens=%u below minimum floor %u — refusing compaction\n",
+                       __func__, target_tokens, LLAMA_KV_COMPACT_MIN_TARGET_TOKENS);
         return false;
     }
 
@@ -212,21 +222,38 @@ bool llama_kv_compact_fit_from_live_kv(
 
             float head_residual = 0.0f;
             std::vector<float> beta;
-            if (!llama_kv_compact_fit_beta(entry.queries, entry.k,
-                                            compacted_k, solver_opts,
-                                            beta, &head_residual)) {
-                return false;
+            bool beta_ok = llama_kv_compact_fit_beta(entry.queries, entry.k,
+                                                      compacted_k, solver_opts,
+                                                      beta, &head_residual);
+
+            // NaN guard (GAP-K): if beta fitting fails (numerical instability
+            // at extreme compression), fall back to zero-beta for this head.
+            if (!beta_ok) {
+                LLAMA_LOG_WARN("%s: beta fitting failed for layer %zu head %u — falling back to zero-beta\n",
+                               __func__, li, head);
+                beta.assign(n_selected, 0.0f);
+                head_residual = 0.0f;
             }
             residual_sum += head_residual;
             residual_count++;
 
             if (layout.n_embd_head_v > 0) {
                 llama_kv_compact_matrix compacted_v;
-                if (!llama_kv_compact_fit_values(
+                bool v_ok = beta_ok && llama_kv_compact_fit_values(
                             entry.queries, entry.k, full_v,
                             compacted_k, beta, solver_opts,
-                            compacted_v)) {
-                    return false;
+                            compacted_v);
+                if (!v_ok) {
+                    // NaN guard: fall back to original V values at selected positions.
+                    if (beta_ok) {
+                        LLAMA_LOG_WARN("%s: V fitting failed for layer %zu head %u — using original V\n",
+                                       __func__, li, head);
+                    }
+                    if (!gather_matrix_rows(full_v.data, full_v.rows,
+                                            full_v.cols, selected_local,
+                                            compacted_v)) {
+                        return false;
+                    }
                 }
                 const auto t_w_start = std::chrono::steady_clock::now();
                 write_compacted_payload(dst_layer.v_data, layout.type_v,
@@ -280,6 +307,11 @@ bool llama_kv_compact_omp_from_live_kv(
         int nnls_iters,
         float lambda) {
     if (seq_id < 0 || target_tokens == 0 || live_suffix_pos0 <= p0) {
+        return false;
+    }
+    if (target_tokens < LLAMA_KV_COMPACT_MIN_TARGET_TOKENS) {
+        LLAMA_LOG_WARN("%s: target_tokens=%u below minimum floor %u — refusing compaction\n",
+                       __func__, target_tokens, LLAMA_KV_COMPACT_MIN_TARGET_TOKENS);
         return false;
     }
 
@@ -413,19 +445,33 @@ bool llama_kv_compact_omp_from_live_kv(
             }
 
             std::vector<float> beta;
-            if (!llama_kv_compact_fit_beta(entry.queries, entry.k,
-                                            compacted_k, solver_opts,
-                                            beta, nullptr)) {
-                return false;
+            bool beta_ok = llama_kv_compact_fit_beta(entry.queries, entry.k,
+                                                      compacted_k, solver_opts,
+                                                      beta, nullptr);
+
+            // NaN guard (GAP-K): fall back to zero-beta on solver failure.
+            if (!beta_ok) {
+                LLAMA_LOG_WARN("%s: beta fitting failed for layer %zu head %u — falling back to zero-beta\n",
+                               __func__, li, head);
+                beta.assign(n_selected, 0.0f);
             }
 
             if (layout.n_embd_head_v > 0) {
                 llama_kv_compact_matrix compacted_v;
-                if (!llama_kv_compact_fit_values(
+                bool v_ok = beta_ok && llama_kv_compact_fit_values(
                             entry.queries, entry.k, full_v,
                             compacted_k, beta, solver_opts,
-                            compacted_v)) {
-                    return false;
+                            compacted_v);
+                if (!v_ok) {
+                    if (beta_ok) {
+                        LLAMA_LOG_WARN("%s: V fitting failed for layer %zu head %u — using original V\n",
+                                       __func__, li, head);
+                    }
+                    if (!gather_matrix_rows(full_v.data, full_v.rows,
+                                            full_v.cols, selected_local,
+                                            compacted_v)) {
+                        return false;
+                    }
                 }
                 const auto t_w_start = std::chrono::steady_clock::now();
                 write_compacted_payload(dst_layer.v_data, layout.type_v,
@@ -474,6 +520,11 @@ bool llama_kv_compact_select_from_live_kv(
         llama_kv_compact_pipeline_stats * stats,
         llama_pos p0) {
     if (seq_id < 0 || target_tokens == 0 || live_suffix_pos0 <= p0) {
+        return false;
+    }
+    if (target_tokens < LLAMA_KV_COMPACT_MIN_TARGET_TOKENS) {
+        LLAMA_LOG_WARN("%s: target_tokens=%u below minimum floor %u — refusing compaction\n",
+                       __func__, target_tokens, LLAMA_KV_COMPACT_MIN_TARGET_TOKENS);
         return false;
     }
 
@@ -597,6 +648,11 @@ bool llama_kv_compact_nonuniform_from_live_kv(
     if (seq_id < 0 || target_tokens == 0 || live_suffix_pos0 <= p0) {
         return false;
     }
+    if (target_tokens < LLAMA_KV_COMPACT_MIN_TARGET_TOKENS) {
+        LLAMA_LOG_WARN("%s: target_tokens=%u below minimum floor %u — refusing compaction\n",
+                       __func__, target_tokens, LLAMA_KV_COMPACT_MIN_TARGET_TOKENS);
+        return false;
+    }
 
     std::vector<llama_pos> prefix_positions;
     if (!kv.compacted_prefix_seq_positions(seq_id, p0, live_suffix_pos0, prefix_positions)) {
@@ -624,6 +680,17 @@ bool llama_kv_compact_nonuniform_from_live_kv(
     uint32_t total_kv_heads = 0;
     for (const auto & layout : layouts) {
         total_kv_heads += layout.n_head_kv;
+    }
+
+    // Total budget floor (GAP-K): refuse if target can't allocate minimum per head.
+    const uint32_t total_floor = total_kv_heads * LLAMA_KV_COMPACT_BUDGET_FLOOR_PER_HEAD;
+    if (target_tokens < total_floor) {
+        LLAMA_LOG_WARN("%s: target_tokens=%u < %u heads × %u min = %u — "
+                       "max recommended ratio: %.1fx. Refusing nonuniform compaction.\n",
+                       __func__, target_tokens, total_kv_heads,
+                       LLAMA_KV_COMPACT_BUDGET_FLOOR_PER_HEAD, total_floor,
+                       (float) n_prefix_tokens / total_floor);
+        return false;
     }
 
     std::vector<std::vector<per_head_data>> layer_data(layouts.size());
@@ -864,10 +931,15 @@ bool llama_kv_compact_nonuniform_from_live_kv(
 
             // Fit beta on this head's selected subset.
             std::vector<float> beta;
-            if (!llama_kv_compact_fit_beta(hd.queries, hd.k,
-                                            compacted_k, solver_opts,
-                                            beta, nullptr)) {
-                return false;
+            bool beta_ok = llama_kv_compact_fit_beta(hd.queries, hd.k,
+                                                      compacted_k, solver_opts,
+                                                      beta, nullptr);
+
+            // NaN guard (GAP-K): fall back to zero-beta on solver failure.
+            if (!beta_ok) {
+                LLAMA_LOG_WARN("%s: beta fitting failed for layer %zu head %u — falling back to zero-beta\n",
+                               __func__, li, head);
+                beta.assign(n_selected, 0.0f);
             }
 
             // Apply per-head mask: set beta=-inf for positions NOT selected by this head.
@@ -888,11 +960,24 @@ bool llama_kv_compact_nonuniform_from_live_kv(
                     // to prevent NaN from -inf beta propagating through fit_values.
                     compacted_v.resize(n_selected, layout.n_embd_head_v);
                     std::fill(compacted_v.data.begin(), compacted_v.data.end(), 0.0f);
+                } else if (!beta_ok) {
+                    // Beta fell back to zero — use original V values.
+                    if (!gather_matrix_rows(full_v.data, full_v.rows,
+                                            full_v.cols, union_local,
+                                            compacted_v)) {
+                        return false;
+                    }
                 } else if (!llama_kv_compact_fit_values(
                             hd.queries, hd.k, full_v,
                             compacted_k, beta, solver_opts,
                             compacted_v)) {
-                    return false;
+                    LLAMA_LOG_WARN("%s: V fitting failed for layer %zu head %u — using original V\n",
+                                   __func__, li, head);
+                    if (!gather_matrix_rows(full_v.data, full_v.rows,
+                                            full_v.cols, union_local,
+                                            compacted_v)) {
+                        return false;
+                    }
                 }
                 const auto t_w_start = std::chrono::steady_clock::now();
                 write_compacted_payload(dst_layer.v_data, layout.type_v,
@@ -949,6 +1034,11 @@ bool llama_kv_compact_chunked_from_live_kv(
         float lambda,
         uint32_t chunk_size) {
     if (seq_id < 0 || target_tokens == 0 || live_suffix_pos0 <= p0) {
+        return false;
+    }
+    if (target_tokens < LLAMA_KV_COMPACT_MIN_TARGET_TOKENS) {
+        LLAMA_LOG_WARN("%s: target_tokens=%u below minimum floor %u — refusing compaction\n",
+                       __func__, target_tokens, LLAMA_KV_COMPACT_MIN_TARGET_TOKENS);
         return false;
     }
 
@@ -1182,10 +1272,15 @@ bool llama_kv_compact_chunked_from_live_kv(
 
             // Fit beta.
             std::vector<float> beta;
-            if (!llama_kv_compact_fit_beta(queries, full_k,
-                                            compacted_k, solver_opts,
-                                            beta, nullptr)) {
-                return false;
+            bool beta_ok = llama_kv_compact_fit_beta(queries, full_k,
+                                                      compacted_k, solver_opts,
+                                                      beta, nullptr);
+
+            // NaN guard (GAP-K): fall back to zero-beta on solver failure.
+            if (!beta_ok) {
+                LLAMA_LOG_WARN("%s: beta fitting failed for layer %zu head %u — falling back to zero-beta\n",
+                               __func__, li, head);
+                beta.assign(n_selected, 0.0f);
             }
 
             // V extraction and fitting.
@@ -1203,11 +1298,20 @@ bool llama_kv_compact_chunked_from_live_kv(
                 t_v_extract_ms += std::chrono::duration<double, std::milli>(t_v_end - t_v_start).count();
 
                 llama_kv_compact_matrix compacted_v;
-                if (!llama_kv_compact_fit_values(
+                bool v_ok = beta_ok && llama_kv_compact_fit_values(
                             queries, full_k, full_v,
                             compacted_k, beta, solver_opts,
-                            compacted_v)) {
-                    return false;
+                            compacted_v);
+                if (!v_ok) {
+                    if (beta_ok) {
+                        LLAMA_LOG_WARN("%s: V fitting failed for layer %zu head %u — using original V\n",
+                                       __func__, li, head);
+                    }
+                    if (!gather_matrix_rows(full_v.data, full_v.rows,
+                                            full_v.cols, all_selected_local,
+                                            compacted_v)) {
+                        return false;
+                    }
                 }
                 const auto t_w_start = std::chrono::steady_clock::now();
                 write_compacted_payload(dst_layer.v_data, layout.type_v,

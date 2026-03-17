@@ -17,6 +17,7 @@
 #include "src/llama-memory-hybrid.h"
 #include "src/llama-memory-hybrid-iswa.h"
 #include "src/llama-kv-compact-pipeline.h"
+#include "src/llama-kv-compact-prefill-q.h"
 #include "src/llama-kv-compact-self-study.h"
 
 #include <algorithm>
@@ -89,6 +90,16 @@ static const std::set<std::string> & get_compact_allowed_methods() {
         return result;
     }();
     return methods;
+}
+
+// V4-G: Check if context-prefill Q-capture is enabled via env var.
+// When enabled, all prefills capture post-RoPE Q tensors for later compaction use.
+static bool is_context_q_capture_enabled() {
+    static const bool enabled = [] {
+        const char * env = std::getenv("LLAMA_COMPACT_CONTEXT_Q_CAPTURE");
+        return env && env[0] != '\0' && env[0] != '0';
+    }();
+    return enabled;
 }
 
 // Get the base llama_kv_cache from a context (handles plain, iSWA, and hybrid layouts).
@@ -366,6 +377,11 @@ struct server_slot {
     int32_t n_draft_total = 0;      // Total draft tokens generated
     int32_t n_draft_accepted = 0;   // Draft tokens actually accepted
 
+    // V4-G: Context-prefill Q-capture state.
+    // When enabled, the original prefill captures post-RoPE Q tensors via cb_eval,
+    // making them available for compaction without repeat-prefill overhead.
+    std::unique_ptr<llama_q_capture_state> q_capture_state;
+
     void reset() {
         SLT_DBG(*this, "%s", "\n");
 
@@ -388,6 +404,9 @@ struct server_slot {
         // clear speculative decoding stats
         n_draft_total = 0;
         n_draft_accepted = 0;
+
+        // V4-G: release Q-capture memory when slot is done
+        q_capture_state.reset();
 
         task_prev = std::move(task);
         task.reset();
@@ -2225,12 +2244,13 @@ private:
                         "select", "solver", "omp", "self_study",
                         "chunked_self_study", "nonuniform", "chunked",
                         "on_policy", "sequential_on_policy",
+                        "context_prefill",
                     };
                     // V1 beta allowlist — configurable via LLAMA_COMPACT_ALLOWED_METHODS
                     const auto & v1_allowlist = get_compact_allowed_methods();
 
                     if (valid_methods.find(method) == valid_methods.end()) {
-                        send_error(task, "Invalid compaction method. Supported: select, solver, omp, self_study, chunked_self_study, nonuniform, chunked, on_policy, sequential_on_policy", ERROR_TYPE_INVALID_REQUEST);
+                        send_error(task, "Invalid compaction method. Supported: select, solver, omp, self_study, chunked_self_study, nonuniform, chunked, on_policy, sequential_on_policy, context_prefill", ERROR_TYPE_INVALID_REQUEST);
                         break;
                     }
                     if (v1_allowlist.find(method) == v1_allowlist.end()) {
@@ -2350,6 +2370,37 @@ private:
                         sq_config.lambda                  = cp.lambda;
                         llama_kv_compact_pipeline_stats stats;
                         ok = kv->compacted_prefix_sequential_on_policy_from_live_kv(ctx, seq_id, target_tokens, live_suffix_pos0, &stats, cp.p0, sq_config);
+                    } else if (method == "context_prefill") {
+                        // V4-G: Use Q captured during the original prefill if available,
+                        // otherwise fall back to repeat-prefill.
+                        llama_kv_compact_prefill_q_config pq_config;
+                        pq_config.max_queries_per_kv_head = (cp.max_queries_per_kv_head != UINT32_MAX)
+                            ? cp.max_queries_per_kv_head : 1024u;
+                        pq_config.nnls_iters              = cp.nnls_iters;
+                        pq_config.lambda                  = cp.lambda;
+                        llama_kv_compact_prefill_q_stats pq_stats;
+
+                        if (slot->q_capture_state && slot->q_capture_state->n_layers > 0) {
+                            // Use pre-captured Q from context-prefill — zero extra cost.
+                            SRV_INF("context_prefill: using pre-captured Q (%d layers)\n",
+                                    slot->q_capture_state->n_layers);
+                            ok = llama_kv_compact_prefill_q_with_captured_state(
+                                *kv, seq_id, target_tokens, live_suffix_pos0,
+                                *slot->q_capture_state, pq_config, &pq_stats, cp.p0);
+                        } else {
+                            // Fallback: repeat-prefill to capture Q (doubles prefill cost).
+                            // Note: repeat-prefill requires p0=0 (llama_batch_get_one limitation).
+                            if (cp.p0 != 0) {
+                                send_error(task, "context_prefill repeat-prefill fallback requires p0=0", ERROR_TYPE_INVALID_REQUEST);
+                                break;
+                            }
+                            SRV_WRN("context_prefill: %s\n", "no pre-captured Q available, falling back to repeat-prefill");
+                            const auto & prefix_tokens = slot->prompt.tokens.get_text_tokens();
+                            ok = llama_kv_compact_prefill_q_from_live_kv(
+                                ctx, *kv, seq_id, target_tokens, live_suffix_pos0,
+                                prefix_tokens.data(), (uint32_t) prefix_tokens.size(),
+                                pq_config, &pq_stats, 0);
+                        }
                     }
 
                     if (!ok) {
@@ -2610,6 +2661,14 @@ private:
                         slot.t_start_generation = 0;
 
                         slot.state = SLOT_STATE_PROCESSING_PROMPT;
+
+                        // V4-G: Initialize Q-capture for context-prefill if enabled.
+                        if (is_context_q_capture_enabled()) {
+                            slot.q_capture_state = std::make_unique<llama_q_capture_state>();
+                            llama_kv_compact_prepare_q_capture(ctx, *slot.q_capture_state);
+                            SLT_INF(slot, "context-prefill Q-capture initialized (%d layers)\n",
+                                    slot.q_capture_state->n_layers);
+                        }
 
                         SLT_INF(slot, "new prompt, n_ctx_slot = %d, n_keep = %d, task.n_tokens = %d\n",
                                 slot.n_ctx, slot.task->params.n_keep, slot.task->n_tokens());
@@ -3112,6 +3171,27 @@ private:
 
         int32_t i_next = 0;
 
+        // V4-G: Install Q-capture callback if exactly one slot is prefilling with Q-capture.
+        // Multi-slot Q-capture is not supported (tensors can't be separated per-slot).
+        llama_q_capture_state * active_q_capture = nullptr;
+        {
+            int n_q_capture_slots = 0;
+            for (auto & slot : slots) {
+                if (slot.q_capture_state && slot.state == SLOT_STATE_PROCESSING_PROMPT) {
+                    active_q_capture = slot.q_capture_state.get();
+                    n_q_capture_slots++;
+                }
+            }
+            if (n_q_capture_slots > 1) {
+                SRV_WRN("context-prefill Q-capture disabled: %d slots prefilling\n", n_q_capture_slots);
+                active_q_capture = nullptr;
+            }
+        }
+        if (active_q_capture) {
+            active_q_capture->active = true;
+            llama_set_eval_callback(ctx, llama_q_capture_eval_callback, active_q_capture);
+        }
+
         // process the created batch of tokens
         for (int32_t i = 0; i < batch.n_tokens; i = i_next) {
             const int32_t n_tokens = std::min(n_batch, batch.n_tokens - i);
@@ -3177,6 +3257,11 @@ private:
                 SRV_WRN("failed to find free space in the KV cache, retrying with smaller batch size, i = %d, n_batch = %d, ret = %d\n", i, n_batch, ret);
 
                 continue; // continue loop of n_batch
+            }
+
+            // V4-G: commit Q-capture data from this decode step
+            if (active_q_capture) {
+                active_q_capture->finalize_step();
             }
 
             // move the head of the batch forward with the number of tokens we just processed
@@ -3347,6 +3432,27 @@ private:
                 }
 
                 SLT_DBG(slot, "accepted %d/%d draft tokens, new n_tokens = %d\n", (int) ids.size() - 1, (int) n_draft, slot.prompt.n_tokens());
+            }
+        }
+
+        // V4-G: Restore callback and deactivate Q-capture after all batch views processed.
+        if (active_q_capture) {
+            active_q_capture->active = false;
+            llama_set_eval_callback(ctx, nullptr, nullptr);
+
+            // Log captured Q stats for slots that finished prefill.
+            for (auto & slot : slots) {
+                if (slot.q_capture_state.get() == active_q_capture &&
+                        slot.state != SLOT_STATE_PROCESSING_PROMPT) {
+                    uint32_t total_tokens = 0;
+                    for (const auto & layer : slot.q_capture_state->layers) {
+                        if (layer.n_tokens > total_tokens) {
+                            total_tokens = layer.n_tokens;
+                        }
+                    }
+                    SLT_INF(slot, "context-prefill Q-capture complete: %u tokens captured across %d layers\n",
+                            total_tokens, slot.q_capture_state->n_layers);
+                }
             }
         }
 

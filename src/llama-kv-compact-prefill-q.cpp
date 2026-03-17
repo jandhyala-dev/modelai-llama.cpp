@@ -309,21 +309,35 @@ bool llama_kv_compact_prefill_q_with_captured_state(
 
             float head_residual = 0.0f;
             std::vector<float> beta;
-            if (!llama_kv_compact_fit_beta(entry.queries, entry.k,
-                                            compacted_k, solver_opts,
-                                            beta, &head_residual)) {
-                return false;
+            bool beta_ok = llama_kv_compact_fit_beta(entry.queries, entry.k,
+                                                      compacted_k, solver_opts,
+                                                      beta, &head_residual);
+
+            // NaN guard (GAP-K): fall back to zero-beta on solver failure.
+            if (!beta_ok) {
+                LLAMA_LOG_WARN("prefill-Q: beta fitting failed for layout %zu head %u — falling back to zero-beta\n",
+                               li, head);
+                beta.assign(n_selected, 0.0f);
+                head_residual = 0.0f;
             }
             residual_sum += head_residual;
             residual_count++;
 
             if (layout.n_embd_head_v > 0) {
                 llama_kv_compact_matrix compacted_v;
-                if (!llama_kv_compact_fit_values(
+                bool v_ok = beta_ok && llama_kv_compact_fit_values(
                             entry.queries, entry.k, full_v,
                             compacted_k, beta, solver_opts,
-                            compacted_v)) {
-                    return false;
+                            compacted_v);
+                if (!v_ok) {
+                    // Fall back to original V values at selected positions.
+                    if (beta_ok) {
+                        LLAMA_LOG_WARN("prefill-Q: V fitting failed for layout %zu head %u — using original V\n",
+                                       li, head);
+                    }
+                    if (!gather_rows(full_v, selected_local, compacted_v)) {
+                        return false;
+                    }
                 }
                 write_payload(dst_layer.v_data, layout.type_v,
                               layout.n_head_kv, n_selected, head,

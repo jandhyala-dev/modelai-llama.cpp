@@ -62,6 +62,10 @@ std::vector<uint32_t> llama_kv_compact_allocate_budgets(
         return {};
     }
 
+    // Enforce hard floor (GAP-K): min_per_head cannot go below BUDGET_FLOOR_PER_HEAD.
+    const uint32_t effective_min = std::max(opts.min_per_head,
+                                            LLAMA_KV_COMPACT_BUDGET_FLOOR_PER_HEAD);
+
     // Compute inverse-entropy sensitivity weights.
     // Lower entropy = more sensitive = higher weight = larger budget.
     std::vector<float> weights(n_heads);
@@ -79,7 +83,7 @@ std::vector<uint32_t> llama_kv_compact_allocate_budgets(
     for (uint32_t h = 0; h < n_heads; ++h) {
         float frac = weights[h] / std::max(weight_sum, 1e-6f);
         uint32_t b = (uint32_t) std::round(frac * opts.total_budget);
-        b = std::max(b, opts.min_per_head);
+        b = std::max(b, effective_min);
         b = std::min(b, max_budget);
         budgets[h] = b;
         allocated += b;
@@ -90,7 +94,7 @@ std::vector<uint32_t> llama_kv_compact_allocate_budgets(
         float scale = float(opts.total_budget) / float(allocated);
         allocated = 0;
         for (uint32_t h = 0; h < n_heads; ++h) {
-            budgets[h] = std::max(opts.min_per_head,
+            budgets[h] = std::max(effective_min,
                          std::min(max_budget,
                                   (uint32_t) std::round(budgets[h] * scale)));
             allocated += budgets[h];
@@ -113,17 +117,17 @@ std::vector<uint32_t> llama_kv_compact_allocate_budgets(
             allocated++;
         }
         while (allocated > opts.total_budget) {
-            // Find the head with the lowest weight that is above min_per_head.
+            // Find the head with the lowest weight that is above effective_min.
             uint32_t best = UINT32_MAX;
             for (uint32_t h = 0; h < n_heads; ++h) {
-                if (budgets[h] > opts.min_per_head) {
+                if (budgets[h] > effective_min) {
                     if (best == UINT32_MAX || weights[h] < weights[best]) {
                         best = h;
                     }
                 }
             }
             if (best == UINT32_MAX) {
-                break; // all heads at min_per_head, cannot reduce further
+                break; // all heads at effective_min, cannot reduce further
             }
             budgets[best]--;
             allocated--;
@@ -290,6 +294,9 @@ std::vector<uint32_t> llama_kv_compact_allocate_from_proportions(
     if (n == 0 || total_budget == 0) {
         return {};
     }
+
+    // Enforce hard floor (GAP-K).
+    min_per_head = std::max(min_per_head, LLAMA_KV_COMPACT_BUDGET_FLOOR_PER_HEAD);
 
     const uint32_t max_b = (max_per_head > 0) ? max_per_head : total_budget;
 

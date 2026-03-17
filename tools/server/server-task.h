@@ -168,7 +168,7 @@ struct server_task {
     // used by SERVER_TASK_TYPE_COMPACT
     struct compact_action {
         int         id_slot             = 0;
-        std::string method              = "select"; // "select" | "solver" | "omp" | "self_study" | "chunked_self_study" | "nonuniform" | "chunked" | "on_policy" | "sequential_on_policy"
+        std::string method              = "select"; // "select" | "solver" | "omp" | "self_study" | "chunked_self_study" | "nonuniform" | "chunked" | "on_policy" | "sequential_on_policy" | "context_prefill"
         int32_t     target_tokens       = -1;       // explicit target, or -1 to use ratio
         float       ratio               = 2.0f;     // compression ratio (used if target_tokens < 0)
         int32_t     live_suffix_tokens  = 0;         // recent tokens to keep live (default: 0 = compact all)

@@ -35,12 +35,18 @@ void llama_kv_compact_accumulate_attention_scores(
             sum += weights[ki];
         }
         const float inv_sum = 1.0f / std::max(sum, 1e-6f);
-        if (agg == LLAMA_KV_COMPACT_SCORE_AGG_RMS) {
+        if (agg == LLAMA_KV_COMPACT_SCORE_AGG_MAX) {
+            for (uint32_t ki = 0; ki < keys.rows; ++ki) {
+                const float w = weights[ki] * inv_sum;
+                scores_inout[ki] = std::max(scores_inout[ki], w);
+            }
+        } else if (agg == LLAMA_KV_COMPACT_SCORE_AGG_RMS) {
             for (uint32_t ki = 0; ki < keys.rows; ++ki) {
                 const float w = weights[ki] * inv_sum;
                 scores_inout[ki] += w * w;
             }
         } else {
+            // SUM and MEAN use identical accumulation; MEAN divides in finalize step.
             for (uint32_t ki = 0; ki < keys.rows; ++ki) {
                 scores_inout[ki] += weights[ki] * inv_sum;
             }
@@ -62,6 +68,42 @@ void llama_kv_compact_finalize_rms_scores(
     for (float & s : scores) {
         s = std::sqrt(s * inv_n);
     }
+}
+
+void llama_kv_compact_finalize_mean_scores(
+        std::vector<float> & scores,
+        uint32_t n_queries) {
+    if (n_queries == 0) {
+        return;
+    }
+    const float inv_n = 1.0f / float(n_queries);
+    for (float & s : scores) {
+        s *= inv_n;
+    }
+}
+
+void llama_kv_compact_avgpool_scores(
+        std::vector<float> & scores,
+        uint32_t kernel_size) {
+    if (kernel_size <= 1 || scores.size() <= 1) {
+        return;
+    }
+
+    const uint32_t n = (uint32_t) scores.size();
+    const uint32_t half = kernel_size / 2;
+    std::vector<float> smoothed(n);
+
+    for (uint32_t i = 0; i < n; ++i) {
+        const uint32_t start = (i >= half) ? i - half : 0;
+        const uint32_t end = std::min(i + half + 1, n);
+        float sum = 0.0f;
+        for (uint32_t j = start; j < end; ++j) {
+            sum += scores[j];
+        }
+        smoothed[i] = sum / float(end - start);
+    }
+
+    scores = std::move(smoothed);
 }
 
 std::vector<uint32_t> llama_kv_compact_select_topk(

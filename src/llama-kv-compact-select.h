@@ -8,8 +8,10 @@
 // Score aggregation mode for key selection.
 // Reference: arXiv:2602.16284 Appendix F.1
 enum llama_kv_compact_score_agg {
-    LLAMA_KV_COMPACT_SCORE_AGG_SUM = 0, // Additive (default)
-    LLAMA_KV_COMPACT_SCORE_AGG_RMS = 1, // Root-mean-square (more robust at extreme ratios)
+    LLAMA_KV_COMPACT_SCORE_AGG_SUM  = 0, // Additive (default)
+    LLAMA_KV_COMPACT_SCORE_AGG_RMS  = 1, // Root-mean-square (more robust at extreme ratios)
+    LLAMA_KV_COMPACT_SCORE_AGG_MAX  = 2, // Per-key maximum across queries (paper Section 3.3)
+    LLAMA_KV_COMPACT_SCORE_AGG_MEAN = 3, // Mean (SUM normalized by n_queries, equivalent after normalization)
 };
 
 // Accumulate attention-based importance scores for key positions.
@@ -31,6 +33,20 @@ void llama_kv_compact_accumulate_attention_scores(
 void llama_kv_compact_finalize_rms_scores(
         std::vector<float> & scores,
         uint32_t n_queries);
+
+// Finalize MEAN-aggregated scores: divide by n_queries in-place.
+// Must be called after all accumulation calls when using AGG_MEAN.
+// No-op if n_queries == 0.
+void llama_kv_compact_finalize_mean_scores(
+        std::vector<float> & scores,
+        uint32_t n_queries);
+
+// Apply 1D average pooling over position-sorted scores for noise reduction.
+// Reference: MIT highest_attention_keys.py — avgpool with kernel_size.
+// No-op if kernel_size <= 1 or scores has fewer than 2 elements.
+void llama_kv_compact_avgpool_scores(
+        std::vector<float> & scores,
+        uint32_t kernel_size);
 
 std::vector<uint32_t> llama_kv_compact_select_topk(
         const std::vector<float> & scores,

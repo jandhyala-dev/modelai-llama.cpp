@@ -14,6 +14,10 @@
 #include <cstdint>
 #include <vector>
 
+// Hard minimum budget floor per head — prevents solver starvation at extreme compression.
+// Cannot be overridden below this value regardless of caller request. See GAP-K.
+static constexpr uint32_t LLAMA_KV_COMPACT_BUDGET_FLOOR_PER_HEAD = 2;
+
 struct llama_kv_compact_budget_opts {
     uint32_t total_budget  = 0;      // total tokens to select across all heads
     uint32_t min_per_head  = 4;      // minimum budget per head (prevents degenerate softmax)
