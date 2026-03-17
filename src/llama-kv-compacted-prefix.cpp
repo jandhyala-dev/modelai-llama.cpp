@@ -338,7 +338,8 @@ bool llama_compacted_prefix_store::configure_seq(
         llama_seq_id seq_id,
         uint32_t logical_token_count,
         const std::vector<llama_pos> & logical_positions,
-        llama_pos live_suffix_pos0) {
+        llama_pos live_suffix_pos0,
+        bool is_imrope) {
     if (seq_id < 0 || size_t(seq_id) >= seq_states.size()) {
         return false;
     }
@@ -357,6 +358,7 @@ bool llama_compacted_prefix_store::configure_seq(
     auto & state = seq(seq_id);
     state.clear(false);
     state.enabled = !logical_positions.empty();
+    state.is_imrope = is_imrope;
     state.logical_token_count = logical_token_count;
     state.live_suffix_pos0 = live_suffix_pos0;
     state.logical_positions = logical_positions;

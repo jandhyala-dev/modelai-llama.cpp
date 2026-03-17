@@ -51,7 +51,14 @@ bool llama_compacted_prefix_can_execute(
         return false;
     }
 
-    if (ubatch.n_tokens == 0 || ubatch.n_seqs_unq != 1 || ubatch.is_pos_2d()) {
+    if (ubatch.n_tokens == 0 || ubatch.n_seqs_unq != 1) {
+        return false;
+    }
+
+    // V4-J: allow is_pos_2d() batches for IMROPE models (Qwen3.5, etc.).
+    // K/V data already has IMROPE rotations applied; causal masking uses
+    // scalar positions only, which is safe for text-only IMROPE.
+    if (ubatch.is_pos_2d() && !state->is_imrope) {
         return false;
     }
 

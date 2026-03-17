@@ -571,7 +571,8 @@ bool llama_kv_cache::compacted_prefix_configure(
         uint32_t logical_token_count,
         const std::vector<llama_pos> & logical_positions,
         llama_pos live_suffix_pos0) {
-    const bool ok = compacted_prefix.configure_seq(seq_id, logical_token_count, logical_positions, live_suffix_pos0);
+    const bool is_imrope = (hparams.rope_type == LLAMA_ROPE_TYPE_IMROPE);
+    const bool ok = compacted_prefix.configure_seq(seq_id, logical_token_count, logical_positions, live_suffix_pos0, is_imrope);
     if (ok) {
         ++compacted_prefix_version_counter;
     }
@@ -1140,7 +1141,7 @@ std::string llama_kv_cache::compaction_unsupported_reason() const {
     if (n_swa > 0 || swa_type != LLAMA_SWA_TYPE_NONE) {
         return "swa_cache";
     }
-    if (hparams.n_pos_per_embd() > 1) {
+    if (hparams.n_pos_per_embd() > 1 && hparams.rope_type != LLAMA_ROPE_TYPE_IMROPE) {
         return "mrope_positions";
     }
     return "";
@@ -1209,13 +1210,12 @@ bool llama_kv_cache::compacted_prefix_runtime_supported() const {
         return false;
     }
 
-    // M-RoPE models (Qwen2-VL, Qwen3-VL, GLM4) use multi-dimensional positions
-    // that the compacted prefix pipeline cannot represent.  logical_positions
-    // stores scalar llama_pos only, and mask computation uses scalar comparisons.
-    // Allowing compaction would silently lose spatial coordinates, and
-    // reclaim_live_kv would destroy prefix KV cells that can_execute will later
-    // refuse to serve — causing catastrophic context loss.
-    if (hparams.n_pos_per_embd() > 1) {
+    // M-RoPE models (Qwen2-VL, Qwen3-VL) use multi-dimensional positions
+    // that the compacted prefix pipeline cannot represent.
+    // IMROPE (Qwen3.5, etc.) is safe for text-only compaction: K/V data
+    // already has IMROPE rotations applied, and causal masking uses
+    // scalar positions only (V4-J — GAP-F).
+    if (hparams.n_pos_per_embd() > 1 && hparams.rope_type != LLAMA_ROPE_TYPE_IMROPE) {
         static std::atomic<bool> warned{false};
         if (!warned.exchange(true)) {
             LLAMA_LOG_WARN("%s: compacted prefix not supported for M-RoPE models (n_pos_per_embd=%u)\n",

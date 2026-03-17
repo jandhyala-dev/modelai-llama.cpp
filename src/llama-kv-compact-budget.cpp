@@ -1,5 +1,6 @@
 #include "llama-kv-compact-budget.h"
 #include "llama-kv-compact-math.h"
+#include "llama-kv-compact-select.h"
 
 #include "llama-impl.h"
 
@@ -172,6 +173,197 @@ std::vector<uint32_t> llama_kv_compact_build_union(
     }
 
     return union_vec;
+}
+
+// ---------------------------------------------------------------------------
+// Influence-curve budget allocation (V4-I — GAP-B)
+// ---------------------------------------------------------------------------
+
+static const float DEFAULT_INFLUENCE_RATIOS[] = {
+    0.005f, 0.01f, 0.05f, 0.1f, 0.2f, 0.5f, 1.0f,
+};
+static const uint32_t DEFAULT_N_INFLUENCE_RATIOS = 7;
+
+std::vector<llama_kv_compact_influence_point> llama_kv_compact_head_influence_curve(
+        const llama_kv_compact_matrix & queries,
+        const llama_kv_compact_matrix & keys,
+        const float * ratios,
+        uint32_t n_ratios) {
+    if (!ratios || n_ratios == 0) {
+        ratios = DEFAULT_INFLUENCE_RATIOS;
+        n_ratios = DEFAULT_N_INFLUENCE_RATIOS;
+    }
+
+    const uint32_t n = queries.rows;
+    const uint32_t T = keys.rows;
+    if (n == 0 || T == 0 || queries.cols == 0 || keys.cols != queries.cols) {
+        return {};
+    }
+
+    const float inv_sqrt_d = 1.0f / std::sqrt(float(keys.cols));
+
+    // Compute softmax attention weights and aggregate scores for top-k.
+    // attn_weights[qi * T + ki] = softmax(Q_qi * K / sqrt(d))[ki]
+    std::vector<float> attn_weights(size_t(n) * T);
+    std::vector<float> attn_scores(T, 0.0f);
+
+    for (uint32_t qi = 0; qi < n; ++qi) {
+        const float * q = queries.row(qi);
+        float row_max = -std::numeric_limits<float>::infinity();
+        float * w = &attn_weights[size_t(qi) * T];
+        for (uint32_t ki = 0; ki < T; ++ki) {
+            w[ki] = dot_row(q, keys.row(ki), keys.cols) * inv_sqrt_d;
+            row_max = std::max(row_max, w[ki]);
+        }
+        float sum = 0.0f;
+        for (uint32_t ki = 0; ki < T; ++ki) {
+            w[ki] = std::exp(w[ki] - row_max);
+            sum += w[ki];
+        }
+        const float inv_sum = 1.0f / std::max(sum, 1e-6f);
+        for (uint32_t ki = 0; ki < T; ++ki) {
+            w[ki] *= inv_sum;
+            attn_scores[ki] += w[ki];
+        }
+    }
+
+    // Evaluate error at each ratio.
+    std::vector<llama_kv_compact_influence_point> points;
+    points.reserve(n_ratios);
+
+    for (uint32_t ri = 0; ri < n_ratios; ++ri) {
+        const float r = ratios[ri];
+        const uint32_t t = std::max(2u, (uint32_t)(T * r));
+
+        if (t >= T) {
+            points.push_back({r, 0.0f});
+            continue;
+        }
+
+        // Select top-t keys by aggregated attention score.
+        const auto selected = llama_kv_compact_select_topk(attn_scores, t);
+
+        // Compute mean attention coverage: average fraction of mass retained.
+        double coverage = 0.0;
+        for (uint32_t qi = 0; qi < n; ++qi) {
+            const float * w = &attn_weights[size_t(qi) * T];
+            double qi_coverage = 0.0;
+            for (uint32_t si = 0; si < (uint32_t)selected.size(); ++si) {
+                qi_coverage += w[selected[si]];
+            }
+            coverage += qi_coverage;
+        }
+        coverage /= n;
+
+        points.push_back({r, float(1.0 - coverage)});
+    }
+
+    return points;
+}
+
+// Interpolate error from an influence curve at a given ratio.
+static float interp_influence_error(
+        const std::vector<llama_kv_compact_influence_point> & curve,
+        float ratio) {
+    if (curve.empty()) {
+        return 0.0f;
+    }
+    if (ratio <= curve.front().ratio) {
+        return curve.front().error;
+    }
+    if (ratio >= curve.back().ratio) {
+        return curve.back().error;
+    }
+    for (size_t i = 0; i + 1 < curve.size(); ++i) {
+        if (ratio >= curve[i].ratio && ratio <= curve[i + 1].ratio) {
+            const float t = (ratio - curve[i].ratio) /
+                            (curve[i + 1].ratio - curve[i].ratio);
+            return curve[i].error * (1.0f - t) + curve[i + 1].error * t;
+        }
+    }
+    return curve.back().error;
+}
+
+std::vector<uint32_t> llama_kv_compact_swap_budget_solver(
+        const std::vector<std::vector<llama_kv_compact_influence_point>> & curves,
+        uint32_t total_budget,
+        uint32_t n_prefix_tokens,
+        uint32_t min_per_head,
+        uint32_t max_per_head,
+        uint32_t max_iterations) {
+    const uint32_t n_heads = (uint32_t)curves.size();
+    if (n_heads == 0 || total_budget == 0 || n_prefix_tokens == 0) {
+        return {};
+    }
+
+    min_per_head = std::max(min_per_head, LLAMA_KV_COMPACT_BUDGET_FLOOR_PER_HEAD);
+    if (max_per_head == 0) {
+        max_per_head = n_prefix_tokens;
+    }
+
+    // Start with uniform allocation.
+    const uint32_t per_head = total_budget / n_heads;
+    std::vector<uint32_t> budgets(n_heads, std::max(per_head, min_per_head));
+    uint32_t allocated = per_head * n_heads;
+
+    // Distribute remainder to most sensitive heads (highest error at uniform ratio).
+    const float inv_T = 1.0f / float(n_prefix_tokens);
+    while (allocated < total_budget) {
+        uint32_t best = UINT32_MAX;
+        float best_err = -1.0f;
+        for (uint32_t h = 0; h < n_heads; ++h) {
+            if (budgets[h] >= max_per_head) continue;
+            float err = interp_influence_error(curves[h], budgets[h] * inv_T);
+            if (err > best_err) {
+                best_err = err;
+                best = h;
+            }
+        }
+        if (best == UINT32_MAX) break;
+        budgets[best]++;
+        allocated++;
+    }
+
+    // Iterative swap: transfer 1 token from least-affected to most-affected.
+    for (uint32_t iter = 0; iter < max_iterations; ++iter) {
+        // Find donor: head where losing 1 token costs least (smallest error increase).
+        uint32_t donor = UINT32_MAX;
+        float min_cost = std::numeric_limits<float>::max();
+        for (uint32_t h = 0; h < n_heads; ++h) {
+            if (budgets[h] <= min_per_head) continue;
+            const float err_now  = interp_influence_error(curves[h], budgets[h] * inv_T);
+            const float err_less = interp_influence_error(curves[h], (budgets[h] - 1) * inv_T);
+            const float cost = err_less - err_now;  // positive = error increases
+            if (cost < min_cost) {
+                min_cost = cost;
+                donor = h;
+            }
+        }
+
+        // Find recipient: head where gaining 1 token helps most (largest error decrease).
+        uint32_t recipient = UINT32_MAX;
+        float max_gain = -std::numeric_limits<float>::max();
+        for (uint32_t h = 0; h < n_heads; ++h) {
+            if (h == donor || budgets[h] >= max_per_head) continue;
+            const float err_now  = interp_influence_error(curves[h], budgets[h] * inv_T);
+            const float err_more = interp_influence_error(curves[h], (budgets[h] + 1) * inv_T);
+            const float gain = err_now - err_more;  // positive = error decreases
+            if (gain > max_gain) {
+                max_gain = gain;
+                recipient = h;
+            }
+        }
+
+        // Execute swap if net improvement > 0.
+        if (donor == UINT32_MAX || recipient == UINT32_MAX || max_gain <= min_cost) {
+            break;  // No improving swap — converged
+        }
+
+        budgets[donor]--;
+        budgets[recipient]++;
+    }
+
+    return budgets;
 }
 
 // ---------------------------------------------------------------------------

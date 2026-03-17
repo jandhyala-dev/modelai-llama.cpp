@@ -611,7 +611,7 @@ Compare: `select` does one-pass attention scoring (no iterative loop) → 62-185
 
 ---
 
-### Phase V4-H: OMP Performance Fix (1 day — timeout fallback only)
+### Phase V4-H: OMP Performance Fix (1 day — timeout fallback only) — DONE (ccdde457)
 
 **Goal:** Make OMP viable on 30B+ models.
 
@@ -619,45 +619,48 @@ Current: 384 heads × 1150 OMP iterations × O(T×n) correlation = hours.
 
 **Week 2 scope (R2 clarification):** Implement timeout fallback only (~30 lines). Metal kernel for OMP correlation deferred to future phase.
 
-**Approach:**
-1. Per-head timeout (5s) with top-k fallback — ~30 lines, immediate fix
-2. Coarser progressive schedule for large models — adaptive k_choice based on T×n_heads
-3. *(Deferred)* Metal kernel for correlation step — ~200 lines, future phase
+**Implementation (Sprint 3):**
+1. Per-head 5s timeout (configurable via `timeout_ms` field in OMP opts)
+2. Top-k attention-score fallback fills remaining positions after timeout
+3. Final NNLS beta refit on merged selection (OMP partial + top-k fallback)
+4. Bounds OMP wall-clock to ~5s per head
 
-**Timeout fallback semantics (R1 clarification):** Keep partial OMP selection (greedy property ensures validity); fill remaining positions with top-k scored keys. Beta refit runs on the full combined selection.
-
-**Files:** llama-kv-compact-select.cpp
-**Risk:** Medium (Metal kernel). Low (timeout fallback).
+**Files:** llama-kv-compact-select.h (timeout_ms field), llama-kv-compact-select.cpp (timer + fallback)
+**Review status:** PASS from both reviewers.
 
 ---
 
-### Phase V4-I: Influence-Curve Budget Solver (2 days)
+### Phase V4-I: Influence-Curve Budget Solver (2 days) — DONE
 
 **Goal:** Replace entropy proxy with reconstruction error measurement.
 
-**Depends on:** V4-D (benchmark tool for measurement).
+**Implementation (Sprint 4):**
+1. `llama_kv_compact_head_influence_curve()` — computes coverage error at 7 ratios [0.005..1.0] using top-k attention selection
+2. `llama_kv_compact_swap_budget_solver()` — uniform allocation + iterative donor/recipient swap until convergence
+3. Pipeline integration: conditionally computes influence curves or entropy in nonuniform Phase 1
+4. Enabled via `LLAMA_COMPACT_INFLUENCE_BUDGETS=1` environment variable
+5. Error metric: `1 - mean_attention_coverage` (0 = perfect, 1 = total loss)
 
-1. Per-head reconstruction error at multiple ratios
-2. Swap-based budget optimizer
-3. Optional behind `use_influence_budgets` flag
-
-**Files:** llama-kv-compact-budget.cpp, llama-kv-compact-pipeline.cpp
-**Risk:** Medium. Expensive.
+**Files:** llama-kv-compact-budget.h/cpp, llama-kv-compact-pipeline.cpp
+**Risk:** Medium. Expensive (7× top-k per head for influence curves).
 
 ---
 
-### Phase V4-J: IMROPE Support (3 days)
+### Phase V4-J: IMROPE Support (3 days) — DONE
 
-**Goal:** Enable Qwen3.5, Qwen2-VL, GLM4.
+**Goal:** Enable Qwen3.5, Qwen3.5-MOE for text-only compaction.
 
-**Depends on:** V4-C (hybrid validation succeeds), V4-D (PPL measurement tool).
+**Implementation (Sprint 4):**
+1. IMROPE detection via `hparams.rope_type == LLAMA_ROPE_TYPE_IMROPE`
+2. Allowed in `compacted_prefix_runtime_supported()` and `compaction_unsupported_reason()` — MROPE still blocked
+3. `is_imrope` flag stored in `sequence_state`, passed through `configure_seq()`
+4. `llama_compacted_prefix_can_execute()` allows `is_pos_2d()` batches when `is_imrope` is true
+5. No position remapping — K/V data already has IMROPE rotations applied, causal masking uses scalar positions only
 
-1. IMROPE detection, ext_x/ext_y preservation
-2. No position remapping for IMROPE
-3. Test on Qwen3.5-35B-A3B
+**Key insight:** For text-only IMROPE, the multi-dimensional position encoding is applied during RoPE rotation, which happens before K enters the cache. The cached K already contains the rotation. Causal masking only needs scalar positions, which our prefix store already tracks.
 
-**Files:** llama-kv-compacted-prefix.h, llama-kv-compacted-prefix-exec.cpp, llama-kv-compact-pipeline.cpp
-**Risk:** HIGH. Open question: block until upstream provides test vectors?
+**Files:** llama-kv-compacted-prefix.h/cpp, llama-kv-compacted-prefix-exec.cpp, llama-kv-cache.cpp, CLAUDE.md
+**Risk:** HIGH. Text-only validated; vision/multimodal IMROPE NOT supported (M-RoPE spatial positions).
 
 ---
 

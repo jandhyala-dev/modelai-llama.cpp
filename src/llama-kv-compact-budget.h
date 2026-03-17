@@ -48,6 +48,57 @@ std::vector<uint32_t> llama_kv_compact_build_union(
         uint32_t n_heads,
         std::vector<bool> & per_head_mask);
 
+// ---------------------------------------------------------------------------
+// Influence-curve budget allocation (V4-I — GAP-B)
+// ---------------------------------------------------------------------------
+
+// Influence curve point for one head at one compression ratio.
+// Reference: MIT head_budget_optimization/solver.py
+struct llama_kv_compact_influence_point {
+    float ratio;  // fraction of keys retained (0 < ratio <= 1)
+    float error;  // 1 - mean_attention_coverage (0 = perfect, 1 = total loss)
+};
+
+// Compute influence curve for one head: attention coverage error at multiple
+// compression ratios. At each ratio, selects top-k keys by attention score
+// and measures the fraction of attention mass NOT captured.
+//
+// Reference: arXiv:2602.16284 Section 3.4
+//
+// ratios/n_ratios: evaluation points. If null/0, uses default
+//   [0.005, 0.01, 0.05, 0.1, 0.2, 0.5, 1.0].
+//
+// Returns points sorted by ratio ascending.
+std::vector<llama_kv_compact_influence_point> llama_kv_compact_head_influence_curve(
+        const llama_kv_compact_matrix & queries,
+        const llama_kv_compact_matrix & keys,
+        const float * ratios = nullptr,
+        uint32_t n_ratios = 0);
+
+// Swap-based budget optimizer using influence curves.
+// Starts with uniform allocation, iteratively transfers budget from
+// less-sensitive to more-sensitive heads to minimize total error.
+//
+// Reference: MIT head_budget_optimization/solver.py (swap-based solver)
+//
+// curves: influence curves for each head (from head_influence_curve).
+// total_budget: total tokens to allocate across all heads.
+// n_prefix_tokens: total prefix tokens (for ratio computation).
+// max_iterations: swap iteration limit (convergence typically < 100).
+//
+// Returns per-head budgets summing to approximately total_budget.
+std::vector<uint32_t> llama_kv_compact_swap_budget_solver(
+        const std::vector<std::vector<llama_kv_compact_influence_point>> & curves,
+        uint32_t total_budget,
+        uint32_t n_prefix_tokens,
+        uint32_t min_per_head = 4,
+        uint32_t max_per_head = 0,
+        uint32_t max_iterations = 1000);
+
+// ---------------------------------------------------------------------------
+// Budget JSON loading (V2 — GAP-13)
+// ---------------------------------------------------------------------------
+
 // Load per-head budget proportions from a JSON file.
 // JSON format: {"L0H0": 0.0025, "L0H1": 0.0015, ...}
 // Proportions should sum to approximately 1.0.

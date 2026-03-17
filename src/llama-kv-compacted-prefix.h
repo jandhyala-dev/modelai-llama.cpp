@@ -49,6 +49,11 @@ public:
     struct sequence_state {
         bool enabled = false;
 
+        // V4-J: IMROPE model flag. When true, is_pos_2d() batches are allowed
+        // in execution. K/V data already has IMROPE rotations applied; causal
+        // masking uses scalar positions only.
+        bool is_imrope = false;
+
         // Snapshot of the logical prefix length represented at configure time.
         // Sequence operations mutate compacted token positions but do not infer a
         // new original logical-prefix length.
@@ -82,7 +87,8 @@ public:
             llama_seq_id seq_id,
             uint32_t logical_token_count,
             const std::vector<llama_pos> & logical_positions,
-            llama_pos live_suffix_pos0 = -1);
+            llama_pos live_suffix_pos0 = -1,
+            bool is_imrope = false);
 
     void clear(bool data);
     void clear_seq(llama_seq_id seq_id, bool data = true);

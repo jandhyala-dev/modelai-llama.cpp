@@ -44,6 +44,15 @@ static bool llama_kv_compact_skip_cv_fit() {
     return skip;
 }
 
+// V4-I: Use influence-curve budgets instead of entropy when LLAMA_COMPACT_INFLUENCE_BUDGETS=1.
+static bool llama_kv_compact_use_influence_budgets() {
+    static const bool use = [] {
+        const char * env = std::getenv("LLAMA_COMPACT_INFLUENCE_BUDGETS");
+        return env && env[0] == '1';
+    }();
+    return use;
+}
+
 namespace {
 
 bool gather_matrix_rows(
@@ -700,7 +709,7 @@ bool llama_kv_compact_nonuniform_from_live_kv(
 
     const uint32_t n_prefix_tokens = (uint32_t) prefix_positions.size();
 
-    // Phase 1: Extract K + queries per head, compute entropy for budget allocation.
+    // Phase 1: Extract K + queries per head, compute budget metrics.
     struct per_head_data {
         llama_kv_compact_matrix k;
         llama_kv_compact_matrix queries;
@@ -724,9 +733,16 @@ bool llama_kv_compact_nonuniform_from_live_kv(
         return false;
     }
 
+    const bool use_influence = llama_kv_compact_use_influence_budgets();
+
     std::vector<std::vector<per_head_data>> layer_data(layouts.size());
     std::vector<float> all_entropies;
-    all_entropies.reserve(total_kv_heads);
+    std::vector<std::vector<llama_kv_compact_influence_point>> all_curves;
+    if (use_influence) {
+        all_curves.reserve(total_kv_heads);
+    } else {
+        all_entropies.reserve(total_kv_heads);
+    }
 
     // Per-stage timing (populated at end; may be unused on fallback path).
     double t_k_extract_ms  = 0.0;
@@ -766,21 +782,34 @@ bool llama_kv_compact_nonuniform_from_live_kv(
             const auto t_k_end = std::chrono::steady_clock::now();
             t_k_extract_ms += std::chrono::duration<double, std::milli>(t_k_end - t_k_start).count();
 
-            hd.entropy = llama_kv_compact_head_entropy(hd.queries, hd.k);
-            all_entropies.push_back(hd.entropy);
+            if (use_influence) {
+                all_curves.push_back(llama_kv_compact_head_influence_curve(hd.queries, hd.k));
+            } else {
+                hd.entropy = llama_kv_compact_head_entropy(hd.queries, hd.k);
+                all_entropies.push_back(hd.entropy);
+            }
         }
     }
 
     // Compute per-head budgets.
-    llama_kv_compact_budget_opts budget_opts;
-    budget_opts.total_budget = std::min(target_tokens, n_prefix_tokens);
-    // When the total budget is smaller than min_per_head * n_heads, reduce
-    // min_per_head so the allocator can actually satisfy the constraint.
-    budget_opts.min_per_head = std::min(min_per_head,
-                                        std::max(1u, budget_opts.total_budget / total_kv_heads));
-    budget_opts.max_per_head = n_prefix_tokens;
+    const uint32_t effective_budget = std::min(target_tokens, n_prefix_tokens);
+    const uint32_t effective_min = std::min(min_per_head,
+                                            std::max(1u, effective_budget / total_kv_heads));
 
-    const std::vector<uint32_t> budgets = llama_kv_compact_allocate_budgets(all_entropies, budget_opts);
+    std::vector<uint32_t> budgets;
+    if (use_influence) {
+        budgets = llama_kv_compact_swap_budget_solver(
+                all_curves, effective_budget, n_prefix_tokens,
+                effective_min, n_prefix_tokens);
+    } else {
+        llama_kv_compact_budget_opts budget_opts;
+        budget_opts.total_budget = effective_budget;
+        // When the total budget is smaller than min_per_head * n_heads, reduce
+        // min_per_head so the allocator can actually satisfy the constraint.
+        budget_opts.min_per_head = effective_min;
+        budget_opts.max_per_head = n_prefix_tokens;
+        budgets = llama_kv_compact_allocate_budgets(all_entropies, budget_opts);
+    }
     if (budgets.size() != total_kv_heads) {
         return false;
     }
@@ -1139,7 +1168,9 @@ bool llama_kv_compact_chunked_from_live_kv(
         });
         uint32_t excess = budget_allocated - target_tokens;
         for (uint32_t idx : order) {
-            if (excess == 0) break;
+            if (excess == 0) {
+                break;
+            }
             uint32_t reduce = std::min(chunk_budgets[idx], excess);
             chunk_budgets[idx] -= reduce;
             excess -= reduce;
