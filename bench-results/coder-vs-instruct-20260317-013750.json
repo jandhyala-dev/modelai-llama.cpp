@@ -1,0 +1,281 @@
+{
+  "benchmark": "coder-vs-instruct",
+  "timestamp": "20260317-013750",
+  "hardware": "Apple M2 Pro 32GB",
+  "context": 65536,
+  "enable_thinking": false,
+  "results": {
+    "Instruct-2507": {
+      "excel": {
+        "XLOOKUP + Nested IF": {
+          "status": "OK",
+          "prompt_tokens": 236,
+          "completion_tokens": 153,
+          "wall_time_s": 3.38,
+          "gen_tok_s": 45.2,
+          "content_chars": 254,
+          "content_lines": 5,
+          "hit_limit": false,
+          "content_preview": "G2: `=SUM(C2:F2)`  \nH2: `=XLOOKUP(B2,Sheet2!A:A,Sheet2!B:B)`  \nI2: `=IF(G2/H2>1.2,\"Exceeds\",IF(G2/H2>=0.9,\"Meets\",IF(G2/H2>=0.7,\"Below\",\"Critical\")))`  \nJ2: `=IF(I2=\"Exceeds\",0.05*(G2-H2),IF(I2=\"Meets\",0.02*(G2-H2),0))`  \nK2: `=RANK.EQ(G2,$G$2:$G$100,0)`"
+        },
+        "VBA Macro": {
+          "status": "OK",
+          "prompt_tokens": 199,
+          "completion_tokens": 1877,
+          "wall_time_s": 36.78,
+          "gen_tok_s": 51.0,
+          "content_chars": 7108,
+          "content_lines": 158,
+          "hit_limit": false,
+          "content_preview": "Here's a **production-ready VBA macro** that meets all your requirements with **error handling**, **progress bar in the status bar**, and **clean, well-documented code**:\n\n```vba\nSub ProcessRawDataAndGenerateSummary()\n\n    Dim wb As Workbook\n    Dim wsRaw As Worksheet, wsHighValue As Worksheet, wsSu"
+        },
+        "Python openpyxl Report": {
+          "status": "OK",
+          "prompt_tokens": 173,
+          "completion_tokens": 2000,
+          "wall_time_s": 39.22,
+          "gen_tok_s": 51.0,
+          "content_chars": 8264,
+          "content_lines": 136,
+          "hit_limit": true,
+          "content_preview": "```python\nimport pandas as pd\nfrom openpyxl import Workbook, load_workbook\nfrom openpyxl.styles import Font, PatternFill, Alignment, Border, Side\nfrom openpyxl.utils import get_column_letter\nfrom openpyxl.chart import BarChart, Reference, LineChart\nfrom openpyxl.styles.differential import Differenti"
+        },
+        "Complex Array Formulas": {
+          "status": "OK",
+          "prompt_tokens": 201,
+          "completion_tokens": 1500,
+          "wall_time_s": 29.41,
+          "gen_tok_s": 51.0,
+          "content_chars": 4319,
+          "content_lines": 116,
+          "hit_limit": true,
+          "content_preview": "Here are **modern dynamic array formulas** (Excel 365/2021+) for your requirements, assuming your data starts at **A1** with headers:\n\n```\nA1: Date\nB1: Ticker\nC1: Open\nD1: High\nE1: Low\nF1: Close\n```\n\n---\n\n### **1. H2: UNIQUE list of all tickers, sorted alphabetically**\n\n```excel\n=SORT(UNIQUE(B2:B500"
+        },
+        "Google Sheets Apps Script": {
+          "status": "OK",
+          "prompt_tokens": 149,
+          "completion_tokens": 2000,
+          "wall_time_s": 40.19,
+          "gen_tok_s": 49.8,
+          "content_chars": 8192,
+          "content_lines": 179,
+          "hit_limit": true,
+          "content_preview": "Here's a complete Google Apps Script that meets all your requirements:\n\n```javascript\n/**\n * Main function that runs daily at 9 AM\n * This function:\n * 1. Reads inventory data\n * 2. Identifies items below reorder point\n * 3. Sends email notification\n * 4. Logs to Notification Log\n * 5. Updates Dashb"
+        }
+      },
+      "10k": {
+        "Revenue Segment Analysis": {
+          "status": "OK",
+          "prompt_tokens": 323,
+          "completion_tokens": 2000,
+          "wall_time_s": 40.4,
+          "gen_tok_s": 49.5,
+          "content_chars": 7089,
+          "content_lines": 81,
+          "hit_limit": true,
+          "content_preview": "**Goldman Sachs Equity Research: NVIDIA Corporation (NVDA) \u2013 FY2025 10-K Analysis**  \n*Senior Equity Research Analyst | May 2025*\n\n---\n\n### **1. Segment Growth Rates & Revenue Concentration Risk**\n\n**Revenue Growth by Segment (YoY):**\n- **Data Center**: **+142.5%** ($115.2B vs. $47.5B)  \n  - Driven "
+        },
+        "Balance Sheet Deep Dive": {
+          "status": "OK",
+          "prompt_tokens": 432,
+          "completion_tokens": 2000,
+          "wall_time_s": 39.66,
+          "gen_tok_s": 50.4,
+          "content_chars": 5942,
+          "content_lines": 80,
+          "hit_limit": true,
+          "content_preview": "Let's conduct a comprehensive credit analysis of **Company A** and **Company B**, focusing on liquidity, leverage, operational efficiency, asset quality, and overall credit strength. All figures are in **$ billions**.\n\n---\n\n### **1. Liquidity Ratios**\n\n| Ratio | Formula | Company A | Company B |\n|--"
+        },
+        "Risk Factor Extraction": {
+          "status": "OK",
+          "prompt_tokens": 245,
+          "completion_tokens": 2500,
+          "wall_time_s": 49.95,
+          "gen_tok_s": 50.0,
+          "content_chars": 8913,
+          "content_lines": 117,
+          "hit_limit": true,
+          "content_preview": "**Structured Risk Assessment: Semiconductor Company (AI Data Center Focus)**  \n*Based on 10-K risk factor frameworks, industry benchmarks, and company profile: $130B revenue, 87% AI data center segment, hyperscaler dependence, TSMC-only manufacturing, China exposure, $24B goodwill, high stock comp, "
+        }
+      },
+      "analysis": {
+        "DCF Valuation Model": {
+          "status": "OK",
+          "prompt_tokens": 277,
+          "completion_tokens": 3000,
+          "wall_time_s": 60.56,
+          "gen_tok_s": 49.5,
+          "content_chars": 5791,
+          "content_lines": 108,
+          "hit_limit": true,
+          "content_preview": "Certainly. Below is a **comprehensive DCF valuation** for the company based on your inputs. This is structured like a senior investment banker would present it in a formal pitch book or model.\n\n---\n\n## **DCF Valuation: Company (Hypothetical Tech/Fab-Intensive Firm)**\n\n### **Key Assumptions**\n| Metri"
+        },
+        "Portfolio Construction": {
+          "status": "OK",
+          "prompt_tokens": 359,
+          "completion_tokens": 3000,
+          "wall_time_s": 60.69,
+          "gen_tok_s": 49.4,
+          "content_chars": 6338,
+          "content_lines": 128,
+          "hit_limit": true,
+          "content_preview": "As a **quantitative portfolio manager**, I will construct an optimal portfolio using the given asset data under your constraints. Since full correlation matrix and covariance matrix are not provided, I will **infer the full covariance matrix** from the available data using a structured approach. The"
+        },
+        "M&A Accretion/Dilution": {
+          "status": "OK",
+          "prompt_tokens": 304,
+          "completion_tokens": 3000,
+          "wall_time_s": 60.49,
+          "gen_tok_s": 49.6,
+          "content_chars": 8243,
+          "content_lines": 146,
+          "hit_limit": true,
+          "content_preview": "Absolutely \u2014 as an M&A advisor at a bulge bracket bank, I\u2019ll walk through this acquisition in a structured, investor-grade manner. Let\u2019s analyze the deal step by step.\n\n---\n\n### **1. Offer Price and Total Deal Value**\n\n**Target\u2019s current share price:** $185  \n**Premium:** 30%  \n\u2192 **Offer price per s"
+        }
+      }
+    },
+    "Coder-1M": {
+      "excel": {
+        "XLOOKUP + Nested IF": {
+          "status": "OK",
+          "prompt_tokens": 236,
+          "completion_tokens": 177,
+          "wall_time_s": 3.83,
+          "gen_tok_s": 46.2,
+          "content_chars": 302,
+          "content_lines": 5,
+          "hit_limit": false,
+          "content_preview": "1. G2: `=SUM(C2:F2)`\n\n2. H2: `=XLOOKUP(B2,Sheet2!A:A,Sheet2!B:B,\"No Target Found\")`\n\n3. I2: `=IF(G2/H2>1.2,\"Exceeds\",IF(G2/H2>=0.9,\"Meets\",IF(G2/H2>=0.7,\"Below\",\"Critical\")))`\n\n4. J2: `=IF(I2=\"Exceeds\",0.05*(G2-H2),IF(I2=\"Meets\",0.02*(G2-H2),0))`\n\n5. K2: `=RANK(G2,$G$2:$G$100,0)+COUNTIF($G$2:G2,G2)-"
+        },
+        "VBA Macro": {
+          "status": "OK",
+          "prompt_tokens": 199,
+          "completion_tokens": 2000,
+          "wall_time_s": 39.1,
+          "gen_tok_s": 51.2,
+          "content_chars": 7796,
+          "content_lines": 189,
+          "hit_limit": true,
+          "content_preview": "```vba\nSub ProcessHighValueTransactions()\n    Dim wsRaw As Worksheet\n    Dim wsHighValue As Worksheet\n    Dim wsSummary As Worksheet\n    Dim rngData As Range\n    Dim lastRow As Long\n    Dim i As Long\n    Dim copyRow As Long\n    Dim pivotTable As PivotTable\n    Dim pivotCache As PivotCache\n    Dim pi"
+        },
+        "Python openpyxl Report": {
+          "status": "OK",
+          "prompt_tokens": 173,
+          "completion_tokens": 2000,
+          "wall_time_s": 38.99,
+          "gen_tok_s": 51.3,
+          "content_chars": 7791,
+          "content_lines": 117,
+          "hit_limit": true,
+          "content_preview": "```python\nimport openpyxl\nfrom openpyxl import Workbook\nfrom openpyxl.utils import get_column_letter\nfrom openpyxl.utils.dataframe import dataframe_to_rows\nfrom openpyxl.styles import Font, PatternFill, Alignment, Border, Side\nfrom openpyxl.chart import LineChart, Reference\nfrom openpyxl.chart.axis "
+        },
+        "Complex Array Formulas": {
+          "status": "OK",
+          "prompt_tokens": 201,
+          "completion_tokens": 1500,
+          "wall_time_s": 29.07,
+          "gen_tok_s": 51.6,
+          "content_chars": 4526,
+          "content_lines": 136,
+          "hit_limit": true,
+          "content_preview": "Here are the modern dynamic array formulas for your requirements:\n\n**1. H2: UNIQUE list of all tickers, sorted alphabetically**\n```excel\n=UNIQUE(SORT(A2:A500))\n```\n\n**2. I2: 20-day moving average of Close for each ticker (spill down)**\n```excel\n=LET(\n    tickers, UNIQUE(SORT(A2:A500)),\n    AVERAGEIF"
+        },
+        "Google Sheets Apps Script": {
+          "status": "OK",
+          "prompt_tokens": 149,
+          "completion_tokens": 2000,
+          "wall_time_s": 38.93,
+          "gen_tok_s": 51.4,
+          "content_chars": 8624,
+          "content_lines": 189,
+          "hit_limit": true,
+          "content_preview": "```javascript\n/**\n * Google Apps Script for Inventory Reorder Notification System\n * Runs daily at 9 AM to check inventory levels and send notifications\n */\n\n// Configuration constants\nconst INVENTORY_SHEET_NAME = 'Inventory';\nconst NOTIFICATION_LOG_SHEET_NAME = 'Notification Log';\nconst DASHBOARD_S"
+        }
+      },
+      "10k": {
+        "Revenue Segment Analysis": {
+          "status": "OK",
+          "prompt_tokens": 323,
+          "completion_tokens": 1242,
+          "wall_time_s": 24.3,
+          "gen_tok_s": 51.1,
+          "content_chars": 4631,
+          "content_lines": 51,
+          "hit_limit": false,
+          "content_preview": "## NVIDIA 10-K Revenue Segment Analysis\n\n### 1. Segment Growth Rates and Revenue Concentration Risk\n\n**Growth Rate Analysis:**\n- **Data Center**: 142.5% YoY growth ($115.2B vs $47.5B) - **Dominant growth driver**\n- **Gaming**: 24.3% YoY growth ($12.8B vs $10.3B) - **Stable, mature segment**\n- **Prof"
+        },
+        "Balance Sheet Deep Dive": {
+          "status": "OK",
+          "prompt_tokens": 432,
+          "completion_tokens": 986,
+          "wall_time_s": 19.82,
+          "gen_tok_s": 49.8,
+          "content_chars": 2572,
+          "content_lines": 29,
+          "hit_limit": false,
+          "content_preview": "## Financial Ratio Analysis\n\n### 1. Liquidity Ratios\n\n**Company A:**\n- Current Ratio = Total Current Assets / Current Liabilities = $69.2B / $18.7B = **3.71**\n- Quick Ratio = (Cash + Short-term Investments + AR) / Current Liabilities = ($31.4B + $12.2B + $17.8B) / $18.7B = **3.03**\n- Cash Ratio = Ca"
+        },
+        "Risk Factor Extraction": {
+          "status": "OK",
+          "prompt_tokens": 245,
+          "completion_tokens": 1535,
+          "wall_time_s": 29.94,
+          "gen_tok_s": 51.3,
+          "content_chars": 7347,
+          "content_lines": 11,
+          "hit_limit": false,
+          "content_preview": "## 1. TOP 5 RISKS RANKED BY SEVERITY AND PROBABILITY\n\n### Risk 1: Customer Concentration Risk\n**Severity: 9/10** | **Probability: 8/10**\n**Risk Description:** Over-reliance on top 5 hyperscaler customers (45% of revenue) creates vulnerability to any single customer's business decisions, pricing chan"
+        }
+      },
+      "analysis": {
+        "DCF Valuation Model": {
+          "status": "OK",
+          "prompt_tokens": 277,
+          "completion_tokens": 1901,
+          "wall_time_s": 37.98,
+          "gen_tok_s": 50.1,
+          "content_chars": 4048,
+          "content_lines": 56,
+          "hit_limit": false,
+          "content_preview": "# DCF Valuation Analysis\n\n## 1. 5-Year Projection Table\n\n| Year | Revenue (B) | Growth Rate | Gross Margin | Gross Profit (B) | OpEx (B) | EBIT (B) | Tax (B) | NOPAT (B) | D&A (B) | CapEx (B) | WC (B) | FCF (B) |\n|------|-------------|-------------|--------------|------------------|----------|------"
+        },
+        "Portfolio Construction": {
+          "status": "OK",
+          "prompt_tokens": 359,
+          "completion_tokens": 1340,
+          "wall_time_s": 27.16,
+          "gen_tok_s": 49.3,
+          "content_chars": 3419,
+          "content_lines": 75,
+          "hit_limit": false,
+          "content_preview": "I'll construct an optimal portfolio using the given assets and constraints. Let me work through each approach systematically.\n\n## Portfolio Construction Analysis\n\nFirst, let me organize the data and calculate the covariance matrix from the given correlations.\n\n**Assets:**\n- SPY (US Large Cap)\n- IWM "
+        },
+        "M&A Accretion/Dilution": {
+          "status": "OK",
+          "prompt_tokens": 304,
+          "completion_tokens": 1150,
+          "wall_time_s": 23.35,
+          "gen_tok_s": 49.2,
+          "content_chars": 2952,
+          "content_lines": 46,
+          "hit_limit": false,
+          "content_preview": "## Acquisition Analysis\n\n### 1. Offer Price and Total Deal Value\n- **Target share price**: $185\n- **Premium**: 30%\n- **Offer price per share**: $185 \u00d7 1.30 = **$240.50**\n- **Total deal value**: $240.50 \u00d7 1.6B shares = **$384.8B**\n\n### 2. Shares Issued and New Share Count\n- **Deal structure**: 60% st"
+        }
+      }
+    }
+  },
+  "totals": {
+    "Instruct-2507": {
+      "tokens": 23030,
+      "wall": 460.73,
+      "tasks": 11,
+      "hit_limit": 9
+    },
+    "Coder-1M": {
+      "tokens": 15831,
+      "wall": 312.4700000000001,
+      "tasks": 11,
+      "hit_limit": 4
+    }
+  }
+}

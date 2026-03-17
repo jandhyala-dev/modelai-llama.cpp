@@ -258,6 +258,92 @@ All results are relative to the repository root:
 | Manifests | `bench-results/*/manifest.json` | JSON |
 | Summaries | `bench-results/3way-*/summary.json` | JSON |
 
+## Benchmark Rules
+
+### BR-1: Disable `enable_thinking` for Qwen3 compaction benchmarks
+
+**Affected models:** All Qwen3 `-2507` (July 2025 refresh) models — both Instruct and Thinking variants.
+**Not affected:** Qwen3-Coder-30B-A3B-Instruct-1M (older chat template without thinking feature).
+
+Qwen3 `-2507` models ship with `enable_thinking: true` baked into their chat templates.
+This causes two benchmark failures:
+
+1. **Re-prime step rejected.** Compaction quality tests replay assistant messages to restore
+   KV cache state before compacting. The `enable_thinking` chat template rejects assistant
+   response prefill with: `"Assistant response prefill is incompatible with enable_thinking."`.
+   Without re-prime, the compaction test cannot run.
+
+2. **Recall scoring fails.** With thinking enabled, model answers are either inside unclosed
+   `<think>` tags (if max_tokens is hit before thinking finishes) or in a separate
+   `reasoning_content` API field instead of `content`. The scoring regex searches `content`
+   only, so it finds nothing and reports 0/10 recall even when the model knows the answer.
+
+**Fix — per-request (preferred):**
+
+```python
+# In the chat() call, add enable_thinking: false
+resp = api("POST", "/v1/chat/completions", {
+    "model": "test",
+    "messages": messages,
+    "max_tokens": max_tokens,
+    "chat_template_kwargs": {"enable_thinking": False},  # BR-1
+})
+```
+
+**Fix — server-wide (alternative):**
+
+```bash
+llama-server -m model.gguf --chat-template-kwargs '{"enable_thinking": false}'
+```
+
+**Why this is safe:** Disabling thinking does not affect compaction quality. Compaction operates
+on the KV cache, not on the model's generation behavior. The thinking feature only changes what
+tokens the model generates — it does not change how the KV cache represents prior context.
+Compaction quality is identical whether thinking is on or off.
+
+**Discovery:** 2026-03-16 master benchmark (`ac87d9ab`). Instruct-2507 scored 0/10 baseline
+recall and both models failed re-prime. Coder-1M (same 30B/3B MoE architecture, different chat
+template) scored 10/10 at baseline, 2x, and 4x — proving the compaction engine works and the
+issue is purely chat template incompatibility.
+
+### BR-2: Budget 3-5x max_tokens for thinking models
+
+Thinking models generate hidden reasoning tokens (`<think>...</think>`) before visible output.
+At the 2026-03-16 benchmark:
+
+| Task type | Thinking overhead | Visible output |
+|-----------|-------------------|----------------|
+| Coding    | >99% of tokens    | 0 chars (never reached answer) |
+| Research  | 35-45% of tokens  | 7800-9000 chars visible |
+
+For coding tasks, 4500 max_tokens produced zero visible output — all tokens were spent
+on reasoning. For fair comparison, either:
+
+- Set `max_tokens` to 5x the instruct baseline (e.g., 7500 for a 1500-token coding task), or
+- Disable thinking via BR-1 for benchmarks that compare output quality across model types, or
+- Report raw tok/s and wall time separately (raw throughput is ~50 tok/s for all 30B MoE
+  variants; wall time differs due to thinking overhead).
+
+### BR-3: Score recall from both `content` and `reasoning_content`
+
+When `enable_thinking` is active, model responses may appear in either:
+- `resp["choices"][0]["message"]["content"]` — visible answer
+- `resp["choices"][0]["message"]["reasoning_content"]` — thinking content
+
+Recall scoring functions must check both fields. If only `content` is checked and the model
+put numbers inside thinking blocks, recall scores will be artificially zero.
+
+```python
+# Correct scoring approach
+content = resp["choices"][0]["message"].get("content", "") or ""
+reasoning = resp["choices"][0]["message"].get("reasoning_content", "") or ""
+search_text = content + " " + reasoning
+
+# Also strip <think> tags from content (some models inline thinking)
+import re
+search_text += " " + re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL)
+```
+
 ## Running Benchmarks
 
 ```bash
@@ -269,4 +355,7 @@ python3 scripts/run-3way-bench.py
 
 # Full campaign (6 models, all pipelines, ~8-12 hours)
 ./scripts/bench-kv-compact-campaign2.sh
+
+# 6-model master benchmark (speed + coding + research + compaction)
+python3 scripts/bench-3model-master.py
 ```
