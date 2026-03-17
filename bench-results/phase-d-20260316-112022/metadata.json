@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "timestamp": "2026-03-16T11:20:22Z",
+  "phase": "D",
+  "description": "Deep Research & Long Context Testing",
+  "hardware": {
+    "cpu": "Apple M2 Pro",
+    "memory_gb": 32,
+    "gpu": "Apple Metal (unified memory)",
+    "os": "macOS Darwin 25.3.0"
+  },
+  "modelai_llama_cpp": {
+    "repo": "jandhyala-dev/modelai-llama.cpp",
+    "branch": "modelai-main",
+    "commit": "8c316954"
+  },
+  "modelai": {
+    "repo": "jandhyala-dev/ModelAI",
+    "branch": "main",
+    "commit": "fb51d9e1"
+  },
+  "test_matrix": {
+    "total_models": 17,
+    "total_use_cases": 28,
+    "context_sizes": [32768, 65536, 131072, 262144],
+    "compaction_ratios": [2, 10, 50]
+  },
+  "models": [
+    {"order": 1, "name": "Qwen3.5-35B-A3B", "source": "huggingface", "size_gb": 21.0, "contexts": [32768, 65536]},
+    {"order": 2, "name": "Qwen3-30B-A3B", "source": "ollama:qwen3:30b", "size_gb": 17.3, "contexts": [32768, 65536]},
+    {"order": 3, "name": "Qwen3-14B", "source": "ollama:qwen3:14b", "size_gb": 8.6, "contexts": [32768, 65536, 131072]},
+    {"order": 4, "name": "DeepSeek-R1-14B", "source": "ollama:deepseek-r1:14b", "size_gb": 8.4, "contexts": [32768, 65536, 131072]},
+    {"order": 5, "name": "Qwen2.5-14B", "source": "ollama:qwen2.5:14b", "size_gb": 8.4, "contexts": [32768, 65536, 131072]},
+    {"order": 6, "name": "Qwen2.5-Coder-14B", "source": "ollama:qwen2.5-coder:14b", "size_gb": 8.4, "contexts": [32768, 65536, 131072]},
+    {"order": 7, "name": "Gemma2-9B", "source": "ollama:gemma2:9b", "size_gb": 5.1, "contexts": [32768, 65536, 131072, 262144]},
+    {"order": 8, "name": "Qwen3-8B", "source": "ollama:qwen3:8b", "size_gb": 4.9, "contexts": [32768, 65536, 131072, 262144]},
+    {"order": 9, "name": "DeepSeek-R1-8B", "source": "ollama:deepseek-r1:8b", "size_gb": 4.9, "contexts": [32768, 65536, 131072, 262144]},
+    {"order": 10, "name": "CodeGemma-7B", "source": "ollama:codegemma:7b", "size_gb": 4.7, "contexts": [32768, 65536, 131072, 262144]},
+    {"order": 11, "name": "Granite3.1-Dense-8B", "source": "ollama:granite3.1-dense:8b", "size_gb": 4.6, "contexts": [32768, 65536, 131072, 262144]},
+    {"order": 12, "name": "Llama3.1-8B", "source": "ollama:llama3.1:8b", "size_gb": 4.6, "contexts": [32768, 65536, 131072, 262144]},
+    {"order": 13, "name": "Aya-8B", "source": "ollama:aya:8b", "size_gb": 4.5, "contexts": [32768, 65536, 131072, 262144]},
+    {"order": 14, "name": "Qwen2.5-7B", "source": "ollama:qwen2.5:7b-instruct", "size_gb": 4.4, "contexts": [32768, 65536, 131072, 262144]},
+    {"order": 15, "name": "Mistral-7B", "source": "ollama:mistral:7b", "size_gb": 4.1, "contexts": [32768, 65536, 131072, 262144]},
+    {"order": 16, "name": "Llama3.2-3B", "source": "ollama:llama3.2:3b", "size_gb": 1.9, "contexts": [32768, 65536, 131072, 262144]},
+    {"order": 17, "name": "TinyLlama-1.1B", "source": "ollama:tinyllama:1.1b", "size_gb": 0.6, "contexts": [32768, 65536, 131072, 262144]}
+  ]
+}

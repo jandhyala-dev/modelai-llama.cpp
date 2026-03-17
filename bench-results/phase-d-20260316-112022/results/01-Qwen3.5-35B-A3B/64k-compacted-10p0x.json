@@ -1,0 +1,7 @@
+{
+  "test_type": "compacted_10.0x",
+  "error": "HTTP Error 500: Internal Server Error",
+  "model": "Qwen3.5-35B-A3B",
+  "context_size": 65536,
+  "timestamp": "2026-03-16T18:34:23.410212+00:00"
+}

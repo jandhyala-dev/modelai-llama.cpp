@@ -1,0 +1,29 @@
+Benchmark started: Sat Mar 14 22:28:16 PDT 2026
+Hardware: Apple M3 Pro / 32GB unified memory
+
+=== Llama3.2-3B ===
+  Llama3.2-3B | model=1.87 GiB | modelai: pp=772.23 tg=68.00 rss=2104MB | upstream: pp=764.93 tg=68.26 rss=2105MB | delta: pp=+1.0% tg=-0.4%
+=== Mistral-7B ===
+  Mistral-7B | model=4.07 GiB | modelai: pp=327.13 tg=34.96 rss=4248MB | upstream: pp=326.91 tg=35.01 rss=4311MB | delta: pp=+0.1% tg=-0.1%
+=== Llama3.1-8B ===
+  Llama3.1-8B | model=4.58 GiB | modelai: pp=326.63 tg=32.63 rss=4812MB | upstream: pp=326.51 tg=32.75 rss=4883MB | delta: pp=+0.0% tg=-0.4%
+=== Qwen3-8B ===
+  Qwen3-8B | model=4.86 GiB | modelai: pp=325.08 tg=30.76 rss=5092MB | upstream: pp=323.66 tg=30.10 rss=5168MB | delta: pp=+0.4% tg=+2.2%
+=== Qwen2.5-7B ===
+  Qwen2.5-7B | model=4.36 GiB | modelai: pp=339.44 tg=33.98 rss=4347MB | upstream: pp=348.61 tg=34.48 rss=4579MB | delta: pp=-2.6% tg=-1.5%
+=== Gemma2-9B ===
+  Gemma2-9B | model=5.06 GiB | modelai: pp=268.88 tg=23.63 rss=5013MB | upstream: pp=258.58 tg=23.00 rss=5499MB | delta: pp=+4.0% tg=+2.7%
+=== DeepSeek-R1-8B ===
+  DeepSeek-R1-8B | model=4.86 GiB | modelai: pp=290.68 tg=23.02 rss=4965MB | upstream: pp=276.07 tg=25.23 rss=5169MB | delta: pp=+5.3% tg=-8.8%
+=== Granite3.1-8B ===
+  Granite3.1-8B | model=4.65 GiB | modelai: pp=280.24 tg=26.87 rss=4333MB | upstream: pp=275.20 tg=27.93 rss=4930MB | delta: pp=+1.8% tg=-3.8%
+=== Qwen2.5-Coder-14B ===
+  Qwen2.5-Coder-14B | model=8.37 GiB | modelai: pp=163.23 tg=15.52 rss=8179MB | upstream: pp=171.71 tg=16.07 rss=8766MB | delta: pp=-4.9% tg=-3.4%
+=== Qwen3-14B ===
+  Qwen3-14B | model=8.63 GiB | modelai: pp=174.38 tg=15.61 rss=8687MB | upstream: pp=173.74 tg=15.27 rss=9044MB | delta: pp=+0.4% tg=+2.2%
+=== Qwen2.5-14B ===
+  Qwen2.5-14B | model=8.37 GiB | modelai: pp=168.87 tg=15.73 rss=8442MB | upstream: pp=171.61 tg=15.52 rss=8767MB | delta: pp=-1.6% tg=+1.4%
+=== DeepSeek-R1-14B ===
+  DeepSeek-R1-14B | model=8.37 GiB | modelai: pp=171.69 tg=15.48 rss=8210MB | upstream: pp=170.74 tg=15.80 rss=8788MB | delta: pp=+0.6% tg=-2.0%
+=== Qwen3-30B-A3B ===
+  Qwen3-30B-A3B | model=17.28 GiB | modelai: pp=500.17 tg=50.33 rss=15191MB | upstream: pp=523.31 tg=50.91 rss=17829MB | delta: pp=-4.4% tg=-1.1%

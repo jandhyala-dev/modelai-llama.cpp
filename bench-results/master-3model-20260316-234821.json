@@ -1,0 +1,1023 @@
+{
+  "benchmark": "master-3model",
+  "timestamp": "20260316-234821",
+  "hardware": "Apple M2 Pro 32GB",
+  "context": 65536,
+  "kv_type": "f16",
+  "models": [
+    "Instruct-2507",
+    "Thinking-2507",
+    "Coder-1M",
+    "Qwen3.5-35B-A3B",
+    "Qwen3-14B",
+    "Qwen3-8B"
+  ],
+  "compact_models": [
+    "Instruct-2507",
+    "Thinking-2507",
+    "Coder-1M"
+  ],
+  "results": {
+    "Instruct-2507": {
+      "model": {
+        "name": "Instruct-2507",
+        "file": "Qwen3-30B-A3B-Instruct-2507-UD-Q4_K_XL.gguf",
+        "type": "instruct",
+        "compact": true
+      },
+      "started_at": "23:48:31",
+      "speed": {
+        "warmup": {
+          "status": "OK",
+          "prompt_tokens": 9,
+          "completion_tokens": 5,
+          "wall_time_s": 0.19,
+          "gen_tok_s": 25.9,
+          "content_preview": ""
+        },
+        "Trivial": {
+          "status": "OK",
+          "prompt_tokens": 20,
+          "completion_tokens": 8,
+          "wall_time_s": 0.3,
+          "gen_tok_s": 26.9,
+          "content_preview": ""
+        },
+        "Short": {
+          "status": "OK",
+          "prompt_tokens": 23,
+          "completion_tokens": 102,
+          "wall_time_s": 2.04,
+          "gen_tok_s": 50.1,
+          "content_preview": ""
+        },
+        "Medium": {
+          "status": "OK",
+          "prompt_tokens": 53,
+          "completion_tokens": 1000,
+          "wall_time_s": 19.11,
+          "gen_tok_s": 52.3,
+          "content_preview": ""
+        },
+        "Long": {
+          "status": "OK",
+          "prompt_tokens": 123,
+          "completion_tokens": 2000,
+          "wall_time_s": 39.02,
+          "gen_tok_s": 51.3,
+          "content_preview": ""
+        }
+      },
+      "coding": {
+        "Algorithm": {
+          "status": "OK",
+          "prompt_tokens": 71,
+          "completion_tokens": 1500,
+          "wall_time_s": 28.91,
+          "gen_tok_s": 51.9,
+          "content_preview": ""
+        },
+        "Code Review": {
+          "status": "OK",
+          "prompt_tokens": 297,
+          "completion_tokens": 1500,
+          "wall_time_s": 29.5,
+          "gen_tok_s": 50.8,
+          "content_preview": ""
+        },
+        "Refactoring": {
+          "status": "OK",
+          "prompt_tokens": 340,
+          "completion_tokens": 1368,
+          "wall_time_s": 26.94,
+          "gen_tok_s": 50.8,
+          "content_preview": ""
+        }
+      },
+      "research": {
+        "Company Analysis": {
+          "status": "OK",
+          "prompt_tokens": 128,
+          "completion_tokens": 2000,
+          "wall_time_s": 39.1,
+          "gen_tok_s": 51.1,
+          "content_preview": ""
+        },
+        "Sector Comparison": {
+          "status": "OK",
+          "prompt_tokens": 99,
+          "completion_tokens": 2000,
+          "wall_time_s": 39.02,
+          "gen_tok_s": 51.2,
+          "content_preview": ""
+        },
+        "Risk Assessment": {
+          "status": "OK",
+          "prompt_tokens": 102,
+          "completion_tokens": 2000,
+          "wall_time_s": 39.14,
+          "gen_tok_s": 51.1,
+          "content_preview": ""
+        }
+      },
+      "compaction": {
+        "fill_tokens": 2363,
+        "baseline": {
+          "recalled": 0,
+          "total": 10,
+          "pct": 0.0,
+          "details": [
+            {
+              "fact": "NVIDIA data center revenue",
+              "expected": "$115 billion",
+              "recalled": false
+            },
+            {
+              "fact": "AMD total revenue",
+              "expected": "$28 billion",
+              "recalled": false
+            },
+            {
+              "fact": "Intel foundry losses",
+              "expected": "$7 billion",
+              "recalled": false
+            },
+            {
+              "fact": "TSMC revenue",
+              "expected": "$90 billion",
+              "recalled": false
+            },
+            {
+              "fact": "SK Hynix HBM3E market share",
+              "expected": "50 percent",
+              "recalled": false
+            },
+            {
+              "fact": "Broadcom VMware synergy target",
+              "expected": "$8.5 billion",
+              "recalled": false
+            },
+            {
+              "fact": "Total sovereign AI investment globally",
+              "expected": "$150 billion",
+              "recalled": false
+            },
+            {
+              "fact": "Apple annual buyback pace",
+              "expected": "$110 billion",
+              "recalled": false
+            },
+            {
+              "fact": "NVIDIA CUDA developer count",
+              "expected": "4 million",
+              "recalled": false
+            },
+            {
+              "fact": "AMD MI300X AI accelerator revenue",
+              "expected": "$5 billion",
+              "recalled": false
+            }
+          ],
+          "raw_answer": ""
+        },
+        "2x": {
+          "error": "reprime failed"
+        },
+        "4x": {
+          "error": "reprime failed"
+        }
+      },
+      "finished_at": "23:54:16"
+    },
+    "Thinking-2507": {
+      "model": {
+        "name": "Thinking-2507",
+        "file": "Qwen3-30B-A3B-Thinking-2507-UD-Q4_K_XL.gguf",
+        "type": "thinking",
+        "compact": true
+      },
+      "started_at": "23:54:29",
+      "speed": {
+        "warmup": {
+          "status": "OK",
+          "prompt_tokens": 9,
+          "completion_tokens": 5,
+          "wall_time_s": 0.19,
+          "gen_tok_s": 26.1,
+          "content_preview": "",
+          "thinking_pct": 0.0,
+          "visible_chars": 0,
+          "visible_preview": "",
+          "est_visible_tok_s": 5.2
+        },
+        "Trivial": {
+          "status": "OK",
+          "prompt_tokens": 20,
+          "completion_tokens": 100,
+          "wall_time_s": 1.99,
+          "gen_tok_s": 50.3,
+          "content_preview": "",
+          "thinking_pct": 0.0,
+          "visible_chars": 0,
+          "visible_preview": "",
+          "est_visible_tok_s": 0.5
+        },
+        "Short": {
+          "status": "OK",
+          "prompt_tokens": 23,
+          "completion_tokens": 246,
+          "wall_time_s": 4.76,
+          "gen_tok_s": 51.7,
+          "content_preview": "TCP (Transmission Control Protocol) is connection-oriented, ensuring reliable, ordered, and error-checked data delivery through acknowledgments, retransmissions, and flow control\u2014making it ideal for a",
+          "thinking_pct": 0.0,
+          "visible_chars": 865,
+          "visible_preview": "TCP (Transmission Control Protocol) is connection-oriented, ensuring reliable, ordered, and error-checked data delivery through acknowledgments, retransmissions, and flow control\u2014making it ideal for a",
+          "est_visible_tok_s": 45.4
+        },
+        "Medium": {
+          "status": "OK",
+          "prompt_tokens": 53,
+          "completion_tokens": 1000,
+          "wall_time_s": 19.55,
+          "gen_tok_s": 51.1,
+          "content_preview": "## Modern CPU Instruction Execution: A Deep Dive into the Engine Room\n\nModern CPUs are marvels of parallelism and optimization, executing billions of instructions per second through a sophisticated in",
+          "thinking_pct": 0.0,
+          "visible_chars": 523,
+          "visible_preview": "## Modern CPU Instruction Execution: A Deep Dive into the Engine Room\n\nModern CPUs are marvels of parallelism and optimization, executing billions of instructions per second through a sophisticated in",
+          "est_visible_tok_s": 6.6
+        },
+        "Long": {
+          "status": "OK",
+          "prompt_tokens": 123,
+          "completion_tokens": 2000,
+          "wall_time_s": 39.96,
+          "gen_tok_s": 50.1,
+          "content_preview": "## Comprehensive Tutorial: Distributed Systems Consensus Algorithms  \n*For Computer Science Students & Practitioners*  \n*By Dr. A. N. Professor, Chair of Distributed Systems*\n\n---\n\n### **1. The FLP Im",
+          "thinking_pct": 0.0,
+          "visible_chars": 2863,
+          "visible_preview": "## Comprehensive Tutorial: Distributed Systems Consensus Algorithms  \n*For Computer Science Students & Practitioners*  \n*By Dr. A. N. Professor, Chair of Distributed Systems*\n\n---\n\n### **1. The FLP Im",
+          "est_visible_tok_s": 17.9
+        }
+      },
+      "coding": {
+        "Algorithm": {
+          "status": "OK",
+          "prompt_tokens": 71,
+          "completion_tokens": 4500,
+          "wall_time_s": 93.37,
+          "gen_tok_s": 48.2,
+          "content_preview": "",
+          "thinking_pct": 0.0,
+          "visible_chars": 0,
+          "visible_preview": "",
+          "est_visible_tok_s": 0.0
+        },
+        "Code Review": {
+          "status": "OK",
+          "prompt_tokens": 297,
+          "completion_tokens": 4500,
+          "wall_time_s": 94.49,
+          "gen_tok_s": 47.6,
+          "content_preview": "",
+          "thinking_pct": 0.0,
+          "visible_chars": 0,
+          "visible_preview": "",
+          "est_visible_tok_s": 0.0
+        },
+        "Refactoring": {
+          "status": "OK",
+          "prompt_tokens": 340,
+          "completion_tokens": 6000,
+          "wall_time_s": 131.74,
+          "gen_tok_s": 45.5,
+          "content_preview": "",
+          "thinking_pct": 0.0,
+          "visible_chars": 0,
+          "visible_preview": "",
+          "est_visible_tok_s": 0.0
+        }
+      },
+      "research": {
+        "Company Analysis": {
+          "status": "OK",
+          "prompt_tokens": 128,
+          "completion_tokens": 3005,
+          "wall_time_s": 60.02,
+          "gen_tok_s": 50.1,
+          "content_preview": "## Comprehensive Analysis: NVIDIA's Competitive Positioning in AI Accelerators (2025)\n\n**Disclaimer:** *All data reflects 2025 projections based on 2023-2024 trends, industry consensus (Bloomberg, Gar",
+          "thinking_pct": 0.0,
+          "visible_chars": 7810,
+          "visible_preview": "## Comprehensive Analysis: NVIDIA's Competitive Positioning in AI Accelerators (2025)\n\n**Disclaimer:** *All data reflects 2025 projections based on 2023-2024 trends, industry consensus (Bloomberg, Gar",
+          "est_visible_tok_s": 32.5
+        },
+        "Sector Comparison": {
+          "status": "OK",
+          "prompt_tokens": 99,
+          "completion_tokens": 3871,
+          "wall_time_s": 78.54,
+          "gen_tok_s": 49.3,
+          "content_preview": "Below is a **data-driven, analyst-grade comparison** of AMD and Intel across your specified criteria, based on Q1 2024 financials, IDC/Synergy Research market data (Q1 2024), and technical benchmarks.",
+          "thinking_pct": 0.0,
+          "visible_chars": 8832,
+          "visible_preview": "Below is a **data-driven, analyst-grade comparison** of AMD and Intel across your specified criteria, based on Q1 2024 financials, IDC/Synergy Research market data (Q1 2024), and technical benchmarks.",
+          "est_visible_tok_s": 28.1
+        },
+        "Risk Assessment": {
+          "status": "OK",
+          "prompt_tokens": 102,
+          "completion_tokens": 3240,
+          "wall_time_s": 65.3,
+          "gen_tok_s": 49.6,
+          "content_preview": "## Geopolitical Risk Assessment: Global Semiconductor Supply Chain (Probability-Weighted Scenarios)\n\nAs a geopolitical risk analyst specializing in tech supply chains, I've assessed these five critica",
+          "thinking_pct": 0.0,
+          "visible_chars": 9002,
+          "visible_preview": "## Geopolitical Risk Assessment: Global Semiconductor Supply Chain (Probability-Weighted Scenarios)\n\nAs a geopolitical risk analyst specializing in tech supply chains, I've assessed these five critica",
+          "est_visible_tok_s": 34.5
+        }
+      },
+      "compaction": {
+        "fill_tokens": 5910,
+        "baseline": {
+          "recalled": 10,
+          "total": 10,
+          "pct": 100.0,
+          "details": [
+            {
+              "fact": "NVIDIA data center revenue",
+              "expected": "$115 billion",
+              "recalled": true
+            },
+            {
+              "fact": "AMD total revenue",
+              "expected": "$28 billion",
+              "recalled": true
+            },
+            {
+              "fact": "Intel foundry losses",
+              "expected": "$7 billion",
+              "recalled": true
+            },
+            {
+              "fact": "TSMC revenue",
+              "expected": "$90 billion",
+              "recalled": true
+            },
+            {
+              "fact": "SK Hynix HBM3E market share",
+              "expected": "50 percent",
+              "recalled": true
+            },
+            {
+              "fact": "Broadcom VMware synergy target",
+              "expected": "$8.5 billion",
+              "recalled": true
+            },
+            {
+              "fact": "Total sovereign AI investment globally",
+              "expected": "$150 billion",
+              "recalled": true
+            },
+            {
+              "fact": "Apple annual buyback pace",
+              "expected": "$110 billion",
+              "recalled": true
+            },
+            {
+              "fact": "NVIDIA CUDA developer count",
+              "expected": "4 million",
+              "recalled": true
+            },
+            {
+              "fact": "AMD MI300X AI accelerator revenue",
+              "expected": "$5 billion",
+              "recalled": true
+            }
+          ],
+          "raw_answer": "115\n28\n7\n90\n50\n8.5\n150\n110\n4\n5"
+        },
+        "2x": {
+          "error": "reprime failed"
+        },
+        "4x": {
+          "error": "reprime failed"
+        }
+      },
+      "finished_at": "00:07:04"
+    },
+    "Coder-1M": {
+      "model": {
+        "name": "Coder-1M",
+        "file": "Qwen3-Coder-30B-A3B-Instruct-1M-UD-Q4_K_XL.gguf",
+        "type": "coder",
+        "compact": true
+      },
+      "started_at": "00:07:17",
+      "speed": {
+        "warmup": {
+          "status": "OK",
+          "prompt_tokens": 9,
+          "completion_tokens": 5,
+          "wall_time_s": 0.2,
+          "gen_tok_s": 24.4,
+          "content_preview": "Hello! How can I"
+        },
+        "Trivial": {
+          "status": "OK",
+          "prompt_tokens": 20,
+          "completion_tokens": 8,
+          "wall_time_s": 0.3,
+          "gen_tok_s": 26.5,
+          "content_preview": "The capital of France is Paris."
+        },
+        "Short": {
+          "status": "OK",
+          "prompt_tokens": 23,
+          "completion_tokens": 149,
+          "wall_time_s": 2.92,
+          "gen_tok_s": 51.1,
+          "content_preview": "TCP (Transmission Control Protocol) is a connection-oriented protocol that guarantees reliable, ordered delivery of data between applications, making it suitable for tasks where accuracy is crucial li"
+        },
+        "Medium": {
+          "status": "OK",
+          "prompt_tokens": 53,
+          "completion_tokens": 1000,
+          "wall_time_s": 19.05,
+          "gen_tok_s": 52.5,
+          "content_preview": "# Modern CPU Instruction Execution: A Comprehensive Overview\n\nModern CPUs employ sophisticated techniques to maximize performance and efficiency in instruction execution. Understanding how these syste"
+        },
+        "Long": {
+          "status": "OK",
+          "prompt_tokens": 123,
+          "completion_tokens": 2000,
+          "wall_time_s": 38.78,
+          "gen_tok_s": 51.6,
+          "content_preview": "# Distributed Systems Consensus Algorithms: A Comprehensive Tutorial\n\n## 1. The FLP Impossibility Result and Why It Matters\n\n### 1.1 What is the FLP Impossibility Result?\n\nThe FLP impossibility result"
+        }
+      },
+      "coding": {
+        "Algorithm": {
+          "status": "OK",
+          "prompt_tokens": 71,
+          "completion_tokens": 1500,
+          "wall_time_s": 28.69,
+          "gen_tok_s": 52.3,
+          "content_preview": "```python\ndef longest_increasing_subsequence(arr):\n    \"\"\"\n    Find the longest increasing subsequence in an array of integers using\n    dynamic programming with binary search approach (O(n log n)).\n "
+        },
+        "Code Review": {
+          "status": "OK",
+          "prompt_tokens": 297,
+          "completion_tokens": 1073,
+          "wall_time_s": 21.0,
+          "gen_tok_s": 51.1,
+          "content_preview": "Here are the bugs and issues I found in the code:\n\n## Bug 1: `merge_sorted_lists` function - Missing elements from list2\n**Issue**: The function only processes elements from `list1` and `list2` in the"
+        },
+        "Refactoring": {
+          "status": "OK",
+          "prompt_tokens": 340,
+          "completion_tokens": 1891,
+          "wall_time_s": 37.45,
+          "gen_tok_s": 50.5,
+          "content_preview": "Here's a refactored version of the code with significant improvements for maintainability:\n\n```python\nfrom typing import List, Dict, Union\n\n# Constants for better readability and maintainability\nDISCO"
+        }
+      },
+      "research": {
+        "Company Analysis": {
+          "status": "OK",
+          "prompt_tokens": 128,
+          "completion_tokens": 1470,
+          "wall_time_s": 28.54,
+          "gen_tok_s": 51.5,
+          "content_preview": "# NVIDIA's Competitive Positioning in the AI Accelerator Market - 2025 Analysis\n\n## 1. Revenue Breakdown by Segment\n\n**Total Revenue (2025):** $110 billion (projected)\n\n**Segment Breakdown:**\n- **Data"
+        },
+        "Sector Comparison": {
+          "status": "OK",
+          "prompt_tokens": 99,
+          "completion_tokens": 1269,
+          "wall_time_s": 24.33,
+          "gen_tok_s": 52.2,
+          "content_preview": "## AMD vs Intel: Strategic Positioning Analysis\n\n### 1. EPYC vs Xeon Market Share Trends\n\n**AMD EPYC:**\n- Market share: ~65-70% of new server CPU shipments (2023-2024)\n- Revenue: ~$12-15 billion annua"
+        },
+        "Risk Assessment": {
+          "status": "OK",
+          "prompt_tokens": 102,
+          "completion_tokens": 1780,
+          "wall_time_s": 34.41,
+          "gen_tok_s": 51.7,
+          "content_preview": "# Geopolitical Risk Assessment: Global Semiconductor Supply Chain\n\n## 1. Taiwan Strait Scenario - Impact on TSMC and Global Chip Supply\n\n**Probability: 70%**\n\n**Risk Profile:**\n- **High Impact**: TSMC"
+        }
+      },
+      "compaction": {
+        "fill_tokens": 2638,
+        "baseline": {
+          "recalled": 10,
+          "total": 10,
+          "pct": 100.0,
+          "details": [
+            {
+              "fact": "NVIDIA data center revenue",
+              "expected": "$115 billion",
+              "recalled": true
+            },
+            {
+              "fact": "AMD total revenue",
+              "expected": "$28 billion",
+              "recalled": true
+            },
+            {
+              "fact": "Intel foundry losses",
+              "expected": "$7 billion",
+              "recalled": true
+            },
+            {
+              "fact": "TSMC revenue",
+              "expected": "$90 billion",
+              "recalled": true
+            },
+            {
+              "fact": "SK Hynix HBM3E market share",
+              "expected": "50 percent",
+              "recalled": true
+            },
+            {
+              "fact": "Broadcom VMware synergy target",
+              "expected": "$8.5 billion",
+              "recalled": true
+            },
+            {
+              "fact": "Total sovereign AI investment globally",
+              "expected": "$150 billion",
+              "recalled": true
+            },
+            {
+              "fact": "Apple annual buyback pace",
+              "expected": "$110 billion",
+              "recalled": true
+            },
+            {
+              "fact": "NVIDIA CUDA developer count",
+              "expected": "4 million",
+              "recalled": true
+            },
+            {
+              "fact": "AMD MI300X AI accelerator revenue",
+              "expected": "$5 billion",
+              "recalled": true
+            }
+          ],
+          "raw_answer": "1. 115 billion\n2. 28 billion\n3. 7 billion\n4. 90 billion\n5. 50 percent\n6. 8.5 billion\n7. 150 billion\n8. 110 billion\n9. 4 million\n10. 5 billion"
+        },
+        "2x": {
+          "recall": {
+            "recalled": 10,
+            "total": 10,
+            "pct": 100.0,
+            "details": [
+              {
+                "fact": "NVIDIA data center revenue",
+                "expected": "$115 billion",
+                "recalled": true
+              },
+              {
+                "fact": "AMD total revenue",
+                "expected": "$28 billion",
+                "recalled": true
+              },
+              {
+                "fact": "Intel foundry losses",
+                "expected": "$7 billion",
+                "recalled": true
+              },
+              {
+                "fact": "TSMC revenue",
+                "expected": "$90 billion",
+                "recalled": true
+              },
+              {
+                "fact": "SK Hynix HBM3E market share",
+                "expected": "50 percent",
+                "recalled": true
+              },
+              {
+                "fact": "Broadcom VMware synergy target",
+                "expected": "$8.5 billion",
+                "recalled": true
+              },
+              {
+                "fact": "Total sovereign AI investment globally",
+                "expected": "$150 billion",
+                "recalled": true
+              },
+              {
+                "fact": "Apple annual buyback pace",
+                "expected": "$110 billion",
+                "recalled": true
+              },
+              {
+                "fact": "NVIDIA CUDA developer count",
+                "expected": "4 million",
+                "recalled": true
+              },
+              {
+                "fact": "AMD MI300X AI accelerator revenue",
+                "expected": "$5 billion",
+                "recalled": true
+              }
+            ],
+            "raw_answer": "1. 115 billion\n2. 28 billion\n3. 7 billion\n4. 90 billion\n5. 50 percent\n6. 8.5 billion\n7. 150 billion\n8. 110 billion\n9. 4 million\n10. 5 billion"
+          },
+          "compact_ms": 127.8,
+          "actual_ratio": 2.0,
+          "target_tokens": 1319,
+          "facts_lost": []
+        },
+        "4x": {
+          "recall": {
+            "recalled": 10,
+            "total": 10,
+            "pct": 100.0,
+            "details": [
+              {
+                "fact": "NVIDIA data center revenue",
+                "expected": "$115 billion",
+                "recalled": true
+              },
+              {
+                "fact": "AMD total revenue",
+                "expected": "$28 billion",
+                "recalled": true
+              },
+              {
+                "fact": "Intel foundry losses",
+                "expected": "$7 billion",
+                "recalled": true
+              },
+              {
+                "fact": "TSMC revenue",
+                "expected": "$90 billion",
+                "recalled": true
+              },
+              {
+                "fact": "SK Hynix HBM3E market share",
+                "expected": "50 percent",
+                "recalled": true
+              },
+              {
+                "fact": "Broadcom VMware synergy target",
+                "expected": "$8.5 billion",
+                "recalled": true
+              },
+              {
+                "fact": "Total sovereign AI investment globally",
+                "expected": "$150 billion",
+                "recalled": true
+              },
+              {
+                "fact": "Apple annual buyback pace",
+                "expected": "$110 billion",
+                "recalled": true
+              },
+              {
+                "fact": "NVIDIA CUDA developer count",
+                "expected": "4 million",
+                "recalled": true
+              },
+              {
+                "fact": "AMD MI300X AI accelerator revenue",
+                "expected": "$5 billion",
+                "recalled": true
+              }
+            ],
+            "raw_answer": "1. 115 billion\n2. 28 billion\n3. 7 billion\n4. 90 billion\n5. 50 percent\n6. 8.5 billion\n7. 150 billion\n8. 110 billion\n9. 4 million\n10. 5 billion"
+          },
+          "compact_ms": 65.2,
+          "actual_ratio": 4.0,
+          "target_tokens": 659,
+          "facts_lost": []
+        }
+      },
+      "finished_at": "00:12:15"
+    },
+    "Qwen3.5-35B-A3B": {
+      "model": {
+        "name": "Qwen3.5-35B-A3B",
+        "file": "Qwen3.5-35B-A3B-Q4_K_M.gguf",
+        "type": "instruct",
+        "compact": false,
+        "ctx": 32768
+      },
+      "started_at": "00:12:29",
+      "speed": {
+        "warmup": {
+          "status": "OK",
+          "prompt_tokens": 11,
+          "completion_tokens": 5,
+          "wall_time_s": 0.56,
+          "gen_tok_s": 8.9,
+          "content_preview": ""
+        },
+        "Trivial": {
+          "status": "OK",
+          "prompt_tokens": 22,
+          "completion_tokens": 100,
+          "wall_time_s": 4.49,
+          "gen_tok_s": 22.3,
+          "content_preview": ""
+        },
+        "Short": {
+          "status": "OK",
+          "prompt_tokens": 25,
+          "completion_tokens": 300,
+          "wall_time_s": 13.08,
+          "gen_tok_s": 22.9,
+          "content_preview": ""
+        },
+        "Medium": {
+          "status": "OK",
+          "prompt_tokens": 55,
+          "completion_tokens": 1000,
+          "wall_time_s": 43.89,
+          "gen_tok_s": 22.8,
+          "content_preview": ""
+        },
+        "Long": {
+          "status": "OK",
+          "prompt_tokens": 125,
+          "completion_tokens": 2000,
+          "wall_time_s": 86.57,
+          "gen_tok_s": 23.1,
+          "content_preview": "# Distributed Systems Consensus: A Comprehensive Tutorial\n**Course:** CS 450: Advanced Distributed Systems\n**Instructor:** Prof. [Your Name]\n**Topic:** Consensus Algorithms (Paxos, Raft, PBFT)\n\n---\n\n#"
+        }
+      },
+      "coding": {
+        "Algorithm": {
+          "status": "OK",
+          "prompt_tokens": 73,
+          "completion_tokens": 1019,
+          "wall_time_s": 44.04,
+          "gen_tok_s": 23.1,
+          "content_preview": "```python\nimport bisect\nfrom typing import List, Tuple\n\ndef longest_increasing_subsequence(nums: List[int]) -> Tuple[int, List[int]]:\n    \"\"\"\n    Find the longest increasing subsequence (LIS) in an ar"
+        },
+        "Code Review": {
+          "status": "OK",
+          "prompt_tokens": 323,
+          "completion_tokens": 1500,
+          "wall_time_s": 65.66,
+          "gen_tok_s": 22.8,
+          "content_preview": "# Code Review: Bugs and Issues Found\n\n## Function 1: `merge_sorted_lists(list1, list2)`\n\n### Bug 1: Missing `j += 1` in the else branch\n**Issue:** When appending from `list2`, the index `j` is not inc"
+        },
+        "Refactoring": {
+          "status": "OK",
+          "prompt_tokens": 361,
+          "completion_tokens": 1770,
+          "wall_time_s": 76.87,
+          "gen_tok_s": 23.0,
+          "content_preview": "# Refactored Code\n\n```python\nfrom dataclasses import dataclass\nfrom typing import Dict, List, Optional, Union\nfrom enum import Enum\n\n\nclass OrderStatus(Enum):\n    ACTIVE = 'active'\n    CANCELLED = 'ca"
+        }
+      },
+      "research": {
+        "Company Analysis": {
+          "status": "OK",
+          "prompt_tokens": 133,
+          "completion_tokens": 2000,
+          "wall_time_s": 85.88,
+          "gen_tok_s": 23.3,
+          "content_preview": "**INVESTMENT RESEARCH NOTE**\n**TO:** Institutional Equity Desk / Global Technology Team\n**FROM:** Senior Financial Analyst, Semiconductor & AI Infrastructure\n**"
+        },
+        "Sector Comparison": {
+          "status": "OK",
+          "prompt_tokens": 103,
+          "completion_tokens": 2000,
+          "wall_time_s": 86.44,
+          "gen_tok_s": 23.1,
+          "content_preview": "### Executive Summary: AMD vs. Intel Strategic Positioning\n\nAs of mid-2024, the semiconductor landscape presents a stark divergence between AMD and Intel. AMD has successfully executed a \"high-margin "
+        },
+        "Risk Assessment": {
+          "status": "OK",
+          "prompt_tokens": 105,
+          "completion_tokens": 2000,
+          "wall_time_s": 86.31,
+          "gen_tok_s": 23.2,
+          "content_preview": "**MEMORANDUM**\n**TO:** Investment Committee / Strategic Risk Desk\n**FROM:** Geopolitical Risk Analyst, Technology Supply Chain\n**DATE:** October 26, 2023\n**SUBJECT:** Geopolitical Risk Assessment: Glo"
+        }
+      },
+      "compaction": {
+        "skipped": true
+      },
+      "finished_at": "00:22:23"
+    },
+    "Qwen3-14B": {
+      "model": {
+        "name": "Qwen3-14B",
+        "file": "Qwen3-14B-Q4_K_M.gguf",
+        "type": "instruct",
+        "compact": false
+      },
+      "started_at": "00:22:33",
+      "speed": {
+        "warmup": {
+          "status": "OK",
+          "prompt_tokens": 9,
+          "completion_tokens": 5,
+          "wall_time_s": 0.45,
+          "gen_tok_s": 11.0,
+          "content_preview": ""
+        },
+        "Trivial": {
+          "status": "OK",
+          "prompt_tokens": 20,
+          "completion_tokens": 100,
+          "wall_time_s": 5.75,
+          "gen_tok_s": 17.4,
+          "content_preview": "The capital of France"
+        },
+        "Short": {
+          "status": "OK",
+          "prompt_tokens": 23,
+          "completion_tokens": 295,
+          "wall_time_s": 16.64,
+          "gen_tok_s": 17.7,
+          "content_preview": "TCP (Transmission Control Protocol) is a connection-oriented protocol that ensures reliable, ordered, and error-checked delivery of data through acknowledgments and retransmissions, making it suitable"
+        },
+        "Medium": {
+          "status": "OK",
+          "prompt_tokens": 53,
+          "completion_tokens": 1000,
+          "wall_time_s": 56.58,
+          "gen_tok_s": 17.7,
+          "content_preview": "Modern CPUs execute instructions through a complex interplay of hardware and microarchitectural techniques designed to maximize performance, minimize latency, and exploit parallelism. Below is a detai"
+        },
+        "Long": {
+          "status": "OK",
+          "prompt_tokens": 123,
+          "completion_tokens": 2000,
+          "wall_time_s": 114.36,
+          "gen_tok_s": 17.5,
+          "content_preview": "# Comprehensive Tutorial on Distributed Systems Consensus Algorithms\n\nDistributed systems rely on consensus algorithms to ensure agreement among nodes despite failures, network partitions, or maliciou"
+        }
+      },
+      "coding": {
+        "Algorithm": {
+          "status": "OK",
+          "prompt_tokens": 71,
+          "completion_tokens": 1500,
+          "wall_time_s": 84.98,
+          "gen_tok_s": 17.7,
+          "content_preview": ""
+        },
+        "Code Review": {
+          "status": "OK",
+          "prompt_tokens": 297,
+          "completion_tokens": 1500,
+          "wall_time_s": 86.2,
+          "gen_tok_s": 17.4,
+          "content_preview": ""
+        },
+        "Refactoring": {
+          "status": "OK",
+          "prompt_tokens": 340,
+          "completion_tokens": 2000,
+          "wall_time_s": 116.16,
+          "gen_tok_s": 17.2,
+          "content_preview": ""
+        }
+      },
+      "research": {
+        "Company Analysis": {
+          "status": "OK",
+          "prompt_tokens": 128,
+          "completion_tokens": 2000,
+          "wall_time_s": 114.23,
+          "gen_tok_s": 17.5,
+          "content_preview": "### **NVIDIA's Competitive Positioning in the AI Accelerator Market (2025)**  \nNVIDIA dominates the AI accelerator market, driven by its leadership in GPUs, software ecosystems, and strategic acquisit"
+        },
+        "Sector Comparison": {
+          "status": "OK",
+          "prompt_tokens": 99,
+          "completion_tokens": 2000,
+          "wall_time_s": 113.95,
+          "gen_tok_s": 17.6,
+          "content_preview": "### **1. EPYC vs Xeon Market Share Trends**  \n- **AMD EPYC Market Share (2023):**  \n  - **~30%** of the global server CPU market (per **Mercury Research**, Q4 2023).  \n  - **Growth:** From **~15% in 2"
+        },
+        "Risk Assessment": {
+          "status": "OK",
+          "prompt_tokens": 102,
+          "completion_tokens": 2000,
+          "wall_time_s": 115.74,
+          "gen_tok_s": 17.3,
+          "content_preview": "### **Geopolitical Risk Assessment for the Global Semiconductor Supply Chain**\n\n---\n\n#### **1. Taiwan Strait Scenario \u2014 Impact on TSMC and Global Chip Supply**  \n**Key Risk:** Escalation of cross-stra"
+        }
+      },
+      "compaction": {
+        "skipped": true
+      },
+      "finished_at": "00:36:18"
+    },
+    "Qwen3-8B": {
+      "model": {
+        "name": "Qwen3-8B",
+        "file": "Qwen3-8B-Q4_K_M.gguf",
+        "type": "instruct",
+        "compact": false
+      },
+      "started_at": "00:36:28",
+      "speed": {
+        "warmup": {
+          "status": "OK",
+          "prompt_tokens": 9,
+          "completion_tokens": 5,
+          "wall_time_s": 0.26,
+          "gen_tok_s": 19.5,
+          "content_preview": ""
+        },
+        "Trivial": {
+          "status": "OK",
+          "prompt_tokens": 20,
+          "completion_tokens": 100,
+          "wall_time_s": 3.43,
+          "gen_tok_s": 29.1,
+          "content_preview": ""
+        },
+        "Short": {
+          "status": "OK",
+          "prompt_tokens": 23,
+          "completion_tokens": 300,
+          "wall_time_s": 9.98,
+          "gen_tok_s": 30.1,
+          "content_preview": "TCP (Transmission Control Protocol) is a connection-oriented protocol that ensures reliable, ordered, and error-checked data delivery through mechanisms like acknowled"
+        },
+        "Medium": {
+          "status": "OK",
+          "prompt_tokens": 53,
+          "completion_tokens": 1000,
+          "wall_time_s": 33.27,
+          "gen_tok_s": 30.1,
+          "content_preview": ""
+        },
+        "Long": {
+          "status": "OK",
+          "prompt_tokens": 123,
+          "completion_tokens": 2000,
+          "wall_time_s": 65.58,
+          "gen_tok_s": 30.5,
+          "content_preview": "# Comprehensive Tutorial on Distributed Systems Consensus Algorithms\n\n---\n\n## **1. The FLP Impossibility Result and Why It Matters**\n\n### **What is the FLP Result?**\nThe **Fischer-Lynch-Patterson (FLP"
+        }
+      },
+      "coding": {
+        "Algorithm": {
+          "status": "OK",
+          "prompt_tokens": 71,
+          "completion_tokens": 1500,
+          "wall_time_s": 48.62,
+          "gen_tok_s": 30.9,
+          "content_preview": ""
+        },
+        "Code Review": {
+          "status": "OK",
+          "prompt_tokens": 297,
+          "completion_tokens": 1500,
+          "wall_time_s": 49.24,
+          "gen_tok_s": 30.5,
+          "content_preview": ""
+        },
+        "Refactoring": {
+          "status": "OK",
+          "prompt_tokens": 340,
+          "completion_tokens": 2000,
+          "wall_time_s": 66.07,
+          "gen_tok_s": 30.3,
+          "content_preview": ""
+        }
+      },
+      "research": {
+        "Company Analysis": {
+          "status": "OK",
+          "prompt_tokens": 128,
+          "completion_tokens": 2000,
+          "wall_time_s": 64.98,
+          "gen_tok_s": 30.8,
+          "content_preview": "**Comprehensive Analysis of NVIDIA's Competitive Positioning in the AI Accelerator Market (2025)**\n\n---\n\n### **1. Revenue Breakdown by Segment (2025)**  \nNVIDIA\u2019s revenue in 2025 is projected to be **"
+        },
+        "Sector Comparison": {
+          "status": "OK",
+          "prompt_tokens": 99,
+          "completion_tokens": 2000,
+          "wall_time_s": 65.42,
+          "gen_tok_s": 30.6,
+          "content_preview": "### **1. EPYC vs Xeon Market Share Trends**  \n- **EPYC (AMD):**  \n  - **2022:** ~15-20% market share in the server CPU segment (data centers, cloud, and HPC).  \n  - **2023:** Grew to **25-30%** due to"
+        },
+        "Risk Assessment": {
+          "status": "OK",
+          "prompt_tokens": 102,
+          "completion_tokens": 1872,
+          "wall_time_s": 61.39,
+          "gen_tok_s": 30.5,
+          "content_preview": "### **Geopolitical Risk Assessment: Global Semiconductor Supply Chain**  \n*(Probability-weighted scenarios based on current geopolitical dynamics, technological trends, and strategic priorities)*  \n\n-"
+        }
+      },
+      "compaction": {
+        "skipped": true
+      },
+      "finished_at": "00:44:17"
+    }
+  }
+}

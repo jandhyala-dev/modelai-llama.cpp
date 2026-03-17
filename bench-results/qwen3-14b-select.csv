@@ -1,0 +1,4 @@
+model,pipeline,backend,prefix_tokens,compression_ratio,compacted_tokens,continuation_tokens,logit_cosine,threshold,pass,compaction_time_ms,solver_time_ms,query_gen_time_ms,baseline_decode_tok_s,compacted_decode_tok_s,active_n_kv
+Qwen3-14B-Q4_K_M,select,metal,2620,2,1310,16,0.998812,0.90,PASS,480.8,0.0,0.0,13.6,7.2,768
+Qwen3-14B-Q4_K_M,select,metal,2620,4,655,16,0.996322,0.80,PASS,386.8,0.0,0.0,13.6,8.5,768
+Qwen3-14B-Q4_K_M,select,metal,2620,8,327,16,0.989620,0.60,PASS,340.9,0.0,0.0,13.6,9.4,768

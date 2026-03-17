@@ -1,0 +1,7 @@
+{
+  "test_type": "compacted_50.0x",
+  "error": "HTTP Error 400: Bad Request",
+  "model": "Qwen3-30B-A3B",
+  "context_size": 32768,
+  "timestamp": "2026-03-16T18:36:43.626367+00:00"
+}
