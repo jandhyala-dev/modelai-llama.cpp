@@ -1,0 +1,408 @@
+{
+  "benchmark": "compaction-all-methods-v2",
+  "model": "Qwen3-Coder-30B-A3B-Instruct-1M-UD-Q4_K_XL",
+  "model_source": "unsloth",
+  "context_window": 65536,
+  "kv_type": "f16",
+  "hardware": "Apple M2 Pro 32GB",
+  "timestamp": "2026-03-16 21:39:10",
+  "fill_strategy": "3-turn multi-turn conversation (~4K-5K tokens)",
+  "notes": [
+    "select and solver completed all 5 ratios with 100% fact recall",
+    "omp timed out at 2x (>600s) and left server in stuck state",
+    "self_study and on_policy not reached due to cascading OMP timeout",
+    "No cosine_similarity field in compact API response (not exposed in V1)"
+  ],
+  "facts": [
+    {
+      "name": "NVIDIA data center revenue",
+      "value": "$115 billion"
+    },
+    {
+      "name": "AMD total revenue",
+      "value": "$28 billion"
+    },
+    {
+      "name": "Intel foundry losses",
+      "value": "$7 billion"
+    },
+    {
+      "name": "TSMC revenue",
+      "value": "$90 billion"
+    },
+    {
+      "name": "SK Hynix HBM3E market share",
+      "value": "50 percent"
+    },
+    {
+      "name": "Broadcom VMware synergy target",
+      "value": "$8.5 billion"
+    },
+    {
+      "name": "Sovereign AI investment globally",
+      "value": "$150 billion"
+    },
+    {
+      "name": "Apple annual buyback pace",
+      "value": "$110 billion"
+    },
+    {
+      "name": "NVIDIA CUDA developer count",
+      "value": "4 million"
+    },
+    {
+      "name": "AMD MI300X AI accelerator revenue",
+      "value": "$5 billion"
+    }
+  ],
+  "results": [
+    {
+      "method": "select",
+      "ratio": 2,
+      "actual_ratio": 2.0,
+      "status": "OK",
+      "kv_before": 3889,
+      "kv_after": 1944,
+      "compact_ms": 185,
+      "wall_ms": 187,
+      "cosine_similarity": null,
+      "pre_recall_pct": 100.0,
+      "post_recall_pct": 100.0,
+      "pre_recall_count": "10/10",
+      "post_recall_count": "10/10",
+      "facts_lost": [],
+      "facts_kept": [
+        "NVIDIA data center revenue",
+        "AMD total revenue",
+        "Intel foundry losses",
+        "TSMC revenue",
+        "SK Hynix HBM3E market share",
+        "Broadcom VMware synergy target",
+        "Sovereign AI investment globally",
+        "Apple annual buyback pace",
+        "NVIDIA CUDA developer count",
+        "AMD MI300X AI accelerator revenue"
+      ]
+    },
+    {
+      "method": "select",
+      "ratio": 4,
+      "actual_ratio": 4.0,
+      "status": "OK",
+      "kv_before": 4125,
+      "kv_after": 1031,
+      "compact_ms": 114,
+      "wall_ms": 115,
+      "cosine_similarity": null,
+      "pre_recall_pct": 100.0,
+      "post_recall_pct": 100.0,
+      "pre_recall_count": "10/10",
+      "post_recall_count": "10/10",
+      "facts_lost": [],
+      "facts_kept": [
+        "NVIDIA data center revenue",
+        "AMD total revenue",
+        "Intel foundry losses",
+        "TSMC revenue",
+        "SK Hynix HBM3E market share",
+        "Broadcom VMware synergy target",
+        "Sovereign AI investment globally",
+        "Apple annual buyback pace",
+        "NVIDIA CUDA developer count",
+        "AMD MI300X AI accelerator revenue"
+      ]
+    },
+    {
+      "method": "select",
+      "ratio": 10,
+      "actual_ratio": 10.0,
+      "status": "OK",
+      "kv_before": 5516,
+      "kv_after": 551,
+      "compact_ms": 105,
+      "wall_ms": 107,
+      "cosine_similarity": null,
+      "pre_recall_pct": 100.0,
+      "post_recall_pct": 100.0,
+      "pre_recall_count": "10/10",
+      "post_recall_count": "10/10",
+      "facts_lost": [],
+      "facts_kept": [
+        "NVIDIA data center revenue",
+        "AMD total revenue",
+        "Intel foundry losses",
+        "TSMC revenue",
+        "SK Hynix HBM3E market share",
+        "Broadcom VMware synergy target",
+        "Sovereign AI investment globally",
+        "Apple annual buyback pace",
+        "NVIDIA CUDA developer count",
+        "AMD MI300X AI accelerator revenue"
+      ]
+    },
+    {
+      "method": "select",
+      "ratio": 25,
+      "actual_ratio": 25.1,
+      "status": "OK",
+      "kv_before": 4242,
+      "kv_after": 169,
+      "compact_ms": 64,
+      "wall_ms": 65,
+      "cosine_similarity": null,
+      "pre_recall_pct": 100.0,
+      "post_recall_pct": 100.0,
+      "pre_recall_count": "10/10",
+      "post_recall_count": "10/10",
+      "facts_lost": [],
+      "facts_kept": [
+        "NVIDIA data center revenue",
+        "AMD total revenue",
+        "Intel foundry losses",
+        "TSMC revenue",
+        "SK Hynix HBM3E market share",
+        "Broadcom VMware synergy target",
+        "Sovereign AI investment globally",
+        "Apple annual buyback pace",
+        "NVIDIA CUDA developer count",
+        "AMD MI300X AI accelerator revenue"
+      ]
+    },
+    {
+      "method": "select",
+      "ratio": 50,
+      "actual_ratio": 50.1,
+      "status": "OK",
+      "kv_before": 4213,
+      "kv_after": 84,
+      "compact_ms": 62,
+      "wall_ms": 64,
+      "cosine_similarity": null,
+      "pre_recall_pct": 100.0,
+      "post_recall_pct": 100.0,
+      "pre_recall_count": "10/10",
+      "post_recall_count": "10/10",
+      "facts_lost": [],
+      "facts_kept": [
+        "NVIDIA data center revenue",
+        "AMD total revenue",
+        "Intel foundry losses",
+        "TSMC revenue",
+        "SK Hynix HBM3E market share",
+        "Broadcom VMware synergy target",
+        "Sovereign AI investment globally",
+        "Apple annual buyback pace",
+        "NVIDIA CUDA developer count",
+        "AMD MI300X AI accelerator revenue"
+      ]
+    },
+    {
+      "method": "solver",
+      "ratio": 2,
+      "actual_ratio": 2.0,
+      "status": "OK",
+      "kv_before": 4182,
+      "kv_after": 2091,
+      "compact_ms": 47225,
+      "wall_ms": 47227,
+      "cosine_similarity": null,
+      "pre_recall_pct": 100.0,
+      "post_recall_pct": 100.0,
+      "pre_recall_count": "10/10",
+      "post_recall_count": "10/10",
+      "facts_lost": [],
+      "facts_kept": [
+        "NVIDIA data center revenue",
+        "AMD total revenue",
+        "Intel foundry losses",
+        "TSMC revenue",
+        "SK Hynix HBM3E market share",
+        "Broadcom VMware synergy target",
+        "Sovereign AI investment globally",
+        "Apple annual buyback pace",
+        "NVIDIA CUDA developer count",
+        "AMD MI300X AI accelerator revenue"
+      ]
+    },
+    {
+      "method": "solver",
+      "ratio": 4,
+      "actual_ratio": 4.0,
+      "status": "OK",
+      "kv_before": 4386,
+      "kv_after": 1096,
+      "compact_ms": 44000,
+      "wall_ms": 44002,
+      "cosine_similarity": null,
+      "pre_recall_pct": 100.0,
+      "post_recall_pct": 100.0,
+      "pre_recall_count": "10/10",
+      "post_recall_count": "10/10",
+      "facts_lost": [],
+      "facts_kept": [
+        "NVIDIA data center revenue",
+        "AMD total revenue",
+        "Intel foundry losses",
+        "TSMC revenue",
+        "SK Hynix HBM3E market share",
+        "Broadcom VMware synergy target",
+        "Sovereign AI investment globally",
+        "Apple annual buyback pace",
+        "NVIDIA CUDA developer count",
+        "AMD MI300X AI accelerator revenue"
+      ]
+    },
+    {
+      "method": "solver",
+      "ratio": 10,
+      "actual_ratio": 10.0,
+      "status": "OK",
+      "kv_before": 5006,
+      "kv_after": 500,
+      "compact_ms": 47662,
+      "wall_ms": 47664,
+      "cosine_similarity": null,
+      "pre_recall_pct": 100.0,
+      "post_recall_pct": 100.0,
+      "pre_recall_count": "10/10",
+      "post_recall_count": "10/10",
+      "facts_lost": [],
+      "facts_kept": [
+        "NVIDIA data center revenue",
+        "AMD total revenue",
+        "Intel foundry losses",
+        "TSMC revenue",
+        "SK Hynix HBM3E market share",
+        "Broadcom VMware synergy target",
+        "Sovereign AI investment globally",
+        "Apple annual buyback pace",
+        "NVIDIA CUDA developer count",
+        "AMD MI300X AI accelerator revenue"
+      ]
+    },
+    {
+      "method": "solver",
+      "ratio": 25,
+      "actual_ratio": 25.0,
+      "status": "OK",
+      "kv_before": 4278,
+      "kv_after": 171,
+      "compact_ms": 39584,
+      "wall_ms": 39586,
+      "cosine_similarity": null,
+      "pre_recall_pct": 100.0,
+      "post_recall_pct": 100.0,
+      "pre_recall_count": "10/10",
+      "post_recall_count": "10/10",
+      "facts_lost": [],
+      "facts_kept": [
+        "NVIDIA data center revenue",
+        "AMD total revenue",
+        "Intel foundry losses",
+        "TSMC revenue",
+        "SK Hynix HBM3E market share",
+        "Broadcom VMware synergy target",
+        "Sovereign AI investment globally",
+        "Apple annual buyback pace",
+        "NVIDIA CUDA developer count",
+        "AMD MI300X AI accelerator revenue"
+      ]
+    },
+    {
+      "method": "solver",
+      "ratio": 50,
+      "actual_ratio": 50.2,
+      "status": "OK",
+      "kv_before": 4421,
+      "kv_after": 88,
+      "compact_ms": 40387,
+      "wall_ms": 40388,
+      "cosine_similarity": null,
+      "pre_recall_pct": 100.0,
+      "post_recall_pct": 100.0,
+      "pre_recall_count": "10/10",
+      "post_recall_count": "10/10",
+      "facts_lost": [],
+      "facts_kept": [
+        "NVIDIA data center revenue",
+        "AMD total revenue",
+        "Intel foundry losses",
+        "TSMC revenue",
+        "SK Hynix HBM3E market share",
+        "Broadcom VMware synergy target",
+        "Sovereign AI investment globally",
+        "Apple annual buyback pace",
+        "NVIDIA CUDA developer count",
+        "AMD MI300X AI accelerator revenue"
+      ]
+    },
+    {
+      "method": "omp",
+      "ratio": 2,
+      "status": "COMPACT_FAILED",
+      "error": "timed out (>600s)",
+      "kv_before": 5139,
+      "pre_recall_pct": 100.0
+    },
+    {
+      "method": "omp",
+      "ratio": 4,
+      "status": "FILL_ERROR",
+      "error": "server stuck after OMP timeout"
+    },
+    {
+      "method": "omp",
+      "ratio": 10,
+      "status": "FILL_ERROR",
+      "error": "server stuck after OMP timeout"
+    },
+    {
+      "method": "omp",
+      "ratio": 25,
+      "status": "FILL_ERROR",
+      "error": "server stuck after OMP timeout"
+    },
+    {
+      "method": "omp",
+      "ratio": 50,
+      "status": "FILL_ERROR",
+      "error": "server stuck after OMP timeout"
+    },
+    {
+      "method": "self_study",
+      "ratio": 4,
+      "status": "NOT_RUN",
+      "error": "blocked by OMP server timeout"
+    },
+    {
+      "method": "self_study",
+      "ratio": 10,
+      "status": "NOT_RUN",
+      "error": "blocked by OMP server timeout"
+    },
+    {
+      "method": "self_study",
+      "ratio": 25,
+      "status": "NOT_RUN",
+      "error": "blocked by OMP server timeout"
+    },
+    {
+      "method": "on_policy",
+      "ratio": 4,
+      "status": "NOT_RUN",
+      "error": "blocked by OMP server timeout"
+    },
+    {
+      "method": "on_policy",
+      "ratio": 10,
+      "status": "NOT_RUN",
+      "error": "blocked by OMP server timeout"
+    },
+    {
+      "method": "on_policy",
+      "ratio": 25,
+      "status": "NOT_RUN",
+      "error": "blocked by OMP server timeout"
+    }
+  ]
+}

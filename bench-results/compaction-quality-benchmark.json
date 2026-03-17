@@ -1,0 +1,1096 @@
+{
+  "benchmark": "compaction-quality",
+  "model": "Qwen3-Coder-30B-A3B-Instruct-1M-UD-Q4_K_XL",
+  "context_window": 65536,
+  "kv_type": "f16",
+  "hardware": "Apple M2 Pro 32GB",
+  "timestamp": "2026-03-16 20:04:27",
+  "facts": [
+    {
+      "name": "NVIDIA data center revenue",
+      "value": "$115 billion"
+    },
+    {
+      "name": "AMD total revenue",
+      "value": "$28 billion"
+    },
+    {
+      "name": "Intel foundry losses",
+      "value": "$7 billion"
+    },
+    {
+      "name": "TSMC revenue",
+      "value": "$90 billion"
+    },
+    {
+      "name": "SK Hynix HBM3E market share",
+      "value": "50 percent"
+    },
+    {
+      "name": "Broadcom VMware synergy target",
+      "value": "$8.5 billion"
+    },
+    {
+      "name": "Total sovereign AI investment globally",
+      "value": "$150 billion"
+    },
+    {
+      "name": "Apple annual buyback pace",
+      "value": "$110 billion"
+    },
+    {
+      "name": "NVIDIA CUDA developer count",
+      "value": "4 million"
+    },
+    {
+      "name": "AMD MI300X AI accelerator revenue",
+      "value": "$5 billion"
+    }
+  ],
+  "phase1": [
+    {
+      "ratio": 2,
+      "status": "COMPACT_FAILED",
+      "error": "{'error': {'code': 400, 'message': 'Target tokens must be less than compactable tokens', 'type': 'invalid_request_error'}}"
+    },
+    {
+      "ratio": 4,
+      "status": "COMPACT_FAILED",
+      "error": "{'error': {'code': 400, 'message': 'Target tokens must be less than compactable tokens', 'type': 'invalid_request_error'}}"
+    },
+    {
+      "ratio": 10,
+      "actual_ratio": 1.8,
+      "status": "OK",
+      "kv_before": 1438,
+      "kv_after": 143,
+      "compact_ms": 19.0,
+      "pre_recall": {
+        "recalled": 5,
+        "total": 10,
+        "pct": 50.0,
+        "details": [
+          {
+            "fact": "NVIDIA data center revenue",
+            "expected": "$115 billion",
+            "recalled": false
+          },
+          {
+            "fact": "AMD total revenue",
+            "expected": "$28 billion",
+            "recalled": false
+          },
+          {
+            "fact": "Intel foundry losses",
+            "expected": "$7 billion",
+            "recalled": true
+          },
+          {
+            "fact": "TSMC revenue",
+            "expected": "$90 billion",
+            "recalled": false
+          },
+          {
+            "fact": "SK Hynix HBM3E market share",
+            "expected": "50 percent",
+            "recalled": true
+          },
+          {
+            "fact": "Broadcom VMware synergy target",
+            "expected": "$8.5 billion",
+            "recalled": false
+          },
+          {
+            "fact": "Total sovereign AI investment globally",
+            "expected": "$150 billion",
+            "recalled": true
+          },
+          {
+            "fact": "Apple annual buyback pace",
+            "expected": "$110 billion",
+            "recalled": false
+          },
+          {
+            "fact": "NVIDIA CUDA developer count",
+            "expected": "4 million",
+            "recalled": true
+          },
+          {
+            "fact": "AMD MI300X AI accelerator revenue",
+            "expected": "$5 billion",
+            "recalled": true
+          }
+        ],
+        "raw_answer": "1. 23.8 billion\n2. 52.8 billion\n3. 1.2 billion\n4. 153.2 billion\n5. 65%\n6. 20%\n7. 150 billion\n8. 150 billion\n9. 2.5 million\n10. 1.8 billion",
+        "tokens": 81
+      },
+      "post_recall": {
+        "recalled": 5,
+        "total": 10,
+        "pct": 50.0,
+        "details": [
+          {
+            "fact": "NVIDIA data center revenue",
+            "expected": "$115 billion",
+            "recalled": false
+          },
+          {
+            "fact": "AMD total revenue",
+            "expected": "$28 billion",
+            "recalled": false
+          },
+          {
+            "fact": "Intel foundry losses",
+            "expected": "$7 billion",
+            "recalled": true
+          },
+          {
+            "fact": "TSMC revenue",
+            "expected": "$90 billion",
+            "recalled": false
+          },
+          {
+            "fact": "SK Hynix HBM3E market share",
+            "expected": "50 percent",
+            "recalled": true
+          },
+          {
+            "fact": "Broadcom VMware synergy target",
+            "expected": "$8.5 billion",
+            "recalled": false
+          },
+          {
+            "fact": "Total sovereign AI investment globally",
+            "expected": "$150 billion",
+            "recalled": true
+          },
+          {
+            "fact": "Apple annual buyback pace",
+            "expected": "$110 billion",
+            "recalled": false
+          },
+          {
+            "fact": "NVIDIA CUDA developer count",
+            "expected": "4 million",
+            "recalled": true
+          },
+          {
+            "fact": "AMD MI300X AI accelerator revenue",
+            "expected": "$5 billion",
+            "recalled": true
+          }
+        ],
+        "raw_answer": "1. 2023 Data Center Revenue: 23.7 billion\n2. 2023 Total Revenue: 70.7 billion\n3. Intel Foundry losses: 10.2 billion\n4. 2023 TSMC Revenue: 172.5 billion\n5. SK Hynix HBM3E market share: 35%\n6. Broadcom VMware synergy target: 15%\n7. Total sovereign AI investment globally: 150 billion\n8. Apple annual buyback pace: 150 billion\n9. NVIDIA CUDA developer count: 20 million\n10. AMD MI300X AI accelerator revenue: 1.2 billion",
+        "tokens": 156
+      },
+      "facts_lost": [
+        "NVIDIA data center revenue",
+        "AMD total revenue",
+        "TSMC revenue",
+        "Broadcom VMware synergy target",
+        "Apple annual buyback pace"
+      ],
+      "facts_kept": [
+        "Intel foundry losses",
+        "SK Hynix HBM3E market share",
+        "Total sovereign AI investment globally",
+        "NVIDIA CUDA developer count",
+        "AMD MI300X AI accelerator revenue"
+      ]
+    },
+    {
+      "ratio": 25,
+      "actual_ratio": 5.2,
+      "status": "OK",
+      "kv_before": 1595,
+      "kv_after": 63,
+      "compact_ms": 11.5,
+      "pre_recall": {
+        "recalled": 5,
+        "total": 10,
+        "pct": 50.0,
+        "details": [
+          {
+            "fact": "NVIDIA data center revenue",
+            "expected": "$115 billion",
+            "recalled": false
+          },
+          {
+            "fact": "AMD total revenue",
+            "expected": "$28 billion",
+            "recalled": false
+          },
+          {
+            "fact": "Intel foundry losses",
+            "expected": "$7 billion",
+            "recalled": true
+          },
+          {
+            "fact": "TSMC revenue",
+            "expected": "$90 billion",
+            "recalled": false
+          },
+          {
+            "fact": "SK Hynix HBM3E market share",
+            "expected": "50 percent",
+            "recalled": true
+          },
+          {
+            "fact": "Broadcom VMware synergy target",
+            "expected": "$8.5 billion",
+            "recalled": false
+          },
+          {
+            "fact": "Total sovereign AI investment globally",
+            "expected": "$150 billion",
+            "recalled": true
+          },
+          {
+            "fact": "Apple annual buyback pace",
+            "expected": "$110 billion",
+            "recalled": false
+          },
+          {
+            "fact": "NVIDIA CUDA developer count",
+            "expected": "4 million",
+            "recalled": true
+          },
+          {
+            "fact": "AMD MI300X AI accelerator revenue",
+            "expected": "$5 billion",
+            "recalled": true
+          }
+        ],
+        "raw_answer": "1. 2023 Data Center Revenue: 22.7 billion\n2. 2023 Total Revenue: 70.7 billion\n3. Intel Foundry losses: 1.2 billion\n4. 2023 TSMC Revenue: 152.2 billion\n5. SK Hynix HBM3E market share: 35%\n6. Broadcom VMware synergy target: 20%\n7. Total sovereign AI investment globally: 150 billion\n8. Apple annual buyback pace: 150 billion\n9. NVIDIA CUDA developer count: 20 million\n10. AMD MI300X AI accelerator revenue: 1.8 billion",
+        "tokens": 155
+      },
+      "post_recall": {
+        "recalled": 5,
+        "total": 10,
+        "pct": 50.0,
+        "details": [
+          {
+            "fact": "NVIDIA data center revenue",
+            "expected": "$115 billion",
+            "recalled": false
+          },
+          {
+            "fact": "AMD total revenue",
+            "expected": "$28 billion",
+            "recalled": false
+          },
+          {
+            "fact": "Intel foundry losses",
+            "expected": "$7 billion",
+            "recalled": true
+          },
+          {
+            "fact": "TSMC revenue",
+            "expected": "$90 billion",
+            "recalled": false
+          },
+          {
+            "fact": "SK Hynix HBM3E market share",
+            "expected": "50 percent",
+            "recalled": true
+          },
+          {
+            "fact": "Broadcom VMware synergy target",
+            "expected": "$8.5 billion",
+            "recalled": false
+          },
+          {
+            "fact": "Total sovereign AI investment globally",
+            "expected": "$150 billion",
+            "recalled": true
+          },
+          {
+            "fact": "Apple annual buyback pace",
+            "expected": "$110 billion",
+            "recalled": false
+          },
+          {
+            "fact": "NVIDIA CUDA developer count",
+            "expected": "4 million",
+            "recalled": true
+          },
+          {
+            "fact": "AMD MI300X AI accelerator revenue",
+            "expected": "$5 billion",
+            "recalled": true
+          }
+        ],
+        "raw_answer": "1. 12000\n2. 50000\n3. 20000\n4. 120000\n5. 60\n6. 15000\n7. 200000\n8. 150000\n9. 2000000\n10. 8000",
+        "tokens": 92
+      },
+      "facts_lost": [
+        "NVIDIA data center revenue",
+        "AMD total revenue",
+        "TSMC revenue",
+        "Broadcom VMware synergy target",
+        "Apple annual buyback pace"
+      ],
+      "facts_kept": [
+        "Intel foundry losses",
+        "SK Hynix HBM3E market share",
+        "Total sovereign AI investment globally",
+        "NVIDIA CUDA developer count",
+        "AMD MI300X AI accelerator revenue"
+      ]
+    },
+    {
+      "ratio": 50,
+      "actual_ratio": 9.3,
+      "status": "OK",
+      "kv_before": 1759,
+      "kv_after": 35,
+      "compact_ms": 11.1,
+      "pre_recall": {
+        "recalled": 5,
+        "total": 10,
+        "pct": 50.0,
+        "details": [
+          {
+            "fact": "NVIDIA data center revenue",
+            "expected": "$115 billion",
+            "recalled": false
+          },
+          {
+            "fact": "AMD total revenue",
+            "expected": "$28 billion",
+            "recalled": false
+          },
+          {
+            "fact": "Intel foundry losses",
+            "expected": "$7 billion",
+            "recalled": true
+          },
+          {
+            "fact": "TSMC revenue",
+            "expected": "$90 billion",
+            "recalled": false
+          },
+          {
+            "fact": "SK Hynix HBM3E market share",
+            "expected": "50 percent",
+            "recalled": true
+          },
+          {
+            "fact": "Broadcom VMware synergy target",
+            "expected": "$8.5 billion",
+            "recalled": false
+          },
+          {
+            "fact": "Total sovereign AI investment globally",
+            "expected": "$150 billion",
+            "recalled": true
+          },
+          {
+            "fact": "Apple annual buyback pace",
+            "expected": "$110 billion",
+            "recalled": false
+          },
+          {
+            "fact": "NVIDIA CUDA developer count",
+            "expected": "4 million",
+            "recalled": true
+          },
+          {
+            "fact": "AMD MI300X AI accelerator revenue",
+            "expected": "$5 billion",
+            "recalled": true
+          }
+        ],
+        "raw_answer": "1. 1500000000000\n2. 500000000000\n3. 200000000000\n4. 1200000000000\n5. 60\n6. 2000000000000\n7. 20000000000000\n8. 1500000000000\n9. 20000000\n10. 500000000000",
+        "tokens": 153
+      },
+      "post_recall": {
+        "recalled": 5,
+        "total": 10,
+        "pct": 50.0,
+        "details": [
+          {
+            "fact": "NVIDIA data center revenue",
+            "expected": "$115 billion",
+            "recalled": false
+          },
+          {
+            "fact": "AMD total revenue",
+            "expected": "$28 billion",
+            "recalled": false
+          },
+          {
+            "fact": "Intel foundry losses",
+            "expected": "$7 billion",
+            "recalled": true
+          },
+          {
+            "fact": "TSMC revenue",
+            "expected": "$90 billion",
+            "recalled": false
+          },
+          {
+            "fact": "SK Hynix HBM3E market share",
+            "expected": "50 percent",
+            "recalled": true
+          },
+          {
+            "fact": "Broadcom VMware synergy target",
+            "expected": "$8.5 billion",
+            "recalled": false
+          },
+          {
+            "fact": "Total sovereign AI investment globally",
+            "expected": "$150 billion",
+            "recalled": true
+          },
+          {
+            "fact": "Apple annual buyback pace",
+            "expected": "$110 billion",
+            "recalled": false
+          },
+          {
+            "fact": "NVIDIA CUDA developer count",
+            "expected": "4 million",
+            "recalled": true
+          },
+          {
+            "fact": "AMD MI300X AI accelerator revenue",
+            "expected": "$5 billion",
+            "recalled": true
+          }
+        ],
+        "raw_answer": "1. 2023 Data Center Revenue: 23.7 billion\n2. 2023 Total Revenue: 70.7 billion\n3. Intel Foundry losses: 1.2 billion\n4. 2023 TSMC Revenue: 152.4 billion\n5. SK Hynix HBM3E market share: 35%\n6. Broadcom VMware synergy target: 15%\n7. Total sovereign AI investment globally: 150 billion\n8. Apple annual buyback pace: 150 billion\n9. NVIDIA CUDA developer count: 20 million\n10. AMD MI300X AI accelerator revenue: 2.1 billion",
+        "tokens": 155
+      },
+      "facts_lost": [
+        "NVIDIA data center revenue",
+        "AMD total revenue",
+        "TSMC revenue",
+        "Broadcom VMware synergy target",
+        "Apple annual buyback pace"
+      ],
+      "facts_kept": [
+        "Intel foundry losses",
+        "SK Hynix HBM3E market share",
+        "Total sovereign AI investment globally",
+        "NVIDIA CUDA developer count",
+        "AMD MI300X AI accelerator revenue"
+      ]
+    }
+  ],
+  "phase2_iterative": {
+    "effective_tokens": 1008019,
+    "cycles": 76,
+    "data": [
+      {
+        "cycle": 1,
+        "tokens": 15785,
+        "effective": 15785,
+        "ratio": 10.0,
+        "compact_ms": 322.3,
+        "fill_s": 93.7
+      },
+      {
+        "cycle": 2,
+        "tokens": 13011,
+        "effective": 28796,
+        "ratio": 10.0,
+        "compact_ms": 262.7,
+        "fill_s": 86.4
+      },
+      {
+        "cycle": 3,
+        "tokens": 12184,
+        "effective": 40980,
+        "ratio": 10.0,
+        "compact_ms": 226.6,
+        "fill_s": 81.5
+      },
+      {
+        "cycle": 4,
+        "tokens": 14221,
+        "effective": 55201,
+        "ratio": 10.0,
+        "compact_ms": 270.4,
+        "fill_s": 90.8
+      },
+      {
+        "cycle": 5,
+        "tokens": 13546,
+        "effective": 68747,
+        "ratio": 10.0,
+        "compact_ms": 288.9,
+        "fill_s": 82.6
+      },
+      {
+        "cycle": 6,
+        "tokens": 12378,
+        "effective": 81125,
+        "ratio": 10.0,
+        "compact_ms": 259.8,
+        "fill_s": 80.4
+      },
+      {
+        "cycle": 7,
+        "tokens": 12717,
+        "effective": 93842,
+        "ratio": 10.0,
+        "compact_ms": 256.4,
+        "fill_s": 82.0
+      },
+      {
+        "cycle": 8,
+        "tokens": 12741,
+        "effective": 106583,
+        "ratio": 10.0,
+        "compact_ms": 246.1,
+        "fill_s": 82.2
+      },
+      {
+        "cycle": 9,
+        "tokens": 12721,
+        "effective": 119304,
+        "ratio": 10.0,
+        "compact_ms": 251.4,
+        "fill_s": 82.1
+      },
+      {
+        "cycle": 10,
+        "tokens": 12372,
+        "effective": 131676,
+        "ratio": 10.0,
+        "compact_ms": 241.0,
+        "fill_s": 80.3
+      },
+      {
+        "cycle": 11,
+        "tokens": 12906,
+        "effective": 144582,
+        "ratio": 10.0,
+        "compact_ms": 256.7,
+        "fill_s": 83.3
+      },
+      {
+        "cycle": 12,
+        "tokens": 13714,
+        "effective": 158296,
+        "ratio": 10.0,
+        "compact_ms": 259.5,
+        "fill_s": 87.2
+      },
+      {
+        "cycle": 13,
+        "tokens": 12688,
+        "effective": 170984,
+        "ratio": 10.0,
+        "compact_ms": 236.7,
+        "fill_s": 81.0
+      },
+      {
+        "cycle": 14,
+        "tokens": 13643,
+        "effective": 184627,
+        "ratio": 10.0,
+        "compact_ms": 246.7,
+        "fill_s": 82.6
+      },
+      {
+        "cycle": 15,
+        "tokens": 12959,
+        "effective": 197586,
+        "ratio": 10.0,
+        "compact_ms": 249.0,
+        "fill_s": 71.5
+      },
+      {
+        "cycle": 16,
+        "tokens": 13140,
+        "effective": 210726,
+        "ratio": 10.0,
+        "compact_ms": 264.1,
+        "fill_s": 83.7
+      },
+      {
+        "cycle": 17,
+        "tokens": 14078,
+        "effective": 224804,
+        "ratio": 10.0,
+        "compact_ms": 253.6,
+        "fill_s": 89.4
+      },
+      {
+        "cycle": 18,
+        "tokens": 14105,
+        "effective": 238909,
+        "ratio": 10.0,
+        "compact_ms": 268.1,
+        "fill_s": 89.5
+      },
+      {
+        "cycle": 19,
+        "tokens": 13033,
+        "effective": 251942,
+        "ratio": 10.0,
+        "compact_ms": 244.4,
+        "fill_s": 81.1
+      },
+      {
+        "cycle": 20,
+        "tokens": 16115,
+        "effective": 268057,
+        "ratio": 10.0,
+        "compact_ms": 308.5,
+        "fill_s": 101.7
+      },
+      {
+        "cycle": 21,
+        "tokens": 12874,
+        "effective": 280931,
+        "ratio": 10.0,
+        "compact_ms": 247.0,
+        "fill_s": 82.3
+      },
+      {
+        "cycle": 22,
+        "tokens": 12933,
+        "effective": 293864,
+        "ratio": 10.0,
+        "compact_ms": 255.0,
+        "fill_s": 82.6
+      },
+      {
+        "cycle": 23,
+        "tokens": 13091,
+        "effective": 306955,
+        "ratio": 10.0,
+        "compact_ms": 239.6,
+        "fill_s": 83.7
+      },
+      {
+        "cycle": 24,
+        "tokens": 13815,
+        "effective": 320770,
+        "ratio": 10.0,
+        "compact_ms": 263.0,
+        "fill_s": 78.0
+      },
+      {
+        "cycle": 25,
+        "tokens": 12714,
+        "effective": 333484,
+        "ratio": 10.0,
+        "compact_ms": 236.8,
+        "fill_s": 81.2
+      },
+      {
+        "cycle": 26,
+        "tokens": 12620,
+        "effective": 346104,
+        "ratio": 10.0,
+        "compact_ms": 236.3,
+        "fill_s": 80.8
+      },
+      {
+        "cycle": 27,
+        "tokens": 11980,
+        "effective": 358084,
+        "ratio": 10.0,
+        "compact_ms": 198.3,
+        "fill_s": 68.5
+      },
+      {
+        "cycle": 28,
+        "tokens": 13079,
+        "effective": 371163,
+        "ratio": 10.0,
+        "compact_ms": 232.0,
+        "fill_s": 83.3
+      },
+      {
+        "cycle": 29,
+        "tokens": 12407,
+        "effective": 383570,
+        "ratio": 10.0,
+        "compact_ms": 235.6,
+        "fill_s": 79.6
+      },
+      {
+        "cycle": 30,
+        "tokens": 12146,
+        "effective": 395716,
+        "ratio": 10.0,
+        "compact_ms": 209.0,
+        "fill_s": 63.9
+      },
+      {
+        "cycle": 31,
+        "tokens": 13970,
+        "effective": 409686,
+        "ratio": 10.0,
+        "compact_ms": 262.4,
+        "fill_s": 86.8
+      },
+      {
+        "cycle": 32,
+        "tokens": 12909,
+        "effective": 422595,
+        "ratio": 10.0,
+        "compact_ms": 247.6,
+        "fill_s": 82.3
+      },
+      {
+        "cycle": 33,
+        "tokens": 12530,
+        "effective": 435125,
+        "ratio": 10.0,
+        "compact_ms": 234.0,
+        "fill_s": 80.2
+      },
+      {
+        "cycle": 34,
+        "tokens": 13485,
+        "effective": 448610,
+        "ratio": 10.0,
+        "compact_ms": 257.8,
+        "fill_s": 83.1
+      },
+      {
+        "cycle": 35,
+        "tokens": 13399,
+        "effective": 462009,
+        "ratio": 10.0,
+        "compact_ms": 252.0,
+        "fill_s": 85.5
+      },
+      {
+        "cycle": 36,
+        "tokens": 14135,
+        "effective": 476144,
+        "ratio": 10.0,
+        "compact_ms": 269.2,
+        "fill_s": 88.8
+      },
+      {
+        "cycle": 37,
+        "tokens": 13510,
+        "effective": 489654,
+        "ratio": 10.0,
+        "compact_ms": 266.6,
+        "fill_s": 86.0
+      },
+      {
+        "cycle": 38,
+        "tokens": 13086,
+        "effective": 502740,
+        "ratio": 10.0,
+        "compact_ms": 253.0,
+        "fill_s": 83.5
+      },
+      {
+        "cycle": 39,
+        "tokens": 16916,
+        "effective": 519656,
+        "ratio": 10.0,
+        "compact_ms": 316.5,
+        "fill_s": 107.3
+      },
+      {
+        "cycle": 40,
+        "tokens": 13105,
+        "effective": 532761,
+        "ratio": 10.0,
+        "compact_ms": 253.0,
+        "fill_s": 83.7
+      },
+      {
+        "cycle": 41,
+        "tokens": 12733,
+        "effective": 545494,
+        "ratio": 10.0,
+        "compact_ms": 243.5,
+        "fill_s": 81.3
+      },
+      {
+        "cycle": 42,
+        "tokens": 12553,
+        "effective": 558047,
+        "ratio": 10.0,
+        "compact_ms": 239.6,
+        "fill_s": 80.6
+      },
+      {
+        "cycle": 43,
+        "tokens": 14566,
+        "effective": 572613,
+        "ratio": 10.0,
+        "compact_ms": 286.5,
+        "fill_s": 91.7
+      },
+      {
+        "cycle": 44,
+        "tokens": 12916,
+        "effective": 585529,
+        "ratio": 10.0,
+        "compact_ms": 230.4,
+        "fill_s": 82.1
+      },
+      {
+        "cycle": 45,
+        "tokens": 12086,
+        "effective": 597615,
+        "ratio": 10.0,
+        "compact_ms": 219.7,
+        "fill_s": 71.6
+      },
+      {
+        "cycle": 46,
+        "tokens": 12642,
+        "effective": 610257,
+        "ratio": 10.0,
+        "compact_ms": 247.2,
+        "fill_s": 80.4
+      },
+      {
+        "cycle": 47,
+        "tokens": 13149,
+        "effective": 623406,
+        "ratio": 10.0,
+        "compact_ms": 253.1,
+        "fill_s": 83.4
+      },
+      {
+        "cycle": 48,
+        "tokens": 12487,
+        "effective": 635893,
+        "ratio": 10.0,
+        "compact_ms": 232.3,
+        "fill_s": 79.3
+      },
+      {
+        "cycle": 49,
+        "tokens": 12506,
+        "effective": 648399,
+        "ratio": 10.0,
+        "compact_ms": 230.6,
+        "fill_s": 79.8
+      },
+      {
+        "cycle": 50,
+        "tokens": 12806,
+        "effective": 661205,
+        "ratio": 10.0,
+        "compact_ms": 228.0,
+        "fill_s": 81.6
+      },
+      {
+        "cycle": 51,
+        "tokens": 13665,
+        "effective": 674870,
+        "ratio": 10.0,
+        "compact_ms": 256.7,
+        "fill_s": 86.3
+      },
+      {
+        "cycle": 52,
+        "tokens": 12453,
+        "effective": 687323,
+        "ratio": 10.0,
+        "compact_ms": 230.9,
+        "fill_s": 79.5
+      },
+      {
+        "cycle": 53,
+        "tokens": 13427,
+        "effective": 700750,
+        "ratio": 10.0,
+        "compact_ms": 262.3,
+        "fill_s": 81.2
+      },
+      {
+        "cycle": 54,
+        "tokens": 13485,
+        "effective": 714235,
+        "ratio": 10.0,
+        "compact_ms": 238.4,
+        "fill_s": 85.4
+      },
+      {
+        "cycle": 55,
+        "tokens": 13170,
+        "effective": 727405,
+        "ratio": 10.0,
+        "compact_ms": 258.7,
+        "fill_s": 83.6
+      },
+      {
+        "cycle": 56,
+        "tokens": 13969,
+        "effective": 741374,
+        "ratio": 10.0,
+        "compact_ms": 255.8,
+        "fill_s": 88.3
+      },
+      {
+        "cycle": 57,
+        "tokens": 13843,
+        "effective": 755217,
+        "ratio": 10.0,
+        "compact_ms": 249.2,
+        "fill_s": 87.8
+      },
+      {
+        "cycle": 58,
+        "tokens": 12812,
+        "effective": 768029,
+        "ratio": 10.0,
+        "compact_ms": 240.1,
+        "fill_s": 81.5
+      },
+      {
+        "cycle": 59,
+        "tokens": 17178,
+        "effective": 785207,
+        "ratio": 10.0,
+        "compact_ms": 339.0,
+        "fill_s": 108.3
+      },
+      {
+        "cycle": 60,
+        "tokens": 13049,
+        "effective": 798256,
+        "ratio": 10.0,
+        "compact_ms": 250.8,
+        "fill_s": 82.8
+      },
+      {
+        "cycle": 61,
+        "tokens": 12405,
+        "effective": 810661,
+        "ratio": 10.0,
+        "compact_ms": 214.7,
+        "fill_s": 79.3
+      },
+      {
+        "cycle": 62,
+        "tokens": 13676,
+        "effective": 824337,
+        "ratio": 10.0,
+        "compact_ms": 258.0,
+        "fill_s": 82.0
+      },
+      {
+        "cycle": 63,
+        "tokens": 13852,
+        "effective": 838189,
+        "ratio": 10.0,
+        "compact_ms": 261.4,
+        "fill_s": 87.6
+      },
+      {
+        "cycle": 64,
+        "tokens": 12421,
+        "effective": 850610,
+        "ratio": 10.0,
+        "compact_ms": 226.1,
+        "fill_s": 79.7
+      },
+      {
+        "cycle": 65,
+        "tokens": 12736,
+        "effective": 863346,
+        "ratio": 10.0,
+        "compact_ms": 276.7,
+        "fill_s": 79.3
+      },
+      {
+        "cycle": 66,
+        "tokens": 12594,
+        "effective": 875940,
+        "ratio": 10.0,
+        "compact_ms": 430.8,
+        "fill_s": 80.7
+      },
+      {
+        "cycle": 67,
+        "tokens": 13072,
+        "effective": 889012,
+        "ratio": 10.0,
+        "compact_ms": 267.6,
+        "fill_s": 81.5
+      },
+      {
+        "cycle": 68,
+        "tokens": 12148,
+        "effective": 901160,
+        "ratio": 10.0,
+        "compact_ms": 231.2,
+        "fill_s": 77.2
+      },
+      {
+        "cycle": 69,
+        "tokens": 12902,
+        "effective": 914062,
+        "ratio": 10.0,
+        "compact_ms": 275.8,
+        "fill_s": 84.0
+      },
+      {
+        "cycle": 70,
+        "tokens": 13810,
+        "effective": 927872,
+        "ratio": 10.0,
+        "compact_ms": 259.4,
+        "fill_s": 84.9
+      },
+      {
+        "cycle": 71,
+        "tokens": 12738,
+        "effective": 940610,
+        "ratio": 10.0,
+        "compact_ms": 231.2,
+        "fill_s": 79.1
+      },
+      {
+        "cycle": 72,
+        "tokens": 13586,
+        "effective": 954196,
+        "ratio": 10.0,
+        "compact_ms": 258.4,
+        "fill_s": 79.1
+      },
+      {
+        "cycle": 73,
+        "tokens": 13372,
+        "effective": 967568,
+        "ratio": 10.0,
+        "compact_ms": 250.9,
+        "fill_s": 80.3
+      },
+      {
+        "cycle": 74,
+        "tokens": 13181,
+        "effective": 980749,
+        "ratio": 10.0,
+        "compact_ms": 265.4,
+        "fill_s": 83.0
+      },
+      {
+        "cycle": 75,
+        "tokens": 14115,
+        "effective": 994864,
+        "ratio": 10.0,
+        "compact_ms": 302.2,
+        "fill_s": 87.2
+      },
+      {
+        "cycle": 76,
+        "tokens": 13155,
+        "effective": 1008019,
+        "ratio": 10.0,
+        "compact_ms": 271.2,
+        "fill_s": 81.6
+      }
+    ]
+  }
+}
