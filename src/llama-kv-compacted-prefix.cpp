@@ -11,7 +11,7 @@
 #include <stdexcept>
 
 namespace {
-constexpr uint32_t LLAMA_COMPACTED_PREFIX_STATE_VERSION = 1;
+constexpr uint32_t LLAMA_COMPACTED_PREFIX_STATE_VERSION = 2;
 
 bool is_supported_compacted_type(ggml_type type, uint32_t head_dim_k, uint32_t head_dim_v) {
     // Scalar types always work.
@@ -636,6 +636,9 @@ void llama_compacted_prefix_store::state_write(llama_io_write_i & io, llama_seq_
         const uint8_t execution = state.is_execution_enabled() ? 1 : 0;
         io_write_pod(io, execution);
 
+        const uint8_t imrope_flag = state.is_imrope ? 1 : 0;
+        io_write_pod(io, imrope_flag);
+
         const uint32_t n_positions = state.logical_positions.size();
         io_write_pod(io, n_positions);
         if (n_positions > 0) {
@@ -691,6 +694,10 @@ bool llama_compacted_prefix_store::state_read(llama_io_read_i & io, llama_seq_id
         io_read_pod(io, logical_token_count);
         io_read_pod(io, live_suffix_pos0);
         io_read_pod(io, execution);
+
+        uint8_t imrope_flag = 0;
+        io_read_pod(io, imrope_flag);
+
         io_read_pod(io, n_positions);
 
         std::vector<llama_pos> logical_positions(n_positions);
@@ -711,7 +718,7 @@ bool llama_compacted_prefix_store::state_read(llama_io_read_i & io, llama_seq_id
             throw std::runtime_error("duplicate compacted-prefix sequence restore entry");
         }
 
-        if (!configure_seq(dst_seq_id, logical_token_count, logical_positions, live_suffix_pos0)) {
+        if (!configure_seq(dst_seq_id, logical_token_count, logical_positions, live_suffix_pos0, imrope_flag != 0)) {
             throw std::runtime_error("failed to configure compacted-prefix sequence during restore");
         }
 
