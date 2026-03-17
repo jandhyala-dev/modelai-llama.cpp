@@ -26,6 +26,24 @@
 // when target_tokens is too small relative to the number of KV heads.
 static constexpr uint32_t LLAMA_KV_COMPACT_MIN_TARGET_TOKENS = 2;
 
+// Ablation: skip beta fitting when LLAMA_COMPACT_NO_BETA=1 (zero-beta, selection only).
+static bool llama_kv_compact_skip_beta_fit() {
+    static const bool skip = [] {
+        const char * env = std::getenv("LLAMA_COMPACT_NO_BETA");
+        return env && env[0] == '1';
+    }();
+    return skip;
+}
+
+// Ablation: skip C_v fitting when LLAMA_COMPACT_NO_CV=1 (keeps original V at selected positions).
+static bool llama_kv_compact_skip_cv_fit() {
+    static const bool skip = [] {
+        const char * env = std::getenv("LLAMA_COMPACT_NO_CV");
+        return env && env[0] == '1';
+    }();
+    return skip;
+}
+
 namespace {
 
 bool gather_matrix_rows(
@@ -222,30 +240,37 @@ bool llama_kv_compact_fit_from_live_kv(
 
             float head_residual = 0.0f;
             std::vector<float> beta;
-            bool beta_ok = llama_kv_compact_fit_beta(entry.queries, entry.k,
+            bool beta_ok;
+            if (llama_kv_compact_skip_beta_fit()) {
+                // Ablation: force zero-beta without fitting.
+                beta.assign(n_selected, 0.0f);
+                beta_ok = true;
+            } else {
+                beta_ok = llama_kv_compact_fit_beta(entry.queries, entry.k,
                                                       compacted_k, solver_opts,
                                                       beta, &head_residual);
-
-            // NaN guard (GAP-K): if beta fitting fails (numerical instability
-            // at extreme compression), fall back to zero-beta for this head.
-            if (!beta_ok) {
-                LLAMA_LOG_WARN("%s: beta fitting failed for layer %zu head %u — falling back to zero-beta\n",
-                               __func__, li, head);
-                beta.assign(n_selected, 0.0f);
-                head_residual = 0.0f;
+                // NaN guard (GAP-K): if beta fitting fails (numerical instability
+                // at extreme compression), fall back to zero-beta for this head.
+                if (!beta_ok) {
+                    LLAMA_LOG_WARN("%s: beta fitting failed for layer %zu head %u — falling back to zero-beta\n",
+                                   __func__, li, head);
+                    beta.assign(n_selected, 0.0f);
+                    head_residual = 0.0f;
+                }
             }
             residual_sum += head_residual;
             residual_count++;
 
             if (layout.n_embd_head_v > 0) {
                 llama_kv_compact_matrix compacted_v;
-                bool v_ok = beta_ok && llama_kv_compact_fit_values(
+                bool v_ok = beta_ok && !llama_kv_compact_skip_cv_fit() &&
+                            llama_kv_compact_fit_values(
                             entry.queries, entry.k, full_v,
                             compacted_k, beta, solver_opts,
                             compacted_v);
                 if (!v_ok) {
-                    // NaN guard: fall back to original V values at selected positions.
-                    if (beta_ok) {
+                    // NaN guard / no-cv ablation: fall back to original V at selected positions.
+                    if (beta_ok && !llama_kv_compact_skip_cv_fit()) {
                         LLAMA_LOG_WARN("%s: V fitting failed for layer %zu head %u — using original V\n",
                                        __func__, li, head);
                     }
@@ -445,25 +470,31 @@ bool llama_kv_compact_omp_from_live_kv(
             }
 
             std::vector<float> beta;
-            bool beta_ok = llama_kv_compact_fit_beta(entry.queries, entry.k,
+            bool beta_ok;
+            if (llama_kv_compact_skip_beta_fit()) {
+                beta.assign(n_selected, 0.0f);
+                beta_ok = true;
+            } else {
+                beta_ok = llama_kv_compact_fit_beta(entry.queries, entry.k,
                                                       compacted_k, solver_opts,
                                                       beta, nullptr);
-
-            // NaN guard (GAP-K): fall back to zero-beta on solver failure.
-            if (!beta_ok) {
-                LLAMA_LOG_WARN("%s: beta fitting failed for layer %zu head %u — falling back to zero-beta\n",
-                               __func__, li, head);
-                beta.assign(n_selected, 0.0f);
+                // NaN guard (GAP-K): fall back to zero-beta on solver failure.
+                if (!beta_ok) {
+                    LLAMA_LOG_WARN("%s: beta fitting failed for layer %zu head %u — falling back to zero-beta\n",
+                                   __func__, li, head);
+                    beta.assign(n_selected, 0.0f);
+                }
             }
 
             if (layout.n_embd_head_v > 0) {
                 llama_kv_compact_matrix compacted_v;
-                bool v_ok = beta_ok && llama_kv_compact_fit_values(
+                bool v_ok = beta_ok && !llama_kv_compact_skip_cv_fit() &&
+                            llama_kv_compact_fit_values(
                             entry.queries, entry.k, full_v,
                             compacted_k, beta, solver_opts,
                             compacted_v);
                 if (!v_ok) {
-                    if (beta_ok) {
+                    if (beta_ok && !llama_kv_compact_skip_cv_fit()) {
                         LLAMA_LOG_WARN("%s: V fitting failed for layer %zu head %u — using original V\n",
                                        __func__, li, head);
                     }
@@ -931,15 +962,20 @@ bool llama_kv_compact_nonuniform_from_live_kv(
 
             // Fit beta on this head's selected subset.
             std::vector<float> beta;
-            bool beta_ok = llama_kv_compact_fit_beta(hd.queries, hd.k,
+            bool beta_ok;
+            if (llama_kv_compact_skip_beta_fit()) {
+                beta.assign(n_selected, 0.0f);
+                beta_ok = true;
+            } else {
+                beta_ok = llama_kv_compact_fit_beta(hd.queries, hd.k,
                                                       compacted_k, solver_opts,
                                                       beta, nullptr);
-
-            // NaN guard (GAP-K): fall back to zero-beta on solver failure.
-            if (!beta_ok) {
-                LLAMA_LOG_WARN("%s: beta fitting failed for layer %zu head %u — falling back to zero-beta\n",
-                               __func__, li, head);
-                beta.assign(n_selected, 0.0f);
+                // NaN guard (GAP-K): fall back to zero-beta on solver failure.
+                if (!beta_ok) {
+                    LLAMA_LOG_WARN("%s: beta fitting failed for layer %zu head %u — falling back to zero-beta\n",
+                                   __func__, li, head);
+                    beta.assign(n_selected, 0.0f);
+                }
             }
 
             // Apply per-head mask: set beta=-inf for positions NOT selected by this head.
@@ -967,12 +1003,15 @@ bool llama_kv_compact_nonuniform_from_live_kv(
                                             compacted_v)) {
                         return false;
                     }
-                } else if (!llama_kv_compact_fit_values(
+                } else if (llama_kv_compact_skip_cv_fit() ||
+                           !llama_kv_compact_fit_values(
                             hd.queries, hd.k, full_v,
                             compacted_k, beta, solver_opts,
                             compacted_v)) {
-                    LLAMA_LOG_WARN("%s: V fitting failed for layer %zu head %u — using original V\n",
-                                   __func__, li, head);
+                    if (!llama_kv_compact_skip_cv_fit()) {
+                        LLAMA_LOG_WARN("%s: V fitting failed for layer %zu head %u — using original V\n",
+                                       __func__, li, head);
+                    }
                     if (!gather_matrix_rows(full_v.data, full_v.rows,
                                             full_v.cols, union_local,
                                             compacted_v)) {
@@ -1272,15 +1311,20 @@ bool llama_kv_compact_chunked_from_live_kv(
 
             // Fit beta.
             std::vector<float> beta;
-            bool beta_ok = llama_kv_compact_fit_beta(queries, full_k,
+            bool beta_ok;
+            if (llama_kv_compact_skip_beta_fit()) {
+                beta.assign(n_selected, 0.0f);
+                beta_ok = true;
+            } else {
+                beta_ok = llama_kv_compact_fit_beta(queries, full_k,
                                                       compacted_k, solver_opts,
                                                       beta, nullptr);
-
-            // NaN guard (GAP-K): fall back to zero-beta on solver failure.
-            if (!beta_ok) {
-                LLAMA_LOG_WARN("%s: beta fitting failed for layer %zu head %u — falling back to zero-beta\n",
-                               __func__, li, head);
-                beta.assign(n_selected, 0.0f);
+                // NaN guard (GAP-K): fall back to zero-beta on solver failure.
+                if (!beta_ok) {
+                    LLAMA_LOG_WARN("%s: beta fitting failed for layer %zu head %u — falling back to zero-beta\n",
+                                   __func__, li, head);
+                    beta.assign(n_selected, 0.0f);
+                }
             }
 
             // V extraction and fitting.
@@ -1298,12 +1342,13 @@ bool llama_kv_compact_chunked_from_live_kv(
                 t_v_extract_ms += std::chrono::duration<double, std::milli>(t_v_end - t_v_start).count();
 
                 llama_kv_compact_matrix compacted_v;
-                bool v_ok = beta_ok && llama_kv_compact_fit_values(
+                bool v_ok = beta_ok && !llama_kv_compact_skip_cv_fit() &&
+                            llama_kv_compact_fit_values(
                             queries, full_k, full_v,
                             compacted_k, beta, solver_opts,
                             compacted_v);
                 if (!v_ok) {
-                    if (beta_ok) {
+                    if (beta_ok && !llama_kv_compact_skip_cv_fit()) {
                         LLAMA_LOG_WARN("%s: V fitting failed for layer %zu head %u — using original V\n",
                                        __func__, li, head);
                     }

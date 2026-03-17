@@ -225,7 +225,7 @@ static bench_result run_bench(
         return result;
     }
 
-    uint32_t target = std::max(1u, (uint32_t)(n_prefix / ratio));
+    uint32_t target = std::max(2u, (uint32_t)(n_prefix / ratio));
     result.prefix_tokens = n_prefix;
     result.target_tokens = target;
     result.eval_tokens   = n_eval;
@@ -258,7 +258,9 @@ static bench_result run_bench(
         llama_kv_compact_pipeline_stats stats = {};
         bool compact_ok = false;
 
-        if (method == "select" || cfg.no_beta || cfg.evict_only) {
+        if (method == "select" || cfg.evict_only) {
+            // select: positional truncation (keep first N positions, zero beta).
+            // evict_only: same — overrides any method to positional truncation.
             compact_ok = kv->compacted_prefix_select_from_live_kv(
                 seq_id, target, live_suffix_pos0, &stats);
         } else if (method == "solver") {
@@ -439,6 +441,15 @@ int main(int argc, char ** argv) {
         fprintf(stderr, "error: -m and -f are required\n");
         print_usage(argv[0]);
         return 1;
+    }
+
+    // Propagate CLI ablation flags to env vars for pipeline consumption.
+    // Pipeline code reads these via static cached getenv() on first call.
+    if (cfg.no_beta) {
+        setenv("LLAMA_COMPACT_NO_BETA", "1", 1);
+    }
+    if (cfg.no_cv) {
+        setenv("LLAMA_COMPACT_NO_CV", "1", 1);
     }
 
     // Read input text.

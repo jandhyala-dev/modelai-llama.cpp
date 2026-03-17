@@ -11,7 +11,26 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
+
+// Ablation: skip beta fitting when LLAMA_COMPACT_NO_BETA=1.
+static bool llama_kv_compact_skip_beta_fit() {
+    static const bool skip = [] {
+        const char * env = std::getenv("LLAMA_COMPACT_NO_BETA");
+        return env && env[0] == '1';
+    }();
+    return skip;
+}
+
+// Ablation: skip C_v fitting when LLAMA_COMPACT_NO_CV=1.
+static bool llama_kv_compact_skip_cv_fit() {
+    static const bool skip = [] {
+        const char * env = std::getenv("LLAMA_COMPACT_NO_CV");
+        return env && env[0] == '1';
+    }();
+    return skip;
+}
 
 // Gather selected rows from a source matrix.
 static bool gather_rows(
@@ -309,29 +328,35 @@ bool llama_kv_compact_prefill_q_with_captured_state(
 
             float head_residual = 0.0f;
             std::vector<float> beta;
-            bool beta_ok = llama_kv_compact_fit_beta(entry.queries, entry.k,
+            bool beta_ok;
+            if (llama_kv_compact_skip_beta_fit()) {
+                beta.assign(n_selected, 0.0f);
+                beta_ok = true;
+            } else {
+                beta_ok = llama_kv_compact_fit_beta(entry.queries, entry.k,
                                                       compacted_k, solver_opts,
                                                       beta, &head_residual);
-
-            // NaN guard (GAP-K): fall back to zero-beta on solver failure.
-            if (!beta_ok) {
-                LLAMA_LOG_WARN("prefill-Q: beta fitting failed for layout %zu head %u — falling back to zero-beta\n",
-                               li, head);
-                beta.assign(n_selected, 0.0f);
-                head_residual = 0.0f;
+                // NaN guard (GAP-K): fall back to zero-beta on solver failure.
+                if (!beta_ok) {
+                    LLAMA_LOG_WARN("prefill-Q: beta fitting failed for layout %zu head %u — falling back to zero-beta\n",
+                                   li, head);
+                    beta.assign(n_selected, 0.0f);
+                    head_residual = 0.0f;
+                }
             }
             residual_sum += head_residual;
             residual_count++;
 
             if (layout.n_embd_head_v > 0) {
                 llama_kv_compact_matrix compacted_v;
-                bool v_ok = beta_ok && llama_kv_compact_fit_values(
+                bool v_ok = beta_ok && !llama_kv_compact_skip_cv_fit() &&
+                            llama_kv_compact_fit_values(
                             entry.queries, entry.k, full_v,
                             compacted_k, beta, solver_opts,
                             compacted_v);
                 if (!v_ok) {
                     // Fall back to original V values at selected positions.
-                    if (beta_ok) {
+                    if (beta_ok && !llama_kv_compact_skip_cv_fit()) {
                         LLAMA_LOG_WARN("prefill-Q: V fitting failed for layout %zu head %u — using original V\n",
                                        li, head);
                     }
