@@ -94,6 +94,12 @@ struct llama_kv_compact_omp_opts {
     // If non-null, reuse a previously computed selection order instead of running OMP.
     // Only the first t indices are used; beta is recomputed via NNLS.
     std::vector<uint32_t> * cached_selection_order = nullptr;
+
+    // Per-head timeout in milliseconds (V4-H — GAP-M).
+    // If OMP exceeds this limit, keep partial greedy selection and fill
+    // remaining positions with top-k attention-scored keys. Beta refit
+    // runs on the full combined selection. Set to 0 to disable.
+    float timeout_ms = 5000.0f;
 };
 
 // OMP key selection with progressive schedule + drop-key refinement.

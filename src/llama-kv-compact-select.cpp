@@ -2,6 +2,7 @@
 #include "llama-kv-compact-math.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <limits>
 #include <numeric>
@@ -332,11 +333,20 @@ std::vector<uint32_t> llama_kv_compact_select_omp(
 
     uint32_t iteration = 0;
     uint32_t refinement_count = 0;
+    const auto omp_start_time = std::chrono::steady_clock::now();
 
     while (true) {
         const uint32_t i = (uint32_t) selected.size();
 
         if (i < t) {
+            // Per-head timeout (V4-H — GAP-M).
+            if (opts.timeout_ms > 0.0f) {
+                const auto elapsed = std::chrono::steady_clock::now() - omp_start_time;
+                if (std::chrono::duration<float, std::milli>(elapsed).count() > opts.timeout_ms) {
+                    break;
+                }
+            }
+
             // --- Normal selection phase ---
             // Compute correlation of each key with residual.
             for (uint32_t ki = 0; ki < T; ++ki) {
@@ -481,7 +491,33 @@ std::vector<uint32_t> llama_kv_compact_select_omp(
         }
     }
 
-    // Final NNLS if last iteration skipped due to interval.
+    // Top-k fallback for partial selection (V4-H — GAP-M).
+    // If OMP was interrupted (timeout or exhausted candidates), fill remaining
+    // positions with top-k attention-scored keys. Greedy OMP property ensures
+    // partial selections are locally optimal; top-k fills the rest.
+    if (selected.size() < t) {
+        std::vector<float> fallback_scores(T, -std::numeric_limits<float>::infinity());
+        for (uint32_t ki = 0; ki < T; ++ki) {
+            if (mask_selected[ki] || mask_excluded[ki]) {
+                continue;
+            }
+            float score = 0.0f;
+            for (uint32_t qi = 0; qi < n; ++qi) {
+                score += exp_scores(qi, ki) / std::max(target[qi], 1e-6f);
+            }
+            fallback_scores[ki] = score;
+        }
+        const uint32_t need = t - (uint32_t)selected.size();
+        auto fallback_idx = llama_kv_compact_select_topk(fallback_scores, need);
+        for (uint32_t idx : fallback_idx) {
+            if (fallback_scores[idx] > -std::numeric_limits<float>::infinity()) {
+                selected.push_back(idx);
+                mask_selected[idx] = true;
+            }
+        }
+    }
+
+    // Final NNLS on full merged selection (OMP partial + top-k fallback).
     if (!selected.empty()) {
         const uint32_t sel_count = (uint32_t) selected.size();
         llama_kv_compact_matrix M(n, sel_count);
