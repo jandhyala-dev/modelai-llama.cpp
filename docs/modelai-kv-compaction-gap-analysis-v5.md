@@ -3,6 +3,7 @@
 **Date:** 2026-03-16
 **Supersedes:** V4 (same date) — V5 adds GAP-N (SWA validation), GAP-O (MLA unsupported), Qwen3.5 architecture analysis
 **V4 review status:** PASS from both reviewers (3 shared Minor findings, incorporated in V4→V5)
+**V5 review status:** PASS from both reviewers (R1: 1 Minor — C_v Tier 3 mislabeled; R2: 1 Minor — GAP-N Gemma-3 load issue). Both findings incorporated below.
 **Commit baseline:** 3f357af6 (latest, includes benchmark results + stale-prompt-cache fix)
 **Sources audited:**
 1. `modelai-llama.cpp` @ `modelai-main` (3f357af6) — 23 compaction source files
@@ -19,6 +20,8 @@
 - Added V4-N to Week 1 timeline alongside V4-C
 - Softened DeepSeek R1 distilled claim — no explicit testing in fork, expected based on architecture lineage
 - Added MIT exhaustive audit results (5 minor items reviewed, none rise to gap level)
+- Fixed C_v Tier 3 label: "pseudoinverse" → "aggressive Cholesky (escalated λ)" (V5 R1 Minor-1)
+- Added GAP-N known issue: Gemma-3-12B-IT load failure in prior testing (V5 R2 Minor-1)
 
 **V3→V4 changes (reviewer-driven):**
 - GAP-C: Corrected "max/sum/RMS" → "sum/RMS only"; added MAX/MEAN to gap scope (R1 Major-1)
@@ -47,7 +50,7 @@ After full code audit of all 23 source files, verified by two independent review
 | OMP with progressive schedule | DONE | llama-kv-compact-select.cpp:200-433 | Schedule `[(300,1,1),(1500,2,2),(∞,4,2)]` at line 316-320 |
 | Drop-key refinement (beta < -7) | DONE | llama-kv-compact-select.cpp:378-432 | Max 3 passes, `beta_cutoff` logic |
 | NNLS solver (PGD + lstsq+clamp) | DONE | llama-kv-compact-solver.cpp | Box-constrained PGD, Cholesky fallback |
-| LSQ C_v fitting (3-tier cascade) | DONE | llama-kv-compact-solver.cpp | LAPACK sgels → Cholesky → pseudoinverse |
+| LSQ C_v fitting (3-tier cascade) | DONE | llama-kv-compact-solver.cpp | LAPACK sgels → Cholesky → aggressive Cholesky (escalated λ) |
 | Spectral ridge scaling | DONE | llama-kv-compact-solver.cpp | `SPECTRAL` mode at line 505, power iteration at line 423 |
 | Score aggregation (SUM + RMS) | DONE | llama-kv-compact-select.h:31, select.cpp:55 | `finalize_rms_scores()` — **NO MAX or MEAN mode** |
 | Beta computation (log-weights) | DONE | llama-kv-compact-solver.cpp | `fit_beta()` |
@@ -347,8 +350,10 @@ Compare: `select` does one-pass attention scoring (no iterative loop) → 62-185
 4. Verify: generation continues correctly
 5. Update CLAUDE.md support matrix
 
+**Known issue:** Gemma-3-12B-IT failed to load in prior testing (missing hyperparameter key). May require GGUF rebuild or upstream fix before validation can proceed.
+
 **Effort:** 0.5 day testing, 0 lines new code (unless bugs found).
-**Risk:** Low.
+**Risk:** Low (if model loads). Model load issue may require upstream resolution.
 
 ---
 
@@ -435,7 +440,7 @@ Compare: `select` does one-pass attention scoring (no iterative loop) → 62-185
 
 **Additional MIT features reviewed (do not rise to gap level):**
 - `zerobeta` option — equivalent to our `select` method (zero-beta by design); ablation covered by V4-D `--no-beta` flag
-- Direct C2 nearest-neighbor fitting — alternative to LSQ C_v. Minor quality variant; our 3-tier cascade (LAPACK sgels → Cholesky → pseudoinverse) is more robust
+- Direct C2 nearest-neighbor fitting — alternative to LSQ C_v. Minor quality variant; our 3-tier cascade (LAPACK sgels → Cholesky → aggressive Cholesky (escalated λ)) is more robust
 - Global selection methods (cross-head budget allocation in selection step) — interesting for MoE architectures but not in the paper's algorithm; revisit if influence-curve budgets (GAP-B) prove insufficient
 - Text-based chunking (sentence/paragraph boundaries) — requires tokenizer awareness; paper uses fixed-size chunks; our non-overlapping chunking is correct for selection-based approach
 - `normalize_exp_scores` / `use_abs_corr` — already implemented in our score computation pipeline
@@ -723,4 +728,6 @@ Deferred:
 
 **Confidence this is the complete gap list: ~98%.** Two minor unlisted items found by reviewers (context-prefill, MAX aggregation) — both now included. Remaining uncertainty: paper may have additional configuration parameters in Table 1 or appendices not individually audited. Random query generation (paper Section 3.1) intentionally excluded — worst-performing method in paper ablation.
 
-**Review status:** PASS from both independent adversarial reviewers. 3 shared Minor findings (GAP-L memory spec, V4-B PPL criterion, V4-H/Week 2 scope) — all incorporated above. 15+ spot-checks verified across reviewers. Zero misidentifications. All 11 V3 findings confirmed resolved.
+**Review status:**
+- V4: PASS from both reviewers. 3 shared Minor findings (GAP-L memory spec, V4-B PPL criterion, V4-H/Week 2 scope) — all incorporated.
+- V5: PASS from both reviewers. R1: 1 Minor (C_v Tier 3 mislabeled as "pseudoinverse" — fixed to "aggressive Cholesky"). R2: 1 Minor (GAP-N missing known Gemma-3 load issue — added). 20+ spot-checks verified across all review rounds. Zero misidentifications. All 14 prior findings (11 V3→V4 + 3 V4→V5) confirmed resolved.
