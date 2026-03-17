@@ -245,6 +245,7 @@ size_t llama_compacted_prefix_store::layer_storage::allocated_bytes() const {
 void llama_compacted_prefix_store::sequence_state::clear(bool data) {
     enabled = false;
     execution_enabled = false;
+    is_imrope = false;
     logical_token_count = 0;
     live_suffix_pos0 = -1;
     logical_positions.clear();
@@ -478,6 +479,7 @@ void llama_compacted_prefix_store::seq_cp(llama_seq_id seq_id_src, llama_seq_id 
     }
 
     dst.enabled = true;
+    dst.is_imrope = src.is_imrope;
     dst.logical_token_count = src_logical_token_count;
     dst.live_suffix_pos0 = pos_in(src_live_suffix_pos0, p0, p1) ? src_live_suffix_pos0 : -1;
     dst.logical_positions = std::move(next_positions);
