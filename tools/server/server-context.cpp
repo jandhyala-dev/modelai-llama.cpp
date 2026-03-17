@@ -382,6 +382,10 @@ struct server_slot {
     // making them available for compaction without repeat-prefill overhead.
     std::unique_ptr<llama_q_capture_state> q_capture_state;
 
+    // V4-F: One-shot guard for auto-compaction. Set true after first auto-compact
+    // attempt per request. Reset on new request (launch_slot_with_task).
+    bool auto_compact_attempted = false;
+
     void reset() {
         SLT_DBG(*this, "%s", "\n");
 
@@ -407,6 +411,9 @@ struct server_slot {
 
         // V4-G: release Q-capture memory when slot is done
         q_capture_state.reset();
+
+        // V4-F: reset auto-compact guard for next request
+        auto_compact_attempted = false;
 
         task_prev = std::move(task);
         task.reset();
@@ -3215,6 +3222,29 @@ private:
                     std::string err;
 
                     if (n_batch == 1 && ret == 1) {
+                        // V4-F: auto-compaction — try compacting before giving up.
+                        bool auto_compacted = false;
+                        if (ctx->auto_compact.enabled) {
+                            for (auto & slot : slots) {
+                                if (slot.is_processing() && !slot.auto_compact_attempted) {
+                                    slot.auto_compact_attempted = true;
+                                    SRV_INF("auto-compact: attempting compaction for slot %d (ratio=%.1f)\n",
+                                            slot.id, ctx->auto_compact.ratio);
+                                    const int32_t result = llama_kv_cache_compact(
+                                        ctx, slot.id, ctx->auto_compact.params);
+                                    if (result > 0) {
+                                        SRV_INF("auto-compact: success, %d tokens retained\n", result);
+                                        auto_compacted = true;
+                                    } else {
+                                        SRV_WRN("auto-compact: %s\n", "compaction failed");
+                                    }
+                                }
+                            }
+                        }
+                        if (auto_compacted) {
+                            // Retry the decode after compaction freed space.
+                            continue;
+                        }
                         // TODO: try to terminate only the largest active slot/sequence and continue with the rest
                         //       need to remove the tokens from the current batch too
                         err = "Context size has been exceeded.";

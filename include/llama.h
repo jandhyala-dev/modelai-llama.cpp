@@ -415,12 +415,40 @@ extern "C" {
     // lora adapter
     struct llama_adapter_lora;
 
+    // KV cache compaction parameters (arXiv:2602.16284 Attention Matching)
+    //
+    // Methods:
+    //   "select"     — positional truncation, keep first N, zero beta (fast, default)
+    //   "solver"     — score-based selection + beta/C_v fitting (higher quality)
+    //   "omp"        — orthogonal matching pursuit selection + solver fitting
+    //   "nonuniform" — per-head budget allocation + solver fitting
+    //   "chunked"    — chunked solver for long contexts
+    //
+    // Usage:
+    //   struct llama_compact_params params = llama_compact_default_params();
+    //   params.method = "solver";
+    //   params.ratio  = 4.0f;
+    //   int32_t n = llama_kv_cache_compact(ctx, seq_id, params);
+    //
+    typedef struct llama_compact_params {
+        const char * method;          // compaction method (default: "select")
+        int32_t      target_tokens;   // explicit target, or -1 to use ratio
+        float        ratio;           // compression ratio (used if target_tokens < 0)
+        int32_t      live_suffix_tokens; // recent tokens to keep live (0 = compact all)
+        llama_pos    p0;              // start position for compaction range
+        uint32_t     max_queries;     // max queries for solver (0 = auto)
+        int32_t      nnls_iters;      // NNLS iterations for solver (-1 = auto)
+        float        lambda;          // ridge regularization for solver (< 0 = auto)
+        bool         reclaim;         // reclaim live KV cells after compaction
+    } llama_compact_params;
+
     // Helpers for getting default parameters
     // TODO: update API to start accepting pointers to params structs (https://github.com/ggml-org/llama.cpp/discussions/9172)
     LLAMA_API struct llama_model_params          llama_model_default_params(void);
     LLAMA_API struct llama_context_params        llama_context_default_params(void);
     LLAMA_API struct llama_sampler_chain_params  llama_sampler_chain_default_params(void);
     LLAMA_API struct llama_model_quantize_params llama_model_quantize_default_params(void);
+    LLAMA_API struct llama_compact_params        llama_compact_default_params(void);
 
     // Initialize the llama + ggml backend
     // If numa is true, use NUMA optimizations
@@ -763,6 +791,27 @@ extern "C" {
 
     // Check if the memory supports shifting
     LLAMA_API bool llama_memory_can_shift(llama_memory_t mem);
+
+    //
+    // KV cache compaction (arXiv:2602.16284)
+    //
+
+    // Compact the KV cache for a sequence using Attention Matching.
+    // Reduces the KV cache from its current size to target_tokens (or n/ratio).
+    // Returns the number of tokens in the compacted prefix, or -1 on failure.
+    // After compaction, subsequent llama_decode calls use the compacted prefix.
+    LLAMA_API int32_t llama_kv_cache_compact(
+            struct llama_context * ctx,
+              llama_seq_id         seq_id,
+       struct llama_compact_params params);
+
+    // Enable auto-compaction: when KV cache fills during decode, automatically
+    // compact and retry. Set ratio <= 0 to disable.
+    // The compaction fires once per request (one-shot guard prevents loops).
+    LLAMA_API void llama_kv_cache_set_auto_compact(
+            struct llama_context       * ctx,
+                   float                 ratio,
+            struct llama_compact_params   params);
 
     //
     // State / sessions
