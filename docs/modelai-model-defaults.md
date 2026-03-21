@@ -20,7 +20,7 @@ This file is the single source of truth for all systems (cot, ModelAI, benchmark
     "compact_cap": 262144,
     "compact_method": "select",
     "compact_ratio": 4,
-    "native_ctx": 1048576
+    "native_ctx": 262144
   }
 }
 ```
