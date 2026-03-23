@@ -664,14 +664,23 @@ struct server_slot {
         auto * mem = llama_get_memory(ctx);
         const llama_pos pos_min = mem ? llama_memory_seq_pos_min(mem, id) : -1;
         const llama_pos pos_max = mem ? llama_memory_seq_pos_max(mem, id) : -1;
-        const uint32_t n_kv_active = (pos_min >= 0 && pos_max >= pos_min)
+        uint32_t n_kv_active = (pos_min >= 0 && pos_max >= pos_min)
             ? (uint32_t) (pos_max - pos_min + 1)
             : 0;
+
+        // Include compacted prefix tokens in the active count
+        uint32_t n_kv_compacted = 0;
+        const auto * kv_mem = get_kv_cache_base(ctx);
+        if (kv_mem && kv_mem->compacted_prefix_execution_enabled(id)) {
+            n_kv_compacted = kv_mem->compacted_prefix_active_n_kv(id);
+            n_kv_active += n_kv_compacted;
+        }
 
         res["kv"] = {
             { "seq_pos_min",          pos_min },
             { "seq_pos_max",          pos_max },
             { "active_n_kv",          n_kv_active },
+            { "active_n_kv_compacted", n_kv_compacted },
             { "sequence_state_bytes", llama_state_seq_get_size_ext(ctx, id, 0) },
         };
 
@@ -2443,17 +2452,21 @@ private:
                     bool reclaimed = false;
                     if (cp.reclaim) {
                         reclaimed = kv->compacted_prefix_reclaim_live_kv(seq_id);
-                        if (reclaimed) {
-                            // Live KV positions are gone — clear the slot's prompt cache
-                            // so update_slots() doesn't try to reuse stale token positions.
-                            slot->prompt.tokens.clear();
-                        }
+                        // Note: we intentionally do NOT clear slot->prompt.tokens here.
+                        // The compacted prefix retains the semantic content of the
+                        // original KV entries, so the slot's token record remains valid
+                        // for prefix matching on the next /completion call.
                     }
 
                     const int64_t t_end = ggml_time_us();
                     const double t_compact_ms = (t_end - t_start) / 1000.0;
                     const llama_pos pos_max_after = mem ? llama_memory_seq_pos_max(mem, seq_id) : -1;
-                    const uint32_t n_kv_after = pos_max_after >= 0 ? (uint32_t)(pos_max_after + 1) : 0;
+                    uint32_t n_kv_after = pos_max_after >= 0 ? (uint32_t)(pos_max_after + 1) : 0;
+
+                    // Include compacted prefix tokens in the reported count
+                    if (kv->compacted_prefix_execution_enabled(seq_id)) {
+                        n_kv_after += kv->compacted_prefix_active_n_kv(seq_id);
+                    }
 
                     auto res = std::make_unique<server_task_result_compact>();
                     res->id                = task.id;
@@ -2842,8 +2855,21 @@ private:
                             if (n_past > 0 && n_past < slot.prompt.n_tokens()) {
                                 const auto pos_min = llama_memory_seq_pos_min(llama_get_memory(ctx), slot.id);
                                 if (pos_min == -1) {
-                                    SLT_ERR(slot, "n_past = %d, slot.prompt.tokens.size() = %d, seq_id = %d, pos_min = %d\n", n_past, (int) slot.prompt.tokens.size(), slot.id, pos_min);
-                                    GGML_ABORT("pos_min == -1, but n_past > 0 - should not happen: https://github.com/ggml-org/llama.cpp/pull/13833#discussion_r2116181237");
+                                    // After compaction with reclaim, live KV cells may be gone
+                                    // while the compacted prefix holds the data. The prompt has
+                                    // diverged (partial match), so the compacted prefix is no
+                                    // longer valid — clear it and restart from scratch.
+                                    auto * kv_mem = const_cast<llama_kv_cache *>(get_kv_cache_base(ctx));
+                                    if (kv_mem && kv_mem->has_compacted_prefix()) {
+                                        SLT_WRN(slot, "prompt diverged after compaction (n_past = %d) — clearing compacted prefix and restarting\n", n_past);
+                                        kv_mem->compacted_prefix_clear(slot.id, true);
+                                        kv_mem->compacted_prefix_set_execution(slot.id, false);
+                                        n_past = 0;
+                                        // fall through — the code below will handle the full reset
+                                    } else {
+                                        SLT_ERR(slot, "n_past = %d, slot.prompt.tokens.size() = %d, seq_id = %d, pos_min = %d\n", n_past, (int) slot.prompt.tokens.size(), slot.id, pos_min);
+                                        GGML_ABORT("pos_min == -1, but n_past > 0 - should not happen: https://github.com/ggml-org/llama.cpp/pull/13833#discussion_r2116181237");
+                                    }
                                 }
 
                                 // when the prompt prefix does not match, print the tokens around the mismatch
