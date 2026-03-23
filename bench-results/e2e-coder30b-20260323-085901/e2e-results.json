@@ -1,0 +1,285 @@
+{
+  "model": "Qwen3-Coder-30B-A3B",
+  "kv_alloc": 65536,
+  "compact_cap": 262144,
+  "compact_ratio": 4.0,
+  "compact_method": "select",
+  "n_cycles": 4,
+  "timestamp": "2026-03-23T15:59:13.554202+00:00",
+  "cycles": [
+    {
+      "cycle": 1,
+      "prompts": [
+        {
+          "id": "D-1-1",
+          "topic": "M&A Activity Analysis",
+          "generation_tok_s": 0,
+          "words": 1029,
+          "tokens_predicted": 2036
+        },
+        {
+          "id": "D-1-2",
+          "topic": "M&A Activity Analysis",
+          "generation_tok_s": 0,
+          "words": 1272,
+          "tokens_predicted": 2183
+        },
+        {
+          "id": "D-1-3",
+          "topic": "M&A Activity Analysis",
+          "generation_tok_s": 0,
+          "words": 1394,
+          "tokens_predicted": 2781
+        },
+        {
+          "id": "D-1-4",
+          "topic": "M&A Activity Analysis",
+          "generation_tok_s": 0,
+          "words": 1926,
+          "tokens_predicted": 3775
+        },
+        {
+          "id": "D-2-1",
+          "topic": "Share Buyback & Capital Returns",
+          "generation_tok_s": 0,
+          "words": 1802,
+          "tokens_predicted": 3806
+        },
+        {
+          "id": "D-2-2",
+          "topic": "Share Buyback & Capital Returns",
+          "generation_tok_s": 0,
+          "words": 1472,
+          "tokens_predicted": 3030
+        },
+        {
+          "id": "D-2-3",
+          "topic": "Share Buyback & Capital Returns",
+          "generation_tok_s": 0,
+          "words": 1481,
+          "tokens_predicted": 3154
+        },
+        {
+          "id": "D-2-4",
+          "topic": "Share Buyback & Capital Returns",
+          "generation_tok_s": 0,
+          "words": 1457,
+          "tokens_predicted": 2990
+        },
+        {
+          "id": "D-3-1",
+          "topic": "Earnings Analysis & Financial Research",
+          "generation_tok_s": 0,
+          "words": 1436,
+          "tokens_predicted": 3091
+        },
+        {
+          "id": "D-3-2",
+          "topic": "Earnings Analysis & Financial Research",
+          "generation_tok_s": 0,
+          "words": 1787,
+          "tokens_predicted": 4200
+        },
+        {
+          "id": "D-3-3",
+          "topic": "Earnings Analysis & Financial Research",
+          "generation_tok_s": 0,
+          "words": 1574,
+          "tokens_predicted": 3653
+        },
+        {
+          "id": "D-3-4",
+          "topic": "Earnings Analysis & Financial Research",
+          "generation_tok_s": 0,
+          "words": 1524,
+          "tokens_predicted": 3331
+        },
+        {
+          "id": "D-4-1",
+          "topic": "Legal & Regulatory Research",
+          "generation_tok_s": 0,
+          "words": 1281,
+          "tokens_predicted": 2223
+        },
+        {
+          "id": "D-4-2",
+          "topic": "Legal & Regulatory Research",
+          "generation_tok_s": 0,
+          "words": 1849,
+          "tokens_predicted": 3404
+        },
+        {
+          "id": "D-4-3",
+          "topic": "Legal & Regulatory Research",
+          "generation_tok_s": 0,
+          "words": 1844,
+          "tokens_predicted": 3639
+        },
+        {
+          "id": "D-4-4",
+          "topic": "Legal & Regulatory Research",
+          "generation_tok_s": 0,
+          "words": 1728,
+          "tokens_predicted": 3173
+        },
+        {
+          "id": "D-5-1",
+          "topic": "Market Analysis & Strategy",
+          "generation_tok_s": 0,
+          "words": 1309,
+          "tokens_predicted": 2992
+        },
+        {
+          "id": "D-5-2",
+          "topic": "Market Analysis & Strategy",
+          "generation_tok_s": 0,
+          "words": 1657,
+          "tokens_predicted": 3511
+        }
+      ],
+      "pre_compact_kv": {
+        "active_total": 59706,
+        "active_max": 59706
+      },
+      "compaction": {
+        "success": true,
+        "id_slot": 0,
+        "method": "select",
+        "compacted_tokens": 15454,
+        "original_tokens": 61817,
+        "compression_ratio": 4.00006470816617,
+        "compaction_time_ms": 2222.3,
+        "active_n_kv_before": 61817,
+        "active_n_kv_after": 0,
+        "reclaimed": true
+      },
+      "post_compact_kv": {
+        "active_total": 0,
+        "active_max": 0
+      },
+      "recall": {
+        "pre_compact": {
+          "words": 941,
+          "has_content": true,
+          "tok_s": 0
+        },
+        "post_compact": {
+          "words": 0,
+          "has_content": true,
+          "tok_s": 0
+        }
+      }
+    },
+    {
+      "cycle": 2,
+      "prompts": [],
+      "pre_compact_kv": {
+        "active_total": 60427,
+        "active_max": 60427
+      },
+      "compaction": {
+        "success": true,
+        "id_slot": 0,
+        "method": "select",
+        "compacted_tokens": 15454,
+        "original_tokens": 61817,
+        "compression_ratio": 4.00006470816617,
+        "compaction_time_ms": 3222.3,
+        "active_n_kv_before": 61817,
+        "active_n_kv_after": 0,
+        "reclaimed": true
+      },
+      "post_compact_kv": {
+        "active_total": 0,
+        "active_max": 0
+      },
+      "recall": {
+        "pre_compact": {
+          "words": 936,
+          "has_content": true,
+          "tok_s": 0
+        },
+        "post_compact": {
+          "words": 0,
+          "has_content": true,
+          "tok_s": 0
+        }
+      }
+    },
+    {
+      "cycle": 3,
+      "prompts": [],
+      "pre_compact_kv": {
+        "active_total": 60521,
+        "active_max": 60521
+      },
+      "compaction": {
+        "success": true,
+        "id_slot": 0,
+        "method": "select",
+        "compacted_tokens": 15454,
+        "original_tokens": 61817,
+        "compression_ratio": 4.00006470816617,
+        "compaction_time_ms": 3109.1,
+        "active_n_kv_before": 61817,
+        "active_n_kv_after": 0,
+        "reclaimed": true
+      },
+      "post_compact_kv": {
+        "active_total": 0,
+        "active_max": 0
+      },
+      "recall": {
+        "pre_compact": {
+          "words": 907,
+          "has_content": true,
+          "tok_s": 0
+        },
+        "post_compact": {
+          "words": 0,
+          "has_content": true,
+          "tok_s": 0
+        }
+      }
+    },
+    {
+      "cycle": 4,
+      "prompts": [],
+      "pre_compact_kv": {
+        "active_total": 60357,
+        "active_max": 60357
+      },
+      "compaction": {
+        "success": true,
+        "id_slot": 0,
+        "method": "select",
+        "compacted_tokens": 15454,
+        "original_tokens": 61817,
+        "compression_ratio": 4.00006470816617,
+        "compaction_time_ms": 3227.3,
+        "active_n_kv_before": 61817,
+        "active_n_kv_after": 0,
+        "reclaimed": true
+      },
+      "post_compact_kv": {
+        "active_total": 0,
+        "active_max": 0
+      },
+      "recall": {
+        "pre_compact": {
+          "words": 933,
+          "has_content": true,
+          "tok_s": 0
+        },
+        "post_compact": {
+          "words": 0,
+          "has_content": true,
+          "tok_s": 0
+        }
+      }
+    }
+  ],
+  "total_effective_tokens": 241011,
+  "total_topics": 18,
+  "total_prompts_sent": 18
+}
