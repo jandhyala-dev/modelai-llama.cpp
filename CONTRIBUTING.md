@@ -206,11 +206,27 @@ The sections above are inherited from upstream llama.cpp. The following apply sp
 - All solver math in fp32; cast to model dtype for KV storage only
 - Commit messages for compaction work: `kv-compact: <description>`
 
+## Contribution Workflow
+
+Every change follows this process — no exceptions, no shortcuts:
+
+1. **Branch** — Create a feature branch from `modelai-main`
+2. **Implement** — Write the code, following the conventions above
+3. **Document** — Update the relevant `docs/` file (algorithm, integration, bugs, changelog)
+4. **Test** — `cmake -B build -DGGML_METAL=ON && cmake --build build --config Release -j$(sysctl -n hw.ncpu) && ctest --test-dir build -L main --output-on-failure` — all tests must pass
+5. **Review** — Submit for adversarial review using the 13-section protocol in [AGENTS.md](AGENTS.md). The reviewer's job is to break the code, not confirm it looks reasonable
+6. **Fix all findings** — Every Critical/Major finding must be resolved. No deferring fixable issues
+7. **Re-test** — Run the full test suite again after fixes
+8. **Commit** — Descriptive message with `kv-compact:` prefix for compaction work. Reference the review verdict
+9. **Merge to `modelai-main`** — Only after review PASS with all findings addressed
+10. **Push** — Verify the commit SHA matches what was reviewed
+
+If a review finds bugs, the cycle repeats from step 6. Code that hasn't passed adversarial review does not enter `modelai-main`.
+
 ## Adversarial Review Protocol
 
-All code entering this fork is reviewed using an adversarial, failure-seeking protocol. See [AGENTS.md](AGENTS.md) for the full 13-section review protocol.
+See [AGENTS.md](AGENTS.md) for the full 13-section review protocol. Key points:
 
-Key points for contributors:
 - Reviewers walk **real numbers** through your code (production, boundary, and adversarial traces)
 - Every assumption must be either **enforced in code** or **documented** — undocumented assumptions are findings
 - The **disprove-it pass** is mandatory: the reviewer assumes one bug exists and tries to find it before issuing PASS

@@ -198,7 +198,7 @@ Audited fork against arXiv:2602.16284 reference implementation. Identified 16 ga
 | Metric | Value |
 |--------|-------|
 | Fork-specific commits | 150+ |
-| Fix commits | 35 |
+| Fix commits | 29 |
 | Critical/Major bugs fixed | 18 |
 | Models validated | 17 (15 pass quality gate) |
 | Architectures supported | 5 (standard, iSWA, hybrid, hybrid-iSWA, IMROPE) |

@@ -1,6 +1,6 @@
 # modelai-llama.cpp — Highlights
 
-One-page summary for the GitHub README and model-ai.org website.
+One-page summary for the GitHub README.
 
 ---
 
@@ -16,13 +16,13 @@ Instead of truncating or evicting old context, compaction compresses the KV cach
 
 | Metric | Value |
 |--------|-------|
-| **Quality** | 0.946–0.999 logit cosine similarity across 15 models |
+| **Quality** | 0.946–0.999 logit cosine similarity across 15 models (select pipeline) |
 | **Decode speedup** | Up to +63% at 8K context (Qwen3-8B, 8x compression) |
 | **Max effective context** | 256K tokens from 64K physical KV cache (100% fact recall) |
 | **Baseline overhead** | Zero — fork matches upstream decode speed within 2% |
 | **Compaction speed** | 62–518ms depending on context length and ratio |
 | **Models validated** | 17 tested, 15 pass quality gate |
-| **Architectures supported** | Standard, iSWA, hybrid SSM+attention, IMROPE |
+| **Architectures supported** | Standard, iSWA, hybrid SSM+attention, hybrid-iSWA, IMROPE |
 
 ---
 
@@ -60,7 +60,7 @@ The `select` pipeline (production default) uses zero beta, enabling flash attent
 |-------|-------|-------|-------|-------|-------|-------|
 | Qwen3-8B | 0.999 | 0.999 | 0.997 | 0.999 | 0.998 | 0.997 |
 | Qwen3-30B-A3B | 0.999 | 0.999 | 0.999 | — | — | — |
-| Qwen3-14B | 0.999 | 0.999 | 0.998 | 0.999 | 0.996 | 0.973 |
+| Qwen3-14B | 0.995 | 0.996 | 0.992 | 0.999 | 0.997 | 0.973 |
 | DeepSeek-R1-14B | 0.999 | 0.998 | 0.993 | — | — | — |
 
 ### 256K Iterative Context Extension
@@ -96,7 +96,7 @@ Zero regression from compaction code. MoE model (30B-A3B) is 13% faster than Oll
 
 ## Quality Assurance
 
-- **35 fix commits** addressing 29 distinct bugs (18 Critical/Major)
+- **29 fix commits** addressing 29 distinct bugs (18 Critical/Major)
 - **17 models tested** — 15 pass the 0.95 cosine quality gate
 - **49 CI-gated C++ tests**, 61 total
 - **6 upstream KV cache changes** verified compatible before shipping

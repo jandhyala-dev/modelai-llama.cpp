@@ -4,7 +4,7 @@ This document tracks every bug discovered, investigated, and fixed in modelai-ll
 
 We believe transparency about bugs is a quality signal, not a weakness. Every entry below was found through adversarial testing, fixed with a root-cause analysis, and verified with regression tests.
 
-**Total: 35 fix commits across 29 distinct bugs (8 Critical/Major, 21 Minor/Infra).**
+**Total: 29 fix commits across 29 distinct bugs (18 Critical/Major, 11 Minor/Infra).**
 
 ---
 

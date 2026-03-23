@@ -8,13 +8,13 @@ modelai-llama.cpp tracks [ggml-org/llama.cpp](https://github.com/ggml-org/llama.
 
 | Branch | Purpose |
 |--------|---------|
-| `upstream-sync` | Daily mirror of upstream `master`. Force-updated by CI. |
+| `upstream-sync` | Mirror of upstream `master`. Manually updated before each merge. |
 | `modelai-main` | Stable shipping branch. Merge-only from `upstream-sync` after review. |
 | `kv-compact-*` | Feature branches for compaction milestones. |
 
 ## Sync Cadence
 
-- **Daily:** GitHub Actions fetches `ggml-org/llama.cpp:master` into `upstream-sync`.
+- **Before each merge:** Fetch `ggml-org/llama.cpp:master` into `upstream-sync`.
 - **Weekly:** `upstream-sync` is merged into `modelai-main` after build verification and conflict resolution.
 - **Emergency:** Security patches (e.g., RCE fixes) are synced and merged same-day.
 
