@@ -25,6 +25,20 @@ SERVER_BIN = MODELAI_DIR / "build" / "bin" / "llama-server"
 SERVER_PORT = 8080
 SERVER_URL = f"http://127.0.0.1:{SERVER_PORT}"
 
+# Timeouts (seconds) — set by main() based on context size and CLI overrides
+COMPACTION_TIMEOUT = 60
+COMPLETION_TIMEOUT = 300
+STARTUP_TIMEOUT = 120
+
+
+def compute_timeouts(context_size, compaction_override=0, completion_override=0, startup_override=0):
+    """Compute timeouts that scale with context size. Override with non-zero values."""
+    global COMPACTION_TIMEOUT, COMPLETION_TIMEOUT, STARTUP_TIMEOUT
+    scale = max(1.0, context_size / 32768)
+    COMPACTION_TIMEOUT = compaction_override if compaction_override > 0 else int(60 * scale)
+    COMPLETION_TIMEOUT = completion_override if completion_override > 0 else int(300 * scale)
+    STARTUP_TIMEOUT = startup_override if startup_override > 0 else int(120 * scale)
+
 
 def get_process_memory(pid):
     """Get RSS and virtual memory for a process (macOS). Returns dict with MB values."""
@@ -123,8 +137,8 @@ def start_server(model_path, context_size):
         preexec_fn=os.setsid
     )
 
-    # Wait for server to be ready (up to 120s for large models)
-    for i in range(120):
+    # Wait for server to be ready (scales with context size)
+    for i in range(STARTUP_TIMEOUT):
         time.sleep(1)
         try:
             import urllib.request
@@ -162,7 +176,7 @@ def start_server(model_path, context_size):
             print(f"  Server exited with code {proc.returncode}", flush=True)
             return None, {}
 
-    print("  Server failed to start within 120s", flush=True)
+    print(f"  Server failed to start within {STARTUP_TIMEOUT}s", flush=True)
     kill_server(proc)
     return None, {}
 
@@ -186,6 +200,7 @@ def kill_server(proc):
 def completion(prompt, max_tokens=2048, temperature=0.7):
     """Send a completion request and measure timing."""
     import urllib.request
+    import urllib.error
     payload = json.dumps({
         "prompt": prompt,
         "id_slot": 0,
@@ -203,7 +218,7 @@ def completion(prompt, max_tokens=2048, temperature=0.7):
 
     t0 = time.time()
     try:
-        resp = urllib.request.urlopen(req, timeout=300)
+        resp = urllib.request.urlopen(req, timeout=COMPLETION_TIMEOUT)
         t_total = time.time() - t0
         data = json.loads(resp.read())
 
@@ -223,6 +238,13 @@ def completion(prompt, max_tokens=2048, temperature=0.7):
             "generation_tok_s": round(timings.get("predicted_per_second", 0), 2),
             "time_to_first_token_ms": round(timings.get("prompt_ms", 0), 1),
         }
+    except urllib.error.HTTPError as e:
+        body = ""
+        try:
+            body = e.read().decode()
+        except Exception:
+            pass
+        return {"error": f"HTTP {e.code}: {body or e.reason}", "total_time_s": round(time.time() - t0, 3)}
     except Exception as e:
         return {"error": str(e), "total_time_s": round(time.time() - t0, 3)}
 
@@ -274,7 +296,7 @@ def trigger_compaction(ratio=2.0, method="select"):
 
     t0 = time.time()
     try:
-        resp = urllib.request.urlopen(req, timeout=60)
+        resp = urllib.request.urlopen(req, timeout=COMPACTION_TIMEOUT)
         t_total = time.time() - t0
         data = json.loads(resp.read())
         data["compaction_time_ms"] = round(t_total * 1000, 1)
@@ -432,8 +454,45 @@ def run_baseline_test(use_case_ids, all_use_cases, model_name, context_size, pro
     }
 
 
-def run_compaction_test(conversation_prompt, recall_response_baseline, ratio=2.0):
+def check_health():
+    """Check server health. Returns True if healthy, False otherwise."""
+    import urllib.request
+    try:
+        resp = urllib.request.urlopen(
+            urllib.request.Request(f"{SERVER_URL}/health"), timeout=10
+        )
+        data = json.loads(resp.read())
+        return data.get("status") == "ok"
+    except Exception:
+        return False
+
+
+def log_error(model_dir, endpoint, status, body, use_case=""):
+    """Append structured error to errors.jsonl in the model's output directory."""
+    if model_dir is None:
+        return
+    error_entry = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "endpoint": endpoint,
+        "status": status,
+        "body": body,
+        "use_case": use_case,
+    }
+    errors_path = Path(model_dir) / "errors.jsonl"
+    try:
+        with open(errors_path, "a") as f:
+            f.write(json.dumps(error_entry) + "\n")
+    except Exception:
+        pass
+
+
+def run_compaction_test(conversation_prompt, recall_response_baseline, ratio=2.0, proc=None):
     """Run compaction test on existing conversation."""
+    # Memory delta: capture RSS before compaction (F5 + F6: note that RSS is
+    # unreliable on Apple Silicon unified memory — /props KV stats are the
+    # primary signal for compaction effectiveness)
+    mem_before = get_memory_snapshot(proc) if proc else {}
+
     print(f"    [COMPACT] Triggering {ratio}x compaction...", flush=True)
     compact_result = trigger_compaction(ratio=ratio)
 
@@ -443,12 +502,50 @@ def run_compaction_test(conversation_prompt, recall_response_baseline, ratio=2.0
 
     print(f"    [COMPACT] Done in {compact_result.get('compaction_time_ms', 0)}ms", flush=True)
 
-    # Re-ask recall question
-    recall_prompt = conversation_prompt  # same prompt, but KV cache is compacted
-    recall_prompt_post = "<|im_start|>user\nSummarize the key findings from our entire conversation so far. Be specific about facts, figures, and conclusions from each topic we discussed.<|im_end|>\n<|im_start|>assistant\n"
+    # Health check after compaction (Fix 4) — catches delayed crashes
+    if not check_health():
+        print(f"    [HEALTH] Server unresponsive after compaction!", flush=True)
+        compact_result["error"] = "Server unresponsive after compaction"
+        return {"test_type": f"compacted_{ratio}x", "error": compact_result["error"],
+                "compaction_time_ms": compact_result.get("compaction_time_ms", 0)}
 
-    print(f"    [RECALL-POST] Testing post-compaction recall...", flush=True)
-    recall_resp = completion(recall_prompt_post, max_tokens=1024)
+    # Memory delta after compaction
+    mem_after = get_memory_snapshot(proc) if proc else {}
+    rss_before = mem_before.get("process", {}).get("rss_mb", 0)
+    rss_after = mem_after.get("process", {}).get("rss_mb", 0)
+    kv_before = mem_before.get("server_reported", {}).get("kv_active_total", 0)
+    kv_after = mem_after.get("server_reported", {}).get("kv_active_total", 0)
+    compact_result["memory_delta"] = {
+        "rss_before_mb": rss_before,
+        "rss_after_mb": rss_after,
+        "rss_freed_mb": round(rss_before - rss_after, 1),
+        "kv_before": kv_before,
+        "kv_after": kv_after,
+    }
+    print(f"    [MEMORY] RSS: {rss_before}→{rss_after}MB, KV: {kv_before}→{kv_after}", flush=True)
+
+    # Idempotency check (Fix 6) — second compact should be near-instant or no-op
+    # Expected: engine either returns quickly with same token count, or returns
+    # an error indicating nothing to compact. Behavior is engine-defined.
+    idempotency_result = trigger_compaction(ratio=ratio)
+    compact_result["idempotency"] = {
+        "second_call_time_ms": idempotency_result.get("compaction_time_ms", 0),
+        "second_call_error": idempotency_result.get("error"),
+        "is_noop": idempotency_result.get("tokens_before") == idempotency_result.get("tokens_after"),
+    }
+    print(f"    [IDEMPOTENCY] 2nd compact: {idempotency_result.get('compaction_time_ms', 0)}ms, "
+          f"error={idempotency_result.get('error', 'none')}", flush=True)
+
+    # Re-ask recall question — send full conversation + recall question so the
+    # model has context to recall from.  If KV cache retained the compacted
+    # prefix, cache_prompt=true will reuse it and only evaluate the new tokens.
+    # If not, the server re-evaluates from scratch (which is Issue 1 in the
+    # engine handoff prompt).
+    recall_question = "<|im_start|>user\nSummarize the key findings from our entire conversation so far. Be specific about facts, figures, and conclusions from each topic we discussed.<|im_end|>\n<|im_start|>assistant\n"
+    recall_prompt_full = conversation_prompt + recall_question
+
+    print(f"    [RECALL-POST] Testing post-compaction recall ({len(recall_prompt_full)} chars)...", flush=True)
+    recall_resp = completion(recall_prompt_full, max_tokens=1024)
 
     recall_content = recall_resp.get("content", "")
 
@@ -479,7 +576,13 @@ def main():
     parser.add_argument("--use-cases", required=True, help="Comma-separated use case IDs")
     parser.add_argument("--out-dir", required=True, help="Output directory")
     parser.add_argument("--compaction-ratios", default="2", help="Comma-separated compaction ratios")
+    parser.add_argument("--compaction-timeout", type=int, default=0, help="Compaction timeout in seconds (0=auto-scale with context)")
+    parser.add_argument("--completion-timeout", type=int, default=0, help="Completion timeout in seconds (0=auto-scale with context)")
+    parser.add_argument("--startup-timeout", type=int, default=0, help="Server startup timeout in seconds (0=auto-scale with context)")
     args = parser.parse_args()
+
+    compute_timeouts(args.context_size, args.compaction_timeout, args.completion_timeout, args.startup_timeout)
+    print(f"  Timeouts: startup={STARTUP_TIMEOUT}s, completion={COMPLETION_TIMEOUT}s, compaction={COMPACTION_TIMEOUT}s")
 
     out_dir = Path(args.out_dir)
     model_dir = out_dir / "results" / f"{args.model_order:02d}-{args.model_name.replace(' ', '-')}"
@@ -533,7 +636,7 @@ def main():
             conversation = baseline.get("conversation_for_compaction", "")
             for ratio in compaction_ratios:
                 print(f"\n  --- Compaction Test ({ratio}x @ {ctx_k}K) ---", flush=True)
-                compact_result = run_compaction_test(conversation, baseline.get("recall_response", ""), ratio)
+                compact_result = run_compaction_test(conversation, baseline.get("recall_response", ""), ratio, proc=proc)
                 compact_result["model"] = args.model_name
                 compact_result["context_size"] = args.context_size
                 compact_result["timestamp"] = datetime.now(timezone.utc).isoformat()
