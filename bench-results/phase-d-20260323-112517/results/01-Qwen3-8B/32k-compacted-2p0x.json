@@ -1,0 +1,31 @@
+{
+  "test_type": "compacted_2.0x",
+  "compaction_ratio": 2.0,
+  "compaction_time_ms": 366.0,
+  "cosine_similarity": null,
+  "tokens_before": null,
+  "tokens_after": null,
+  "memory_delta": {
+    "rss_before_mb": 9632.0,
+    "rss_after_mb": 10036.4,
+    "rss_freed_mb": -404.4,
+    "kv_before": 5657,
+    "kv_after": 0
+  },
+  "idempotency": {
+    "second_call_time_ms": 0.4,
+    "second_call_error": "HTTP 500: {\"error\":{\"code\":500,\"message\":\"Compaction failed \u2014 check server logs for details\",\"type\":\"server_error\"}}",
+    "is_noop": true
+  },
+  "recall": {
+    "generation_tok_s": 27.2,
+    "time_to_first_token_ms": 16198.2,
+    "total_time_s": 53.857,
+    "recall_quality_score": 5,
+    "response_word_count": 653
+  },
+  "recall_response": "<think>\nOkay, the user wants a summary of the key findings from the entire conversation so far. Let me check the previous messages to recall all the topics discussed.  \n\nFirst, the user asked about the 5 largest tech sector acquisitions in 2025-2026. I created hypothetical deals, including Microsoft, Alphabet, Apple, NVIDIA, and Meta as acquirers. Each deal had specific details like deal value, strategic rationale, premium, and regulatory status. Then, they wanted a comparison of valuation multiples (EV/Revenue and EV/EBITDA) to determine which deals were overvalued or accretive.  \n\nNext, the user asked about the top 10 S&P 500 companies by share buyback volume in Q4 2025. I listed companies like Apple, Microsoft, Amazon, Alphabet, and others, providing figures for buyback amounts, percentages of market cap, yields, program participation, and share count impact. Then, I analyzed whether these buybacks were good capital allocation or value-destructive.  \n\nAfter that, the user requested a comparison of Q4 2025 earnings results for Meta, Apple, Amazon, Netflix, and Alphabet. I outlined revenue growth, EPS performance, margin trends, segment highlights, and forward guidance, identifying Apple as the strongest quarter and Meta/Netflix as showing margin concerns. Themes included AI investment, advertising, and cloud growth.  \n\nFinally, the user asked about SEC enforcement actions in 2025, and I listed five hypothetical cases, including types of violations like insider trading, accounting fraud, and ESG reporting, along with penalties and statuses. The analysis noted prioritization of these violations and compared them to the prior three years, highlighting increased penalties and focus on ESG.  \n\nNow, the user is asking for a summary of all these findings. I need to compile each topic, mention the facts, figures, and conclusions from each. Make sure to be specific and structured. Let me organize this step by step, ensuring clarity and that all points are covered without missing any.  \n\nAlso, I should check for consistency in the hypothetical data. For example, in the acquisitions, the EV/Revenue and EV/EBITDA multiples were compared. In the buybacks, specific percentages and yields were mentioned. In the earnings, growth rates and EPS beats/misses were outlined. And in the SEC cases, violation types and penalties were detailed.  \n\nI need to present each section clearly, using bullet points or numbered lists for readability. The user might be looking to understand the overall trends and key takeaways from the hypothetical scenarios, so summarizing the main points and conclusions from each topic is essential.  \n\nMake sure to highlight which deals were overvalued vs. accretive, the strongest buybacks, and the companies with the best earnings performance. Also, note the SEC's focus areas and how they compare to previous years. This way, the user gets a comprehensive overview of the discussion.  \n\nDouble-check that all the numbers and conclusions align with the hypothetical scenarios created earlier. Avoid introducing new data and stick to the examples provided. Keep the summary concise but thorough, covering all the topics the user mentioned.  \n</think>\n\n### **Key Findings from the Entire Conversation**  \nBelow is a structured summary of the hypothetical scenarios and analyses discussed across all topics:  \n\n---\n\n#### **1. 5 Largest Technology Sector Acquisitions (2025\u20132026)**  \n**Deal 1**:  \n- **Acquirer**: Microsoft  \n- **Target**: *SynapseAI Lab* (AI research firm)  \n- **Deal Value**: $60B  \n- **Strategic Rationale**: To accelerate AI integration into enterprise software and cloud services.  \n- **Premium**: 50% over pre-announcement stock price.  \n- **Regulatory Status**: Approved (U.S. and EU).  \n- **Valuation Multiple**: EV/Revenue = 7.5x, EV/EBITDA = 12x.  \n\n**Deal 2**:  \n- **Acquirer**: Amazon  \n- **Target**: *SmartChain Dynamics* (supply chain optimization)  \n- **Deal Value**: $55B  \n- **Strategic Rationale**: Enhance logistics efficiency and reduce costs.  \n- **Premium**: 35% over stock price.  \n- **Regulatory Status**: Ongoing review (U.S. antitrust concerns).  \n- **Valuation Multiple**: EV/Revenue = 6.5x, EV/EBITDA = 9x.  \n\n**Deal 3**:  \n- **Acquirer**: Apple  \n- **Target**: *HealthTrack Innovations* (health tech startup)  \n- **Deal Value**: $45B  \n- **Strategic Rationale**: Expand into wearable health and wellness markets.  \n- **Premium**: 40% over stock price.  \n- **Regulatory Status**: Approved (U.S. and EU).  \n- **Val",
+  "model": "Qwen3-8B",
+  "context_size": 32768,
+  "timestamp": "2026-03-23T18:29:16.593138+00:00"
+}

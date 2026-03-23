@@ -1,0 +1,70 @@
+{
+  "_description": "Phase D model registry. Auto-discovered by the orchestrator. Models not present on disk are skipped with a warning.",
+  "_updated": "2026-03-23",
+  "_models_dir": "~/dev/whippet/models",
+  "models": [
+    {
+      "name": "Qwen3-8B",
+      "filename": "Qwen3-8B-128K-UD-Q4_K_XL.gguf",
+      "context_size": 32768,
+      "compaction_ratios": [2.0],
+      "compaction_supported": true,
+      "use_cases": ["D-1-1", "D-2-1", "D-3-1", "D-4-1"],
+      "notes": "Dense 8B, fastest model. Sanity check baseline."
+    },
+    {
+      "name": "Qwen3-14B",
+      "filename": "Qwen3-14B-128K-UD-Q4_K_XL.gguf",
+      "context_size": 32768,
+      "compaction_ratios": [2.0],
+      "compaction_supported": true,
+      "use_cases": ["D-1-1", "D-1-2", "D-2-1", "D-2-2", "D-3-1", "D-3-2", "D-4-1", "D-4-2"],
+      "notes": "Dense 14B, mid-tier quality."
+    },
+    {
+      "name": "Qwen3-30B-A3B-Instruct",
+      "filename": "Qwen3-30B-A3B-Instruct-2507-UD-Q4_K_XL.gguf",
+      "context_size": 65536,
+      "compaction_ratios": [4.0],
+      "compaction_supported": true,
+      "use_cases": ["D-1-1", "D-1-2", "D-1-3", "D-1-4", "D-2-1", "D-2-2", "D-2-3", "D-2-4", "D-3-1", "D-3-2", "D-3-3", "D-3-4", "D-4-1", "D-4-2", "D-4-3", "D-4-4", "D-5-1", "D-5-2"],
+      "notes": "Primary MoE 30B. Full 18-use-case suite at 64K."
+    },
+    {
+      "name": "Qwen3-30B-A3B-Thinking",
+      "filename": "Qwen3-30B-A3B-Thinking-2507-UD-Q4_K_XL.gguf",
+      "context_size": 65536,
+      "compaction_ratios": [4.0],
+      "compaction_supported": true,
+      "use_cases": ["D-1-1", "D-1-2", "D-1-3", "D-1-4", "D-2-1", "D-2-2", "D-2-3", "D-2-4", "D-3-1", "D-3-2", "D-3-3", "D-3-4", "D-4-1", "D-4-2", "D-4-3", "D-4-4", "D-5-1", "D-5-2"],
+      "notes": "MoE reasoning specialist. Use enable_thinking=false for compaction tests."
+    },
+    {
+      "name": "Qwen3-Coder-30B-A3B",
+      "filename": "Qwen3-Coder-30B-A3B-Instruct-1M-UD-Q4_K_XL.gguf",
+      "context_size": 65536,
+      "compaction_ratios": [4.0],
+      "compaction_supported": true,
+      "use_cases": ["D-1-1", "D-1-2", "D-1-3", "D-1-4", "D-2-1", "D-2-2", "D-2-3", "D-2-4", "D-3-1", "D-3-2", "D-3-3", "D-3-4", "D-4-1", "D-4-2", "D-4-3", "D-4-4", "D-5-1", "D-5-2"],
+      "notes": "Primary coding MoE. 1M native context. Already tested in E2E."
+    },
+    {
+      "name": "Qwen3.5-35B-A3B",
+      "filename": "Qwen3.5-35B-A3B-Q4_K_M.gguf",
+      "context_size": 65536,
+      "compaction_ratios": [4.0],
+      "compaction_supported": true,
+      "use_cases": ["D-1-1", "D-1-2", "D-2-1", "D-2-2", "D-3-1", "D-3-2", "D-4-1", "D-4-2"],
+      "notes": "Eval model. Heavier MoE. Previously FAILED (HTTP 500, fixed in 4b6af8b02)."
+    },
+    {
+      "name": "gemma-3-4b-it",
+      "filename": "gemma-3-4b-it-UD-Q4_K_XL.gguf",
+      "context_size": 8192,
+      "compaction_ratios": [],
+      "compaction_supported": false,
+      "use_cases": ["D-1-1", "D-2-1", "D-3-1", "D-4-1"],
+      "notes": "Vision model. SWA architecture — no compaction support. Baseline only."
+    }
+  ]
+}

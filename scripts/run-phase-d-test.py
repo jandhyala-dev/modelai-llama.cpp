@@ -556,6 +556,8 @@ def run_compaction_test(conversation_prompt, recall_response_baseline, ratio=2.0
         "cosine_similarity": compact_result.get("cosine_similarity"),
         "tokens_before": compact_result.get("tokens_before"),
         "tokens_after": compact_result.get("tokens_after"),
+        "memory_delta": compact_result.get("memory_delta", {}),
+        "idempotency": compact_result.get("idempotency", {}),
         "recall": {
             "generation_tok_s": recall_resp.get("generation_tok_s", 0),
             "time_to_first_token_ms": recall_resp.get("time_to_first_token_ms", 0),
