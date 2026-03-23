@@ -21,10 +21,12 @@ OUT_DIR="${REPO_DIR}/bench-results/phase-d-${TIMESTAMP}"
 # Parse args
 MODEL_FILTER=""
 DRY_RUN=false
+SERVER_URL=""
 while [[ $# -gt 0 ]]; do
   case $1 in
     --model) MODEL_FILTER="$2"; shift 2 ;;
     --dry-run) DRY_RUN=true; shift ;;
+    --server-url) SERVER_URL="$2"; shift 2 ;;
     *) echo "Unknown arg: $1"; exit 1 ;;
   esac
 done
@@ -59,6 +61,7 @@ echo "Registry:   $REGISTRY ($TOTAL models)"
 echo "Models dir: $MODELS_DIR"
 echo "Output:     $OUT_DIR"
 echo "Filter:     ${MODEL_FILTER:-all}"
+echo "Server:     ${SERVER_URL:-managed (auto-start/stop)}"
 echo "Dry run:    $DRY_RUN"
 echo "=========================================="
 
@@ -109,20 +112,28 @@ while IFS= read -r model; do
     continue
   fi
 
-  # Kill any leftover server
-  pkill -f llama-server 2>/dev/null || true
-  sleep 2
+  # Server management
+  if [[ -z "$SERVER_URL" ]]; then
+    pkill -f llama-server 2>/dev/null || true
+    sleep 2
+  fi
 
-  # Run Phase D
-  python3 "${SCRIPT_DIR}/run-phase-d-test.py" \
-    --model-path "$MODEL_PATH" \
-    --model-name "$NAME" \
-    --model-order "$ORDER" \
-    --context-size "$CTX" \
-    --use-cases "$USE_CASES_LIST" \
-    --out-dir "$OUT_DIR" \
-    --compaction-ratios "${RATIOS:-2}" \
-    2>&1 | tee "${OUT_DIR}/${NAME}.log"
+  # Build command
+  CMD=(python3 "${SCRIPT_DIR}/run-phase-d-test.py"
+    --model-name "$NAME"
+    --model-order "$ORDER"
+    --context-size "$CTX"
+    --use-cases "$USE_CASES_LIST"
+    --out-dir "$OUT_DIR"
+    --compaction-ratios "${RATIOS:-2}")
+
+  if [[ -n "$SERVER_URL" ]]; then
+    CMD+=(--server-url "$SERVER_URL")
+  else
+    CMD+=(--model-path "$MODEL_PATH")
+  fi
+
+  "${CMD[@]}" 2>&1 | tee "${OUT_DIR}/${NAME}.log"
 
   EXIT_CODE=${PIPESTATUS[0]}
   if [[ $EXIT_CODE -ne 0 ]]; then
@@ -133,9 +144,11 @@ while IFS= read -r model; do
     TESTED=$((TESTED + 1))
   fi
 
-  # Kill server between models
-  pkill -f llama-server 2>/dev/null || true
-  sleep 3
+  # Kill server between models (only if we manage it)
+  if [[ -z "$SERVER_URL" ]]; then
+    pkill -f llama-server 2>/dev/null || true
+    sleep 3
+  fi
 done <<< "$MODELS"
 
 echo ""

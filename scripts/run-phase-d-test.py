@@ -579,7 +579,7 @@ def run_compaction_test(conversation_prompt, recall_response_baseline, ratio=2.0
 
 def main():
     parser = argparse.ArgumentParser(description="Phase D test runner")
-    parser.add_argument("--model-path", required=True, help="Path to GGUF model")
+    parser.add_argument("--model-path", help="Path to GGUF model (not needed with --server-url)")
     parser.add_argument("--model-name", required=True, help="Human-readable model name")
     parser.add_argument("--model-order", type=int, default=0, help="Model test order (1-17)")
     parser.add_argument("--context-size", type=int, required=True, help="Context size in tokens")
@@ -589,7 +589,19 @@ def main():
     parser.add_argument("--compaction-timeout", type=int, default=0, help="Compaction timeout in seconds (0=auto-scale with context)")
     parser.add_argument("--completion-timeout", type=int, default=0, help="Completion timeout in seconds (0=auto-scale with context)")
     parser.add_argument("--startup-timeout", type=int, default=0, help="Server startup timeout in seconds (0=auto-scale with context)")
+    parser.add_argument("--server-url", default="", help="Connect to existing server (skip startup/shutdown). E.g. http://127.0.0.1:8090")
     args = parser.parse_args()
+
+    # When using an existing server, model-path is optional
+    external_server = bool(args.server_url)
+    if not external_server and not args.model_path:
+        parser.error("--model-path is required unless --server-url is provided")
+
+    # Point all requests at the right URL
+    if external_server:
+        global SERVER_URL
+        SERVER_URL = args.server_url.rstrip("/")
+        print(f"  Using existing server: {SERVER_URL}")
 
     compute_timeouts(args.context_size, args.compaction_timeout, args.completion_timeout, args.startup_timeout)
     print(f"  Timeouts: startup={STARTUP_TIMEOUT}s, completion={COMPLETION_TIMEOUT}s, compaction={COMPACTION_TIMEOUT}s")
@@ -609,18 +621,44 @@ def main():
     print(f"MODEL: {args.model_name} | CONTEXT: {ctx_k}K | USE CASES: {use_case_ids}")
     print(f"{'='*70}")
 
-    # Start server
-    proc, startup_info = start_server(args.model_path, args.context_size)
-    if not proc:
-        error_result = {
-            "model": args.model_name,
-            "context_size": args.context_size,
-            "error": "Server failed to start",
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-        }
-        with open(model_dir / f"{ctx_k}k-baseline.json", "w") as f:
-            json.dump(error_result, f, indent=2)
-        return
+    # Start or connect to server
+    proc = None
+    startup_info = {}
+    if external_server:
+        # Verify external server is healthy
+        import urllib.request
+        try:
+            resp = urllib.request.urlopen(urllib.request.Request(f"{SERVER_URL}/health"), timeout=10)
+            data = json.loads(resp.read())
+            if data.get("status") != "ok":
+                print(f"  ERROR: Server not healthy: {data}")
+                return
+            print(f"  External server healthy", flush=True)
+            # Get compaction support
+            try:
+                presp = urllib.request.urlopen(urllib.request.Request(f"{SERVER_URL}/props"), timeout=5)
+                props = json.loads(presp.read())
+                cap = props.get("modelai", {}).get("capabilities", {}).get("compacted_prefix", {})
+                startup_info["compaction_available"] = cap.get("available", False)
+                print(f"  Compaction: available={startup_info['compaction_available']}", flush=True)
+            except Exception:
+                startup_info["compaction_available"] = False
+            startup_info["external_server"] = True
+        except Exception as e:
+            print(f"  ERROR: Cannot reach server at {SERVER_URL}: {e}")
+            return
+    else:
+        proc, startup_info = start_server(args.model_path, args.context_size)
+        if not proc:
+            error_result = {
+                "model": args.model_name,
+                "context_size": args.context_size,
+                "error": "Server failed to start",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+            with open(model_dir / f"{ctx_k}k-baseline.json", "w") as f:
+                json.dump(error_result, f, indent=2)
+            return
 
     compaction_available = startup_info.get("compaction_available", False)
 
@@ -682,7 +720,8 @@ def main():
                 json.dump(metrics, f, indent=2)
 
     finally:
-        kill_server(proc)
+        if not external_server:
+            kill_server(proc)
 
     print(f"\n  Results saved to {model_dir}/")
     print(f"  DONE: {args.model_name} @ {ctx_k}K\n")
