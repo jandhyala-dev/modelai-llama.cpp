@@ -1,0 +1,22 @@
+{
+  "schema_version": 1,
+  "timestamp": "2026-03-23T10:04:07Z",
+  "phase": "D-retest",
+  "description": "Phase D retest after 5 compaction bug fixes (be2491cb7)",
+  "engine_commit": "be2491cb7",
+  "previous_run": "phase-d-20260316-112022",
+  "previous_engine_commit": "8c316954",
+  "fixes_included": [
+    "4b6af8b02 — fix post-compaction crash when slot reuses stale prompt cache",
+    "da87e6397 — fix ablation flags",
+    "d3a5759ab — fix is_imrope not serialized in state save/restore",
+    "b44d4cd1e — fix seq_cp not copying is_imrope + clear() reset",
+    "ae691cb20 — V5 Sprint 1 safety + measurement foundation"
+  ],
+  "hardware": {
+    "cpu": "Apple M2 Pro",
+    "memory_gb": 32
+  },
+  "compaction_ratios": [2, 10],
+  "use_cases": ["D-1-1", "D-2-1", "D-3-1", "D-5-1"]
+}

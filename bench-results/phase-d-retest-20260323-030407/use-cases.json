@@ -1,0 +1,267 @@
+{
+  "schema_version": 1,
+  "created": "2026-03-16T11:20:22Z",
+  "categories": [
+    "M&A Activity Analysis",
+    "Share Buyback & Capital Returns",
+    "Earnings Analysis & Financial Research",
+    "Legal & Regulatory Research",
+    "Market Analysis & Strategy",
+    "Company Deep Dives",
+    "Cross-Domain Synthesis"
+  ],
+  "use_cases": [
+    {
+      "id": "D-1-1",
+      "category": "M&A Activity Analysis",
+      "title": "Largest Tech Acquisitions 2025-2026",
+      "prompt": "Identify and analyze the 5 largest technology sector acquisitions announced in 2025-2026. For each deal, provide: (1) acquirer and target names, (2) deal value, (3) strategic rationale from the acquirer's perspective, (4) premium paid over pre-announcement price, (5) regulatory approval status. Then compare the valuation multiples (EV/Revenue, EV/EBITDA) across all 5 deals and explain which deal appears most overvalued and which appears most accretive.",
+      "expected_depth": {"sources": 5, "dimensions": 5, "min_words": 800},
+      "context_requirement": "medium_32k",
+      "success_criteria": "Names at least 3 real deals with correct approximate values, provides valuation multiples, identifies regulatory risks"
+    },
+    {
+      "id": "D-1-2",
+      "category": "M&A Activity Analysis",
+      "title": "Cross-Border M&A Regulatory Risk",
+      "prompt": "Analyze the regulatory landscape for cross-border technology M&A. Focus on: (1) How has CFIUS (Committee on Foreign Investment) changed its review process since 2024? (2) What are the EU's new foreign subsidy screening requirements? (3) Identify 3 recent deals that were blocked or required significant concessions due to regulatory review. (4) What patterns predict regulatory intervention — deal size thresholds, technology categories, country of acquirer? Build a risk framework that an M&A analyst could use to pre-screen deal viability.",
+      "expected_depth": {"sources": 6, "dimensions": 4, "min_words": 1000},
+      "context_requirement": "long_64k",
+      "success_criteria": "Correctly describes CFIUS and EU regulatory frameworks, cites real blocked/modified deals, provides actionable screening criteria"
+    },
+    {
+      "id": "D-1-3",
+      "category": "M&A Activity Analysis",
+      "title": "Private Equity Tech Buyout Trends",
+      "prompt": "Analyze private equity activity in the technology sector over the past 18 months. Cover: (1) Which PE firms have been most active in tech buyouts? (2) What are the typical leverage multiples and financing structures? (3) How do take-private valuations compare to public market multiples? (4) Identify the top 5 PE-backed tech deals by size. (5) What is the typical value creation thesis — cost cutting, platform consolidation, or growth acceleration? (6) How has the interest rate environment affected deal flow and financing costs? Provide specific examples with approximate numbers.",
+      "expected_depth": {"sources": 8, "dimensions": 6, "min_words": 1200},
+      "context_requirement": "extended_128k",
+      "success_criteria": "Names real PE firms and deals, correctly describes leverage environment, provides specific valuation data"
+    },
+    {
+      "id": "D-1-4",
+      "category": "M&A Activity Analysis",
+      "title": "AI Startup Acquisition Landscape",
+      "prompt": "Map the AI startup acquisition landscape comprehensively. (1) Which large tech companies have been acquiring AI startups most aggressively — compare Google, Microsoft, Apple, Meta, Amazon, and NVIDIA's acquisition strategies. (2) What are the common acquisition targets — foundation model companies, vertical AI applications, AI infrastructure/tooling, or AI chip designers? (3) What are typical acquisition multiples for pre-revenue vs. revenue-generating AI companies? (4) Analyze the 'acqui-hire' vs. 'product acquisition' distinction — how does valuation differ? (5) Identify emerging AI M&A targets that haven't been acquired yet but are likely candidates based on technology, team, and strategic fit. (6) How do antitrust concerns around AI concentration affect deal strategy?",
+      "expected_depth": {"sources": 10, "dimensions": 6, "min_words": 1500},
+      "context_requirement": "extended_128k",
+      "success_criteria": "Comprehensive mapping of acquirer strategies, specific deal examples, forward-looking analysis of likely targets"
+    },
+    {
+      "id": "D-2-1",
+      "category": "Share Buyback & Capital Returns",
+      "title": "S&P 500 Buyback Leaders Q4 2025",
+      "prompt": "Identify the top 10 S&P 500 companies by share buyback volume in Q4 2025. For each company provide: (1) total buyback amount in dollars, (2) buyback as percentage of market cap, (3) buyback yield, (4) whether the buyback was part of an announced program or accelerated repurchase, (5) impact on diluted share count year-over-year. Then analyze: which of these buybacks appear to be good capital allocation (buying below intrinsic value) vs. potentially value-destructive (buying at elevated multiples)?",
+      "expected_depth": {"sources": 5, "dimensions": 5, "min_words": 800},
+      "context_requirement": "medium_32k",
+      "success_criteria": "Lists real companies with approximately correct buyback figures, analyzes value creation vs destruction"
+    },
+    {
+      "id": "D-2-2",
+      "category": "Share Buyback & Capital Returns",
+      "title": "Tech Sector Capital Return Comparison",
+      "prompt": "Compare capital return policies across the 10 largest technology companies by market cap (Apple, Microsoft, NVIDIA, Alphabet, Amazon, Meta, TSMC, Broadcom, Samsung, ASML). For each: (1) annual dividend yield, (2) annual buyback yield, (3) total shareholder yield, (4) payout ratio, (5) free cash flow margin. Then rank them by total capital return efficiency. Which companies are under-returning capital relative to their free cash flow generation? Which are over-distributing? How do these policies correlate with growth rates and reinvestment needs?",
+      "expected_depth": {"sources": 6, "dimensions": 5, "min_words": 1000},
+      "context_requirement": "long_64k",
+      "success_criteria": "Accurate financial data for major tech companies, meaningful comparative analysis, identifies outliers"
+    },
+    {
+      "id": "D-2-3",
+      "category": "Share Buyback & Capital Returns",
+      "title": "Buyback Timing and Effectiveness Analysis",
+      "prompt": "Conduct a meta-analysis of share buyback timing effectiveness in the S&P 500. (1) What percentage of companies buy back shares at prices that turn out to be within 10% of subsequent 12-month highs vs lows? (2) Compare the returns of companies that buy back shares consistently vs opportunistically. (3) Analyze the correlation between insider selling and corporate buyback activity — are executives selling while their companies buy? (4) How do buyback announcements affect stock price in the short term (event study)? (5) Which sectors have the best track record of value-accretive buybacks? (6) What metrics should an analyst use to distinguish value-creating from value-destroying buybacks in real time?",
+      "expected_depth": {"sources": 8, "dimensions": 6, "min_words": 1200},
+      "context_requirement": "extended_128k",
+      "success_criteria": "Provides statistical framework, cites academic research or data, gives actionable screening criteria"
+    },
+    {
+      "id": "D-2-4",
+      "category": "Share Buyback & Capital Returns",
+      "title": "Capital Returns in a Rising Rate Environment",
+      "prompt": "Analyze how the Federal Reserve's monetary policy trajectory affects corporate capital return strategies. (1) How have aggregate S&P 500 buyback volumes changed as interest rates rose from 2022-2025? (2) How does the cost of debt-financed buybacks compare to equity yields at current rates? (3) Which companies shifted from buybacks to debt reduction as rates rose? (4) Analyze the 'buyback arbitrage' — companies borrowing at X% to retire equity yielding Y%. At what spread does this create value? (5) How should investors interpret a company that INCREASES buybacks in a rising rate environment? (6) Model a hypothetical: Company with $10B FCF, 3% dividend yield, $50B market cap, 5% cost of debt. What's the optimal capital return split at current rates?",
+      "expected_depth": {"sources": 8, "dimensions": 6, "min_words": 1500},
+      "context_requirement": "extended_128k",
+      "success_criteria": "Correct macro analysis, specific company examples, mathematically sound buyback arbitrage framework"
+    },
+    {
+      "id": "D-3-1",
+      "category": "Earnings Analysis & Financial Research",
+      "title": "FAANG Q4 2025 Earnings Comparison",
+      "prompt": "Compare Q4 2025 earnings results across Meta, Apple, Amazon, Netflix, and Alphabet. For each company: (1) revenue and YoY growth, (2) EPS and beat/miss vs consensus, (3) operating margin trend, (4) key segment performance, (5) forward guidance vs expectations. Identify: which company had the strongest quarter relative to expectations? Which showed the most concerning margin trends? What themes emerged across all five companies (AI investment, advertising trends, cloud growth)?",
+      "expected_depth": {"sources": 5, "dimensions": 5, "min_words": 800},
+      "context_requirement": "medium_32k",
+      "success_criteria": "Accurate earnings data for all 5 companies, correct identification of beats/misses, thematic analysis"
+    },
+    {
+      "id": "D-3-2",
+      "category": "Earnings Analysis & Financial Research",
+      "title": "Semiconductor Industry Margin Analysis",
+      "prompt": "Analyze gross and operating margin trends across the semiconductor industry for the past 8 quarters (Q1 2024 through Q4 2025). Cover: NVIDIA, AMD, Intel, TSMC, Broadcom, Qualcomm, Texas Instruments, and Marvell. (1) Chart the margin trajectory for each company. (2) What's driving margin expansion for AI-exposed companies vs margin compression for legacy companies? (3) How do capital expenditure plans correlate with margin trends? (4) Which companies are gaining pricing power and which are losing it? (5) Forecast margin trends for 2026 based on known capacity additions and demand trends.",
+      "expected_depth": {"sources": 8, "dimensions": 5, "min_words": 1000},
+      "context_requirement": "long_64k",
+      "success_criteria": "Correct margin data for multiple quarters, meaningful trend analysis, supported forecasts"
+    },
+    {
+      "id": "D-3-3",
+      "category": "Earnings Analysis & Financial Research",
+      "title": "Earnings Revision Momentum Strategy",
+      "prompt": "Design and backtest an earnings revision momentum strategy. (1) Define 'earnings revision momentum' — the tendency for analyst estimate revisions to cluster and predict future estimate changes. (2) Using the S&P 500 universe, identify sectors where revision momentum is currently strongest (positive) and weakest (negative). (3) What are the current consensus EPS estimates for the S&P 500 for 2026 and 2027, and how have they changed over the past 3 months? (4) Identify 5 specific companies with the strongest positive revision momentum right now. (5) Identify 5 with the most negative revision momentum. (6) What historical win rate does this strategy produce? (7) How should position sizing account for revision magnitude vs. breadth?",
+      "expected_depth": {"sources": 8, "dimensions": 7, "min_words": 1200},
+      "context_requirement": "extended_128k",
+      "success_criteria": "Sound methodology, real current consensus data, specific stock picks with rationale"
+    },
+    {
+      "id": "D-3-4",
+      "category": "Earnings Analysis & Financial Research",
+      "title": "Quality of Earnings Deep Dive",
+      "prompt": "Conduct a 'quality of earnings' analysis framework and apply it to 3 companies of your choice. For each company: (1) Compare reported EPS to cash EPS (operating cash flow per share). (2) Analyze accrual ratios — high accruals relative to cash flow suggest lower quality earnings. (3) Identify one-time items, non-cash charges, and adjustments management uses to present 'adjusted' earnings. (4) Compare GAAP vs non-GAAP earnings — what's the gap and is it growing? (5) Analyze revenue recognition policies — any signs of channel stuffing, bill-and-hold, or aggressive contract accounting? (6) Check for changes in accounting estimates or policies. (7) Assess DSO, DIO, DPO trends as early warning signals. Choose companies where you suspect earnings quality may be deteriorating and explain why.",
+      "expected_depth": {"sources": 10, "dimensions": 7, "min_words": 1500},
+      "context_requirement": "extended_128k",
+      "success_criteria": "Correct application of forensic accounting techniques, specific company analysis with real financial data"
+    },
+    {
+      "id": "D-4-1",
+      "category": "Legal & Regulatory Research",
+      "title": "Recent SEC Enforcement Actions 2025",
+      "prompt": "Summarize the 5 most significant SEC enforcement actions from 2025. For each case: (1) defendant(s), (2) violation type (securities fraud, insider trading, accounting fraud, etc.), (3) alleged conduct, (4) penalty or settlement amount, (5) current status (settled, ongoing litigation, etc.). Then analyze patterns: which violation types are the SEC prioritizing? How do recent enforcement actions compare to the prior 3 years in terms of frequency and penalty severity? What should public companies and their counsel be most concerned about?",
+      "expected_depth": {"sources": 5, "dimensions": 5, "min_words": 800},
+      "context_requirement": "medium_32k",
+      "success_criteria": "Cites real SEC enforcement actions with correct details, identifies enforcement priorities"
+    },
+    {
+      "id": "D-4-2",
+      "category": "Legal & Regulatory Research",
+      "title": "AI Regulation Global Landscape",
+      "prompt": "Map the current global AI regulation landscape as of early 2026. Cover: (1) EU AI Act — current implementation status, which provisions are active, which companies are affected. (2) US federal AI policy — executive orders, proposed legislation, agency guidance from SEC, FTC, FDA. (3) China's AI regulations — what's been implemented and how does enforcement work? (4) UK's pro-innovation regulatory approach vs EU's precautionary approach — compare outcomes. (5) How do these regulations specifically affect financial services AI (trading algorithms, credit scoring, risk models, robo-advisors)? (6) What compliance requirements should a company building an AI-powered financial analysis tool (like ModelAI) be aware of?",
+      "expected_depth": {"sources": 8, "dimensions": 6, "min_words": 1000},
+      "context_requirement": "long_64k",
+      "success_criteria": "Accurate regulatory status across jurisdictions, specific compliance requirements for fintech AI"
+    },
+    {
+      "id": "D-4-3",
+      "category": "Legal & Regulatory Research",
+      "title": "Big Tech Antitrust Analysis",
+      "prompt": "Provide a comprehensive analysis of active antitrust cases and investigations against major technology companies. (1) DOJ vs Google — search monopoly and ad tech cases. What are the current rulings, remedies proposed, and likely outcomes? (2) FTC vs Amazon — marketplace practices. Status and implications. (3) EU Digital Markets Act enforcement — which companies are designated 'gatekeepers' and what compliance measures are required? (4) Apple's App Store antitrust exposure post-Epic. (5) Meta's acquisition review — any retroactive challenges? (6) For each case, assess the probability of a meaningful remedy (breakup, behavioral changes, fines) and the financial impact. (7) How should investors price antitrust risk into these stocks?",
+      "expected_depth": {"sources": 10, "dimensions": 7, "min_words": 1200},
+      "context_requirement": "extended_128k",
+      "success_criteria": "Accurate legal status of each case, informed probability assessments, investor-relevant conclusions"
+    },
+    {
+      "id": "D-4-4",
+      "category": "Legal & Regulatory Research",
+      "title": "Patent Litigation and IP Strategy in AI",
+      "prompt": "Analyze the patent litigation landscape in AI and machine learning. (1) Who are the most active patent litigants in AI — operating companies vs NPEs (patent trolls)? (2) What are the most contested AI patent categories (training methods, architecture innovations, inference optimization, specific applications)? (3) Analyze 3 significant recent AI patent cases and their outcomes. (4) How are courts handling patent claims related to AI-generated inventions? (5) What is the current state of copyright law as applied to AI training data (NYT vs OpenAI, Getty vs Stability AI)? (6) For a company building local-first AI tools, what IP risks exist and what defensive strategies should be employed? (7) How might the evolving patent landscape affect open-source AI projects like llama.cpp?",
+      "expected_depth": {"sources": 10, "dimensions": 7, "min_words": 1500},
+      "context_requirement": "extended_128k",
+      "success_criteria": "Cites real patent cases, accurate legal analysis, practical defensive strategy recommendations"
+    },
+    {
+      "id": "D-5-1",
+      "category": "Market Analysis & Strategy",
+      "title": "Sector Rotation Analysis 2025-2026",
+      "prompt": "Analyze sector rotation patterns in US equity markets over the past 12 months. (1) Which S&P 500 sectors outperformed and underperformed, with specific return figures? (2) How does current sector positioning compare to the historical business cycle framework? (3) What does the relative performance of cyclical vs defensive sectors tell us about the economic outlook? (4) Analyze money flow data — which sectors are seeing net inflows vs outflows from institutional investors? (5) What is the current relative valuation (P/E, P/B) of each sector vs its 10-year average?",
+      "expected_depth": {"sources": 5, "dimensions": 5, "min_words": 800},
+      "context_requirement": "medium_32k",
+      "success_criteria": "Correct sector performance data, meaningful business cycle analysis, supported conclusions"
+    },
+    {
+      "id": "D-5-2",
+      "category": "Market Analysis & Strategy",
+      "title": "Equity-Credit Market Divergence",
+      "prompt": "Analyze the relationship between equity and credit markets as of early 2026. (1) What are current investment-grade and high-yield credit spreads, and how do they compare to historical averages? (2) Is there a divergence between equity market optimism (S&P 500 levels) and credit market pricing? (3) How do credit default swap spreads on major tech companies compare to their equity implied volatility? (4) What does the yield curve shape tell us about recession risk? (5) Analyze leveraged loan market conditions — default rates, recovery rates, covenant quality. (6) If credit markets are signaling stress that equities aren't pricing, what's the historical precedent for which market is 'right'?",
+      "expected_depth": {"sources": 6, "dimensions": 6, "min_words": 1000},
+      "context_requirement": "long_64k",
+      "success_criteria": "Accurate spread data, meaningful cross-market analysis, historical precedent discussion"
+    },
+    {
+      "id": "D-5-3",
+      "category": "Market Analysis & Strategy",
+      "title": "Geopolitical Risk Pricing in Markets",
+      "prompt": "Analyze how geopolitical risks are currently priced in global financial markets. (1) US-China technology competition — how is decoupling affecting semiconductor supply chains, and which companies are most exposed? (2) Taiwan Strait risk — what premium, if any, is priced into TSMC and its supply chain? (3) Middle East conflict impact on energy prices and defense stocks. (4) Russia-Ukraine implications for European energy, agricultural commodities, and defense spending. (5) How do geopolitical risk indices correlate with market volatility (VIX)? (6) Build a 'geopolitical risk dashboard' — what 5 indicators would you monitor daily to assess market-relevant geopolitical risk? (7) For a US-based retail investor, how should portfolio construction account for these risks?",
+      "expected_depth": {"sources": 10, "dimensions": 7, "min_words": 1200},
+      "context_requirement": "extended_128k",
+      "success_criteria": "Current geopolitical analysis, quantified market impacts, practical portfolio construction advice"
+    },
+    {
+      "id": "D-5-4",
+      "category": "Market Analysis & Strategy",
+      "title": "US vs International Equity Valuation",
+      "prompt": "Conduct a comprehensive valuation comparison between US and international equity markets. (1) Compare current P/E, P/B, dividend yield, and CAPE ratio for: S&P 500, MSCI EAFE, MSCI Emerging Markets, Nikkei 225, STOXX 600. (2) What is the current US premium vs historical average? Is it justified by superior earnings growth? (3) Decompose the US premium into sector composition effects (tech weighting) vs within-sector valuation premium. (4) Analyze currency effects — how does USD strength/weakness affect international returns for a US investor? (5) What are the top 3 non-US equity markets by expected forward returns, and why? (6) Build a quantitative framework for allocating between US and international equities based on relative valuation, growth differentials, and currency outlook. (7) Apply the framework: what allocation does it recommend today?",
+      "expected_depth": {"sources": 10, "dimensions": 7, "min_words": 1500},
+      "context_requirement": "extended_128k",
+      "success_criteria": "Accurate current valuation data, rigorous decomposition analysis, actionable allocation framework"
+    },
+    {
+      "id": "D-6-1",
+      "category": "Company Deep Dives",
+      "title": "NVIDIA Competitive Moat Analysis",
+      "prompt": "Conduct a comprehensive competitive moat analysis for NVIDIA. (1) Hardware moat: GPU architecture leadership, custom silicon (Grace Hopper), InfiniBand networking — how durable is each advantage? (2) Software moat: CUDA ecosystem, cuDNN, TensorRT, Triton inference server — quantify the switching cost. (3) Data center moat: DGX systems, NVIDIA AI Enterprise — how sticky are enterprise deployments? (4) Competitive threats: AMD MI300X, Intel Gaudi, Google TPUs, Amazon Trainium, custom ASIC startups (Cerebras, Groq, SambaNova). For each competitor, assess their current capability gap and trajectory. (5) Financial analysis: revenue growth rate sustainability, gross margin trajectory, capex requirements, free cash flow generation. (6) Valuation: at current prices, what growth rate is implied? Is it achievable?",
+      "expected_depth": {"sources": 8, "dimensions": 6, "min_words": 1000},
+      "context_requirement": "long_64k",
+      "success_criteria": "Thorough moat framework, specific competitive data, supported valuation assessment"
+    },
+    {
+      "id": "D-6-2",
+      "category": "Company Deep Dives",
+      "title": "Apple Services Revenue Deep Dive",
+      "prompt": "Analyze Apple's services segment in depth as of early 2026. (1) Break down services revenue by sub-segment: App Store, Apple Music, iCloud, Apple TV+, Apple Pay, AppleCare, advertising, licensing (Google TAC). Estimate the contribution of each. (2) What is the gross margin of the services segment vs hardware? (3) How has the services mix shifted the consolidated margin profile? (4) Analyze growth rates — which services sub-segments are growing fastest and which are decelerating? (5) Regulatory risk: how would a forced App Store opening affect revenue? Quantify the Google search deal (TAC) value and what happens if it's unwound by antitrust. (6) Compare Apple's services metrics (ARPU, engagement, churn) to pure-play subscription companies. (7) Build a DCF model for the services segment alone — what is it worth as a standalone business?",
+      "expected_depth": {"sources": 8, "dimensions": 7, "min_words": 1200},
+      "context_requirement": "extended_128k",
+      "success_criteria": "Accurate sub-segment estimates, correct margin analysis, sound DCF framework"
+    },
+    {
+      "id": "D-6-3",
+      "category": "Company Deep Dives",
+      "title": "Tesla Supply Chain Risk Analysis",
+      "prompt": "Conduct a supply chain risk analysis for Tesla. (1) Map Tesla's top 10 critical suppliers by component category (batteries, semiconductors, rare earth metals, glass, aluminum, motors). (2) Identify single points of failure — which components have sole-source suppliers? (3) Analyze geographic concentration risk — what percentage of Tesla's supply chain passes through China, Taiwan, South Korea? (4) Assess battery supply chain specifically: cathode/anode material sourcing, cell manufacturing capacity (in-house 4680 vs. CATL/Panasonic/LG), lithium/cobalt/nickel price sensitivity. (5) How does Tesla's vertical integration strategy compare to legacy automakers? (6) Quantify the financial impact of a major supply disruption — model a scenario where CATL supply is interrupted for 3 months. (7) What hedging and diversification strategies should Tesla pursue?",
+      "expected_depth": {"sources": 10, "dimensions": 7, "min_words": 1200},
+      "context_requirement": "extended_128k",
+      "success_criteria": "Specific supplier names, geographic risk quantification, scenario analysis with financial impact"
+    },
+    {
+      "id": "D-6-4",
+      "category": "Company Deep Dives",
+      "title": "Microsoft AI Strategy & TAM Sizing",
+      "prompt": "Provide a comprehensive analysis of Microsoft's AI strategy and total addressable market. (1) Map all Microsoft AI products: Copilot (Office, GitHub, Windows, Security, Sales), Azure AI services, OpenAI partnership, Bing AI, AI infrastructure (custom silicon). (2) For each AI product line, estimate current revenue run rate and growth trajectory. (3) What is Microsoft's total AI revenue today and what will it be in 2027? (4) Analyze the OpenAI partnership economics: investment structure, revenue sharing, exclusivity terms, risks if OpenAI reaches AGI clause. (5) Size the TAM for each AI product category. (6) Competitive positioning vs Google Cloud AI, AWS AI, Salesforce AI, ServiceNow AI. (7) What AI gross margins look like at scale — model the path from current low-margin AI to target margins. (8) Is AI revenue incremental or cannibalistic to existing Microsoft products?",
+      "expected_depth": {"sources": 10, "dimensions": 8, "min_words": 1500},
+      "context_requirement": "extended_128k",
+      "success_criteria": "Comprehensive product mapping, credible revenue estimates, sound TAM methodology"
+    },
+    {
+      "id": "D-7-1",
+      "category": "Cross-Domain Synthesis",
+      "title": "AI Chip Shortage Impact on SaaS M&A Valuations",
+      "prompt": "Analyze how the AI chip supply-demand imbalance affects M&A valuations in the SaaS sector. (1) How does GPU/accelerator scarcity create barriers to entry for AI-native startups, and does this increase their acquisition premium? (2) Are SaaS companies with proprietary AI infrastructure (own GPU clusters, custom silicon partnerships) valued differently in M&A? (3) Analyze 3 recent SaaS acquisitions where AI capability was a key deal driver — what multiples were paid vs non-AI SaaS? (4) How does cloud provider lock-in (AWS, Azure, GCP) interact with AI chip scarcity to affect bargaining power in acquisitions? (5) Model a scenario: a vertical SaaS company with $100M ARR, 80% gross margins, 30% growth, but $20M/year in AI compute costs that are rising 40% annually. How should an acquirer think about this? (6) What does the AI chip roadmap (NVIDIA B200, AMD MI400, Intel Falcon Shores) imply for future SaaS M&A dynamics?",
+      "expected_depth": {"sources": 10, "dimensions": 6, "min_words": 1200},
+      "context_requirement": "extended_128k",
+      "success_criteria": "Connects chip supply chain to SaaS valuations, specific deal examples, credible scenario modeling"
+    },
+    {
+      "id": "D-7-2",
+      "category": "Cross-Domain Synthesis",
+      "title": "Climate Policy Impact on Energy Sector Buybacks",
+      "prompt": "Analyze the intersection of climate policy and energy sector capital return strategies. (1) How have IRA (Inflation Reduction Act) clean energy incentives affected capital allocation at traditional oil & gas companies (ExxonMobil, Chevron, Shell, BP, TotalEnergies)? (2) Compare the capital return strategies (buybacks + dividends) of 'supermajor' oil companies vs renewable energy companies — who returns more to shareholders and why? (3) How does carbon pricing (EU ETS, potential US mechanisms) affect the NPV of fossil fuel reserves and therefore the 'buyback math'? (4) Analyze the 'stranded asset' debate — if 30% of proved reserves become unburnable, how does that change optimal capital return policy? (5) Are energy companies using buybacks to support stock prices while quietly pivoting their capex toward renewables? (6) Build a framework for evaluating energy company capital returns that incorporates transition risk.",
+      "expected_depth": {"sources": 10, "dimensions": 6, "min_words": 1500},
+      "context_requirement": "extended_128k",
+      "success_criteria": "Accurate policy descriptions, specific company comparisons, novel analytical framework"
+    },
+    {
+      "id": "D-7-3",
+      "category": "Cross-Domain Synthesis",
+      "title": "Insider Trading Patterns and M&A Prediction",
+      "prompt": "Investigate the relationship between corporate insider trading patterns and subsequent M&A activity. (1) What does academic research say about abnormal insider trading before M&A announcements? (2) Analyze SEC Form 4 filing patterns — can you identify statistically significant clusters of insider buying/selling that preceded known deals? (3) What are the legal boundaries? When does informed corporate insider trading become illegal in the context of M&A? (4) How do 10b5-1 pre-planned trading programs interact with M&A timing — can they be used to 'pre-position' before deals? (5) Build a quantitative screen: using publicly available Form 4 data, what indicators would you monitor to identify potential M&A targets? (6) Apply the screen: identify 3 current S&P 500 companies where insider trading patterns suggest elevated M&A probability. (7) What are the false positive risks and ethical considerations of this approach?",
+      "expected_depth": {"sources": 10, "dimensions": 7, "min_words": 1500},
+      "context_requirement": "extended_128k",
+      "success_criteria": "Cites academic research, correct legal analysis, actionable quantitative screen"
+    },
+    {
+      "id": "D-7-4",
+      "category": "Cross-Domain Synthesis",
+      "title": "Healthcare AI Regulation Impact on Financial Models",
+      "prompt": "Analyze how evolving AI regulations specifically affect financial modeling for healthcare companies. (1) FDA's evolving framework for AI/ML-based Software as a Medical Device (SaMD) — current requirements, pre-submission pathways, and post-market monitoring. (2) How do regulatory timelines for AI medical devices differ from traditional devices, and how should this be modeled in a DCF? (3) Analyze 3 healthcare AI companies (choose from Tempus, PathAI, Viz.ai, Butterfly Network, Aidoc) — how do their regulatory strategies affect their revenue ramp assumptions? (4) What liability frameworks apply when AI diagnostic tools make errors? How should this be modeled as a risk factor? (5) How does HIPAA intersect with AI training data requirements — does compliance cost create a moat? (6) Build a healthcare AI company financial model template that properly accounts for: regulatory timeline uncertainty, clinical trial costs for AI validation, reimbursement pathway risk, and liability provisions. (7) Compare the model outputs for an AI diagnostics company vs a traditional medtech company with similar revenue profiles.",
+      "expected_depth": {"sources": 12, "dimensions": 7, "min_words": 1800},
+      "context_requirement": "extended_128k",
+      "success_criteria": "Accurate FDA regulatory details, specific company analysis, sound financial modeling framework"
+    }
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "test_type": "compacted_10.0x",
+  "compaction_ratio": 10.0,
+  "compaction_time_ms": 5.0,
+  "cosine_similarity": null,
+  "tokens_before": null,
+  "tokens_after": null,
+  "recall": {
+    "generation_tok_s": 54.16,
+    "time_to_first_token_ms": 232.8,
+    "total_time_s": 2.968,
+    "recall_quality_score": 2,
+    "response_word_count": 124
+  },
+  "recall_response": "I don't have access to our previous conversation history or any record of our past exchanges. Each conversation I have is independent, without memory of previous discussions with you or other users.\n\nTo provide you with the specific summary you're requesting, I would need you to share the key points, facts, figures, and conclusions from our current discussion. You could:\n\n- Recount the main topics we've covered\n- Share any documents or information you've provided\n- Point out specific findings or data you'd like me to summarize\n\nIf you'd like me to help you organize and summarize information from our current conversation, I'm happy to do that once you share the relevant details. What specific content would you like me to summarize for you?",
+  "model": "Qwen3-Coder-30B-A3B",
+  "context_size": 65536,
+  "timestamp": "2026-03-23T10:25:12.142922+00:00"
+}
