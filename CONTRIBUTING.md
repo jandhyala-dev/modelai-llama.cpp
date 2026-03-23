@@ -193,3 +193,33 @@ Maintainers reserve the right to decline review or close pull requests for any r
 The Github issues, PRs and discussions contain a lot of information that can be useful to get familiar with the codebase. For convenience, some of the more important information is referenced from Github projects:
 
 https://github.com/ggml-org/llama.cpp/projects
+
+---
+
+# modelai-llama.cpp Fork: Additional Guidelines
+
+The sections above are inherited from upstream llama.cpp. The following apply specifically to the KV compaction code in this fork.
+
+## Compaction Code Conventions
+
+- Prefix compaction functions with `llama_kv_compact_`
+- All solver math in fp32; cast to model dtype for KV storage only
+- Commit messages for compaction work: `kv-compact: <description>`
+
+## Adversarial Review Protocol
+
+All code entering this fork is reviewed using an adversarial, failure-seeking protocol. See [AGENTS.md](AGENTS.md) for the full 13-section review protocol.
+
+Key points for contributors:
+- Reviewers walk **real numbers** through your code (production, boundary, and adversarial traces)
+- Every assumption must be either **enforced in code** or **documented** — undocumented assumptions are findings
+- The **disprove-it pass** is mandatory: the reviewer assumes one bug exists and tries to find it before issuing PASS
+- Critical/Major findings block merge; Minor findings are noted for follow-up
+
+## Fork Documentation
+
+- `docs/kv-compaction-algorithm.md` — Algorithm overview
+- `docs/kv-compaction-integration.md` — File map and architecture support matrix
+- `docs/BUGS-AND-FIXES.md` — All bugs found, fixed, and tracked
+- `docs/UPSTREAM-SYNC.md` — Upstream sync process and verification
+- `docs/benchmark-fork-vs-upstream.md` — Performance comparison

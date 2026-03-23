@@ -1,0 +1,74 @@
+# Upstream Sync Process
+
+modelai-llama.cpp tracks [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp) and merges upstream changes on a regular cadence. This document describes the process and what has been validated.
+
+---
+
+## Branch Model
+
+| Branch | Purpose |
+|--------|---------|
+| `upstream-sync` | Daily mirror of upstream `master`. Force-updated by CI. |
+| `modelai-main` | Stable shipping branch. Merge-only from `upstream-sync` after review. |
+| `kv-compact-*` | Feature branches for compaction milestones. |
+
+## Sync Cadence
+
+- **Daily:** GitHub Actions fetches `ggml-org/llama.cpp:master` into `upstream-sync`.
+- **Weekly:** `upstream-sync` is merged into `modelai-main` after build verification and conflict resolution.
+- **Emergency:** Security patches (e.g., RCE fixes) are synced and merged same-day.
+
+## What Gets Validated on Each Merge
+
+1. **Build:** `cmake -B build -DGGML_METAL=ON && cmake --build build --config Release`
+2. **Tests:** `ctest --test-dir build -L main --output-on-failure` — all CI-gated tests must pass
+3. **Conflict resolution:** Merge conflicts in compaction files are resolved manually and re-tested
+4. **CI workflow audit:** New upstream workflows are disabled to prevent billing drain on the fork (only `modelai-ci`, `modelai-server-smoke`, `modelai-perf-smoke` are active)
+
+## Sync History
+
+| Date | Commits Synced | Notable Changes | Merge Commit |
+|------|---------------|-----------------|-------------|
+| 2026-03-23 | 223 | Metal mul_mv_ext, CUDA bf16 flash attention, grammar fixes | `356b23be3` |
+| 2026-03-23 | 2 (emergency) | **RPC RCE security patch** (#20908), PR template | `6618b8889` |
+| 2026-03-23 | 8 | Per-platform CI split, server improvements | `d4a3d9ae9` |
+| 2026-03-23 | 14 CI workflows disabled | Upstream split build.yml into per-platform files | `4e618aac9` |
+
+## Upstream Issues Verified Compatible
+
+Before shipping compaction, we audited every upstream KV cache change that could interact with our code:
+
+| Issue | Title | Verification |
+|-------|-------|-------------|
+| [#10873](https://github.com/ggml-org/llama.cpp/issues/10873) | KV cache defrag corruption | Safe — defrag was removed upstream; compaction uses `seq_rm()` not defrag |
+| [#12695](https://github.com/ggml-org/llama.cpp/issues/12695) | KV guard refactor | Compatible — fork uses current post-refactor API (`used_max_p1`, `is_empty`, `seq_has`, `pos_get`) |
+| [#13194](https://github.com/ggml-org/llama.cpp/issues/13194) | SWA KV cache support | Compatible — SWA sub-cache correctly rejected at runtime (`n_swa > 0` check) |
+| [#17450](https://github.com/ggml-org/llama.cpp/issues/17450) | Unified KV buffer | Compatible — all tests use `kv_unified=true` |
+| [#12253](https://github.com/ggml-org/llama.cpp/issues/12253) | Shift/defrag correctness | Safe — `has_shift()` guard prevents interaction with compaction |
+| [#11213](https://github.com/ggml-org/llama.cpp/issues/11213) | KV cells unified | N/A — decomposed into #12695 and #13194 |
+
+## Upstream Features Targeted for Sync
+
+| Feature | Upstream PR | Impact |
+|---------|-----------|--------|
+| Fused multiply-add for Q4/Q5/Q6_K | [#20032](https://github.com/ggml-org/llama.cpp/pull/20032) | 16–28% faster quantized matmul |
+| Metal mul_mv_ext | [#20250](https://github.com/ggml-org/llama.cpp/pull/20250) | Metal performance improvement |
+| High-throughput mode | [#14363](https://github.com/ggml-org/llama.cpp/pull/14363) | Multi-user serving optimization |
+
+## Open Upstream Bugs Affecting This Fork
+
+| Issue | Severity | Description |
+|-------|----------|-------------|
+| [#19679](https://github.com/ggml-org/llama.cpp/issues/19679), [#19304](https://github.com/ggml-org/llama.cpp/issues/19304) | Critical | Grammar stack crash on Apple Metal (flash attention + jinja, or 86K context + 50 tool calls) |
+| [#11970](https://github.com/ggml-org/llama.cpp/issues/11970) | Medium | KV cache truncation on chat completions — silent context loss |
+
+## CI Workflow Management
+
+Forking llama.cpp inherits all upstream GitHub Actions workflows. We disable inherited workflows to prevent:
+- CI billing drain (minutes consumed on every push)
+- Self-hosted runner queue failures (runners don't exist in the fork)
+
+**Active workflows:** `modelai-ci`, `modelai-server-smoke`, `modelai-perf-smoke`
+**Disabled:** All inherited upstream workflows (renamed to `.disabled`)
+
+When upstream adds new workflow files (e.g., splitting `build.yml` into per-platform files), they are disabled in the next sync commit.
