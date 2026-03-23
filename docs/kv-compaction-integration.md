@@ -24,6 +24,16 @@
 - `src/llama-context.h/.cpp`: context-level eval callback support used by self-study Q capture.
 - `include/llama.h`: public callbacks and memory interfaces used by the internal pipeline.
 
+## Architecture Support Matrix
+
+| Memory Layout | KV Cache Extraction | Compaction Status |
+|---------------|-------------------|-------------------|
+| `llama_kv_cache` (standard) | Direct | Supported |
+| `llama_kv_cache_iswa` (iSWA) | `get_base()` non-SWA cache | Supported (base layers only) |
+| `llama_memory_hybrid` (SSM+attention) | `get_mem_attn()` | Supported if standard RoPE |
+| `llama_memory_hybrid_iswa` (SSM+iSWA) | `get_mem_attn()->get_base()` | Supported if standard RoPE |
+| `llama_memory_recurrent` (pure SSM) | No KV cache | N/A |
+
 ## Store to KV Cache Integration
 
 The compacted-prefix store is owned by `llama_kv_cache`. Each sequence may have:
