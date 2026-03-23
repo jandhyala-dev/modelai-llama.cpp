@@ -281,6 +281,7 @@ def get_server_metrics():
 def trigger_compaction(ratio=2.0, method="select"):
     """Trigger KV cache compaction."""
     import urllib.request
+    import urllib.error
     payload = json.dumps({
         "id_slot": 0,
         "method": method,
@@ -301,6 +302,13 @@ def trigger_compaction(ratio=2.0, method="select"):
         data = json.loads(resp.read())
         data["compaction_time_ms"] = round(t_total * 1000, 1)
         return data
+    except urllib.error.HTTPError as e:
+        body = ""
+        try:
+            body = e.read().decode()
+        except Exception:
+            pass
+        return {"error": f"HTTP {e.code}: {body or e.reason}", "compaction_time_ms": round((time.time() - t0) * 1000, 1)}
     except Exception as e:
         return {"error": str(e), "compaction_time_ms": round((time.time() - t0) * 1000, 1)}
 

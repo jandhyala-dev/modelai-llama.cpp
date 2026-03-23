@@ -1,0 +1,21 @@
+{
+  "timestamp": "2026-03-23T10:25:12.143874+00:00",
+  "process": {
+    "rss_mb": 23598.5,
+    "vsz_mb": 449838.4
+  },
+  "system": {
+    "free_gb": 0.06,
+    "active_gb": 1.48,
+    "inactive_gb": 1.45,
+    "wired_gb": 25.85,
+    "compressed_gb": 2.32
+  },
+  "server_reported": {
+    "model_mb": 17032.2,
+    "context_mb": 6144.0,
+    "compute_mb": 436.8,
+    "kv_active_total": 183,
+    "kv_active_max": 183
+  }
+}
