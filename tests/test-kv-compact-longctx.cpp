@@ -655,8 +655,9 @@ static std::string load_text_file(const std::string & path) {
     const long sz = std::ftell(f);
     std::fseek(f, 0, SEEK_SET);
     std::string text(sz, '\0');
-    (void)std::fread(&text[0], 1, sz, f);
+    const size_t n = std::fread(&text[0], 1, sz, f);
     std::fclose(f);
+    text.resize(n);
     return text;
 }
 
