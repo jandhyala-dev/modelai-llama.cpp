@@ -4,19 +4,26 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Benchmarks — modelai-llama.cpp</title>
+  <meta name="description" content="Benchmark dashboard for modelai-llama.cpp: decode speed, quality heatmap, fork vs upstream comparison, 256K context extension, CI status.">
+  <meta property="og:title" content="Benchmarks — modelai-llama.cpp">
+  <meta property="og:description" content="Decode speedup, quality heatmap, fork vs upstream comparison. Live CI benchmark data.">
+  <meta property="og:url" content="https://www.model-ai.org/benchmarks.html">
+  <meta property="og:type" content="website">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%230d1117'/><text x='50' y='68' font-size='55' text-anchor='middle' fill='%2358a6ff' font-family='system-ui' font-weight='700'>M</text></svg>">
   <link rel="stylesheet" href="style.css">
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 </head>
 <body>
   <nav>
     <span class="logo">modelai-llama.cpp</span>
+    <button class="nav-toggle" aria-label="Toggle navigation">&#9776;</button>
     <div class="links">
       <a href="index.html">Home</a>
       <a href="benchmarks.html" class="active">Benchmarks</a>
       <a href="paper.html">Paper</a>
       <a href="qa.html">QA</a>
-      <a href="https://github.com/jandhyala-dev/modelai-llama.cpp">GitHub</a>
-      <a href="https://github.com/sponsors/jandhyala-dev" style="color:var(--green)">Sponsor</a>
+      <a href="https://github.com/jandhyala-dev/modelai-llama.cpp" target="_blank" rel="noopener noreferrer">GitHub</a>
+      <a href="https://github.com/sponsors/jandhyala-dev" target="_blank" rel="noopener noreferrer" style="color:var(--green)">Sponsor</a>
     </div>
   </nav>
 
@@ -150,8 +157,13 @@
   </div>
 
   <footer>
-    <p>Data from <a href="https://github.com/jandhyala-dev/modelai-llama.cpp/tree/modelai-main/bench-results">bench-results/</a>. Updated after each CI run.</p>
+    <p>Data from <a href="https://github.com/jandhyala-dev/modelai-llama.cpp/tree/modelai-main/bench-results" target="_blank" rel="noopener noreferrer">bench-results/</a>. Updated after each CI run.</p>
   </footer>
+  <script>
+    document.querySelector('.nav-toggle').addEventListener('click', function() {
+      document.querySelector('nav .links').classList.toggle('open');
+    });
+  </script>
 
   <script>
     const ctx = document.getElementById('baseline-chart').getContext('2d');

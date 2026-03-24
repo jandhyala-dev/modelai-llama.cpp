@@ -45,6 +45,19 @@ nav .links { display: flex; gap: 1.5rem; }
 nav .links a { color: var(--text-muted); font-size: 0.9rem; }
 nav .links a:hover, nav .links a.active { color: var(--text); text-decoration: none; }
 
+.nav-toggle {
+  display: none;
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-size: 1.2rem;
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+  cursor: pointer;
+  margin-left: auto;
+}
+.nav-toggle:hover { background: var(--border); }
+
 .container { max-width: 960px; margin: 0 auto; padding: 2rem; }
 
 h1 { font-size: 2rem; margin-bottom: 0.5rem; }
@@ -109,6 +122,13 @@ th { color: var(--text-muted); font-weight: 600; font-size: 0.8rem; text-transfo
   margin: 1rem 0;
 }
 
+table { display: block; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+thead, tbody, tr { display: table; width: 100%; table-layout: auto; }
+table { display: table; width: 100%; }
+
+.table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; margin: 1rem 0; }
+.table-wrap table { margin: 0; }
+
 footer {
   border-top: 1px solid var(--border);
   padding: 2rem;
@@ -116,4 +136,31 @@ footer {
   color: var(--text-muted);
   font-size: 0.85rem;
   margin-top: 4rem;
+}
+
+@media (max-width: 768px) {
+  nav { flex-wrap: wrap; padding: 0.75rem 1rem; }
+  .nav-toggle { display: block; }
+  nav .links {
+    display: none;
+    flex-direction: column;
+    width: 100%;
+    gap: 0.5rem;
+    padding-top: 0.75rem;
+  }
+  nav .links.open { display: flex; }
+  nav .links a { padding: 0.4rem 0; }
+
+  .hero { padding: 2rem 1rem; }
+  .hero h1 { font-size: 1.8rem; }
+  .hero p { font-size: 1rem; }
+
+  .container { padding: 1rem; }
+  h1 { font-size: 1.6rem; }
+  h2 { font-size: 1.2rem; }
+
+  .cards { grid-template-columns: 1fr 1fr !important; }
+
+  table { font-size: 0.8rem; display: block; overflow-x: auto; }
+  th, td { padding: 0.4rem 0.5rem; white-space: nowrap; }
 }

@@ -4,18 +4,25 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>QA Transparency — modelai-llama.cpp</title>
+  <meta name="description" content="QA process for modelai-llama.cpp: 13-section adversarial review, 8 test tiers, 7 CI workflows, weekly upstream sync with review gate.">
+  <meta property="og:title" content="QA Transparency — modelai-llama.cpp">
+  <meta property="og:description" content="13-section adversarial review protocol, 8 test tiers, 7 CI workflows, weekly upstream sync.">
+  <meta property="og:url" content="https://www.model-ai.org/qa.html">
+  <meta property="og:type" content="website">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%230d1117'/><text x='50' y='68' font-size='55' text-anchor='middle' fill='%2358a6ff' font-family='system-ui' font-weight='700'>M</text></svg>">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
   <nav>
     <span class="logo">modelai-llama.cpp</span>
+    <button class="nav-toggle" aria-label="Toggle navigation">&#9776;</button>
     <div class="links">
       <a href="index.html">Home</a>
       <a href="benchmarks.html">Benchmarks</a>
       <a href="paper.html">Paper</a>
       <a href="qa.html" class="active">QA</a>
-      <a href="https://github.com/jandhyala-dev/modelai-llama.cpp">GitHub</a>
-      <a href="https://github.com/sponsors/jandhyala-dev" style="color:var(--green)">Sponsor</a>
+      <a href="https://github.com/jandhyala-dev/modelai-llama.cpp" target="_blank" rel="noopener noreferrer">GitHub</a>
+      <a href="https://github.com/sponsors/jandhyala-dev" target="_blank" rel="noopener noreferrer" style="color:var(--green)">Sponsor</a>
     </div>
   </nav>
 
@@ -174,11 +181,16 @@
         <div class="detail">RPC RCE — synced same day</div>
       </div>
     </div>
-    <p>Full bug list: <a href="https://github.com/jandhyala-dev/modelai-llama.cpp/blob/modelai-main/docs/BUGS-AND-FIXES.md">BUGS-AND-FIXES.md</a></p>
+    <p>Full bug list: <a href="https://github.com/jandhyala-dev/modelai-llama.cpp/blob/modelai-main/docs/BUGS-AND-FIXES.md" target="_blank" rel="noopener noreferrer">BUGS-AND-FIXES.md</a></p>
   </div>
 
   <footer>
-    <p>modelai-llama.cpp is MIT licensed. <a href="https://github.com/jandhyala-dev/modelai-llama.cpp">View on GitHub</a></p>
+    <p>modelai-llama.cpp is MIT licensed. <a href="https://github.com/jandhyala-dev/modelai-llama.cpp" target="_blank" rel="noopener noreferrer">View on GitHub</a></p>
   </footer>
+  <script>
+    document.querySelector('.nav-toggle').addEventListener('click', function() {
+      document.querySelector('nav .links').classList.toggle('open');
+    });
+  </script>
 </body>
 </html>

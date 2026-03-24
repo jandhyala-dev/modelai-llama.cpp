@@ -5,24 +5,33 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>modelai-llama.cpp — Production Fork of llama.cpp</title>
   <meta name="description" content="Production fork of llama.cpp with KV cache compaction, Metal GPU acceleration, 5 architecture support, 29 bug fixes, and 7 CI workflows. MIT licensed.">
+  <meta property="og:title" content="modelai-llama.cpp — Production Fork of llama.cpp">
+  <meta property="og:description" content="KV cache compaction with 0.997 quality, +63% decode speedup, 256K effective context. 29 bug fixes, 7 CI workflows. MIT licensed.">
+  <meta property="og:url" content="https://www.model-ai.org/">
+  <meta property="og:type" content="website">
+  <meta name="twitter:card" content="summary">
+  <meta name="twitter:title" content="modelai-llama.cpp — Production Fork of llama.cpp">
+  <meta name="twitter:description" content="KV cache compaction with 0.997 quality, +63% decode speedup, 256K effective context.">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%230d1117'/><text x='50' y='68' font-size='55' text-anchor='middle' fill='%2358a6ff' font-family='system-ui' font-weight='700'>M</text></svg>">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
   <nav>
     <span class="logo">modelai-llama.cpp</span>
+    <button class="nav-toggle" aria-label="Toggle navigation">&#9776;</button>
     <div class="links">
       <a href="index.html" class="active">Home</a>
       <a href="benchmarks.html">Benchmarks</a>
       <a href="paper.html">Paper</a>
       <a href="qa.html">QA</a>
-      <a href="https://github.com/jandhyala-dev/modelai-llama.cpp">GitHub</a>
-      <a href="https://github.com/sponsors/jandhyala-dev" style="color:var(--green)">Sponsor</a>
+      <a href="https://github.com/jandhyala-dev/modelai-llama.cpp" target="_blank" rel="noopener noreferrer">GitHub</a>
+      <a href="https://github.com/sponsors/jandhyala-dev" target="_blank" rel="noopener noreferrer" style="color:var(--green)">Sponsor</a>
     </div>
   </nav>
 
   <div class="hero">
     <h1>modelai-llama.cpp</h1>
-    <p>Production fork of <a href="https://github.com/ggml-org/llama.cpp">llama.cpp</a> adding KV cache compaction, Metal GPU acceleration, multi-architecture support, and production-grade QA infrastructure. Zero regression on upstream performance.</p>
+    <p>Production fork of <a href="https://github.com/ggml-org/llama.cpp" target="_blank" rel="noopener noreferrer">llama.cpp</a> adding KV cache compaction, Metal GPU acceleration, multi-architecture support, and production-grade QA infrastructure. Zero regression on upstream performance.</p>
     <span class="badge badge-green">MIT License</span>
     <span class="badge badge-blue">463+ Commits Ahead</span>
     <span class="badge badge-green">29 Bugs Fixed</span>
@@ -56,7 +65,7 @@
     <!-- KV CACHE COMPACTION                              -->
     <!-- ================================================ -->
     <h2>KV Cache Compaction</h2>
-    <p>Based on <a href="https://arxiv.org/abs/2602.16284">"Fast KV Compaction via Attention Matching"</a> (Zweiger et al., MIT Han Lab). Instead of truncating or evicting old context, compaction compresses the KV cache into a smaller learned representation that preserves attention behavior.</p>
+    <p>Based on <a href="https://arxiv.org/abs/2602.16284" target="_blank" rel="noopener noreferrer">"Fast KV Compaction via Attention Matching"</a> (Zweiger et al., MIT Han Lab). Instead of truncating or evicting old context, compaction compresses the KV cache into a smaller learned representation that preserves attention behavior.</p>
     <div class="code-block">
 Fill 64K KV cache -> Compact at 4x -> 16K compacted + 48K free -> Fill again -> Repeat
 Each cycle advances position IDs by ~48K
@@ -191,7 +200,7 @@ curl http://localhost:8080/props | jq '.default_generation_settings.compacted_pr
     <!-- BUG FIXES                                        -->
     <!-- ================================================ -->
     <h2>29 Bug Fixes</h2>
-    <p>Every bug found through adversarial review, fixed with root-cause analysis, and verified with regression tests. <a href="https://github.com/jandhyala-dev/modelai-llama.cpp/blob/modelai-main/docs/BUGS-AND-FIXES.md">Full list with commit SHAs</a>.</p>
+    <p>Every bug found through adversarial review, fixed with root-cause analysis, and verified with regression tests. <a href="https://github.com/jandhyala-dev/modelai-llama.cpp/blob/modelai-main/docs/" target="_blank" rel="noopener noreferrer">BUGS-AND-FIXES.md">Full list with commit SHAs</a>.</p>
     <div class="cards">
       <div class="card">
         <div class="label">Critical/Major</div>
@@ -256,7 +265,7 @@ curl http://localhost:8080/props | jq '.default_generation_settings.compacted_pr
     <!-- UPSTREAM SYNC                                    -->
     <!-- ================================================ -->
     <h2>Weekly Upstream Sync and Review</h2>
-    <p>Weekly automated sync from <a href="https://github.com/ggml-org/llama.cpp">ggml-org/llama.cpp</a>. Every merge is CI-gated: build + full test suite + benchmark regression check must pass. Changes touching KV cache or attention paths trigger manual review before integration. <a href="qa.html#upstream-review">Full process details</a>.</p>
+    <p>Weekly automated sync from <a href="https://github.com/ggml-org/llama.cpp" target="_blank" rel="noopener noreferrer">ggml-org/llama.cpp</a>. Every merge is CI-gated: build + full test suite + benchmark regression check must pass. Changes touching KV cache or attention paths trigger manual review before integration. <a href="qa.html#upstream-review">Full process details</a>.</p>
     <div class="cards" style="grid-template-columns: repeat(3, 1fr);">
       <div class="card">
         <div class="label">Schedule</div>
@@ -321,22 +330,27 @@ curl http://localhost:8080/props | jq '.default_generation_settings.compacted_pr
         <tr><th>Document</th><th>Description</th></tr>
       </thead>
       <tbody>
-        <tr><td><a href="https://github.com/jandhyala-dev/modelai-llama.cpp/blob/modelai-main/docs/CHANGELOG.md">CHANGELOG</a></td><td>Full implementation history: V0 &rarr; V1 &rarr; V2 &rarr; V5 &rarr; Phase 8 &rarr; Phase D &rarr; OSS Launch</td></tr>
-        <tr><td><a href="https://github.com/jandhyala-dev/modelai-llama.cpp/blob/modelai-main/docs/DESIGN-DECISIONS.md">DESIGN-DECISIONS</a></td><td>13 architecture decisions with rationale</td></tr>
-        <tr><td><a href="https://github.com/jandhyala-dev/modelai-llama.cpp/blob/modelai-main/docs/BUGS-AND-FIXES.md">BUGS-AND-FIXES</a></td><td>All 29 bugs: root cause, fix, commit SHA</td></tr>
-        <tr><td><a href="https://github.com/jandhyala-dev/modelai-llama.cpp/blob/modelai-main/docs/UPSTREAM-SYNC.md">UPSTREAM-SYNC</a></td><td>Sync process, CI workflows, 3-branch model</td></tr>
-        <tr><td><a href="https://github.com/jandhyala-dev/modelai-llama.cpp/blob/modelai-main/docs/kv-compaction-algorithm.md">Algorithm</a></td><td>Selection, fitting, execution stages</td></tr>
-        <tr><td><a href="https://github.com/jandhyala-dev/modelai-llama.cpp/blob/modelai-main/docs/kv-compaction-integration.md">Integration</a></td><td>File map and architecture support matrix</td></tr>
-        <tr><td><a href="https://github.com/jandhyala-dev/modelai-llama.cpp/blob/modelai-main/docs/benchmark-fork-vs-upstream.md">Benchmarks</a></td><td>3-way fork vs upstream vs Ollama comparison</td></tr>
-        <tr><td><a href="https://github.com/jandhyala-dev/modelai-llama.cpp/blob/modelai-main/docs/paper-comparison-2602.16284.md">Paper Comparison</a></td><td>Fork vs arXiv:2602.16284 MIT reference</td></tr>
+        <tr><td><a href="https://github.com/jandhyala-dev/modelai-llama.cpp/blob/modelai-main/docs/" target="_blank" rel="noopener noreferrer">CHANGELOG.md">CHANGELOG</a></td><td>Full implementation history: V0 &rarr; V1 &rarr; V2 &rarr; V5 &rarr; Phase 8 &rarr; Phase D &rarr; OSS Launch</td></tr>
+        <tr><td><a href="https://github.com/jandhyala-dev/modelai-llama.cpp/blob/modelai-main/docs/" target="_blank" rel="noopener noreferrer">DESIGN-DECISIONS.md">DESIGN-DECISIONS</a></td><td>13 architecture decisions with rationale</td></tr>
+        <tr><td><a href="https://github.com/jandhyala-dev/modelai-llama.cpp/blob/modelai-main/docs/" target="_blank" rel="noopener noreferrer">BUGS-AND-FIXES.md">BUGS-AND-FIXES</a></td><td>All 29 bugs: root cause, fix, commit SHA</td></tr>
+        <tr><td><a href="https://github.com/jandhyala-dev/modelai-llama.cpp/blob/modelai-main/docs/" target="_blank" rel="noopener noreferrer">UPSTREAM-SYNC.md">UPSTREAM-SYNC</a></td><td>Sync process, CI workflows, 3-branch model</td></tr>
+        <tr><td><a href="https://github.com/jandhyala-dev/modelai-llama.cpp/blob/modelai-main/docs/" target="_blank" rel="noopener noreferrer">kv-compaction-algorithm.md">Algorithm</a></td><td>Selection, fitting, execution stages</td></tr>
+        <tr><td><a href="https://github.com/jandhyala-dev/modelai-llama.cpp/blob/modelai-main/docs/" target="_blank" rel="noopener noreferrer">kv-compaction-integration.md">Integration</a></td><td>File map and architecture support matrix</td></tr>
+        <tr><td><a href="https://github.com/jandhyala-dev/modelai-llama.cpp/blob/modelai-main/docs/" target="_blank" rel="noopener noreferrer">benchmark-fork-vs-upstream.md">Benchmarks</a></td><td>3-way fork vs upstream vs Ollama comparison</td></tr>
+        <tr><td><a href="https://github.com/jandhyala-dev/modelai-llama.cpp/blob/modelai-main/docs/" target="_blank" rel="noopener noreferrer">paper-comparison-2602.16284.md">Paper Comparison</a></td><td>Fork vs arXiv:2602.16284 MIT reference</td></tr>
       </tbody>
     </table>
   </div>
 
   <footer>
-    <p>modelai-llama.cpp is MIT licensed. <a href="https://github.com/jandhyala-dev/modelai-llama.cpp">View on GitHub</a></p>
-    <p style="margin-top: 0.5rem;">Paper: <a href="https://arxiv.org/abs/2602.16284">arXiv:2602.16284</a> &mdash; Fast KV Compaction via Attention Matching (Zweiger et al., MIT Han Lab)</p>
-    <p style="margin-top: 0.5rem;">Upstream: <a href="https://github.com/ggml-org/llama.cpp">ggml-org/llama.cpp</a></p>
+    <p>modelai-llama.cpp is MIT licensed. <a href="https://github.com/jandhyala-dev/modelai-llama.cpp" target="_blank" rel="noopener noreferrer">View on GitHub</a></p>
+    <p style="margin-top: 0.5rem;">Paper: <a href="https://arxiv.org/abs/2602.16284" target="_blank" rel="noopener noreferrer">arXiv:2602.16284</a> &mdash; Fast KV Compaction via Attention Matching (Zweiger et al., MIT Han Lab)</p>
+    <p style="margin-top: 0.5rem;">Upstream: <a href="https://github.com/ggml-org/llama.cpp" target="_blank" rel="noopener noreferrer">ggml-org/llama.cpp</a></p>
   </footer>
+  <script>
+    document.querySelector('.nav-toggle').addEventListener('click', function() {
+      document.querySelector('nav .links').classList.toggle('open');
+    });
+  </script>
 </body>
 </html>
