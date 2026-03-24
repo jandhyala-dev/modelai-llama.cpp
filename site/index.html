@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>modelai-llama.cpp — KV Cache Compaction</title>
+  <meta name="description" content="Production fork of llama.cpp adding KV cache compaction via Attention Matching. 0.946-0.999 cosine similarity, up to +63% decode speedup, 256K effective context from 64K physical.">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <nav>
+    <span class="logo">modelai-llama.cpp</span>
+    <div class="links">
+      <a href="index.html" class="active">Home</a>
+      <a href="benchmarks.html">Benchmarks</a>
+      <a href="paper.html">Paper</a>
+      <a href="qa.html">QA</a>
+      <a href="https://github.com/jandhyala-dev/modelai-llama.cpp">GitHub</a>
+    </div>
+  </nav>
+
+  <div class="hero">
+    <h1>KV Cache Compaction for llama.cpp</h1>
+    <p>Instead of truncating or evicting old context, compaction compresses the KV cache into a smaller learned representation that preserves attention behavior.</p>
+    <span class="badge badge-green">MIT License</span>
+    <span class="badge badge-blue">15 Models Validated</span>
+  </div>
+
+  <div class="container">
+    <div class="cards">
+      <div class="card">
+        <div class="label">Quality</div>
+        <div class="value">0.997</div>
+        <div class="detail">Logit cosine similarity (Qwen3-8B)</div>
+      </div>
+      <div class="card">
+        <div class="label">Decode Speedup</div>
+        <div class="value">+63%</div>
+        <div class="detail">At 8K context, 8x compression</div>
+      </div>
+      <div class="card">
+        <div class="label">Max Effective Context</div>
+        <div class="value">256K</div>
+        <div class="detail">From 64K physical KV cache</div>
+      </div>
+      <div class="card">
+        <div class="label">Baseline Overhead</div>
+        <div class="value">0%</div>
+        <div class="detail">Fork matches upstream within 2%</div>
+      </div>
+    </div>
+
+    <h2>How It Works</h2>
+    <p>Based on <a href="https://arxiv.org/abs/2602.16284">"Fast KV Compaction via Attention Matching"</a> (Zweiger et al., MIT Han Lab). The algorithm:</p>
+    <div class="code-block">
+Fill 64K KV cache -> Compact at 4x -> 16K compacted + 48K free -> Fill again -> Repeat
+Each cycle advances position IDs by ~48K
+256K effective context from 64K physical allocation
+    </div>
+    <ol style="color: var(--text-muted); padding-left: 1.5rem; margin: 1rem 0;">
+      <li><strong style="color: var(--text)">Select</strong> key positions by attention score (62-185ms)</li>
+      <li><strong style="color: var(--text)">Fit</strong> optional additive bias (beta) and compressed values (V)</li>
+      <li><strong style="color: var(--text)">Prepend</strong> compacted tensors to live KV during attention</li>
+      <li><strong style="color: var(--text)">Reclaim</strong> freed KV slots for new tokens</li>
+    </ol>
+
+    <h2>Supported Architectures</h2>
+    <table>
+      <thead>
+        <tr><th>Architecture</th><th>Status</th><th>Example Models</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Standard attention</td><td style="color:var(--green)">Supported</td><td>Llama, Qwen, Mistral, Granite</td></tr>
+        <tr><td>iSWA (interleaved sliding window)</td><td style="color:var(--green)">Supported</td><td>Qwen3 family</td></tr>
+        <tr><td>Hybrid SSM+Attention</td><td style="color:var(--green)">Supported</td><td>Granite3.1-Dense</td></tr>
+        <tr><td>IMROPE (multi-resolution RoPE)</td><td style="color:var(--green)">Supported</td><td>Qwen3.5, Qwen3.5-MOE</td></tr>
+        <tr><td>Metal GPU solver</td><td style="color:var(--green)">Supported</td><td>All Apple Silicon</td></tr>
+        <tr><td>Pure recurrent (Mamba/RWKV)</td><td style="color:var(--text-muted)">N/A</td><td>No KV cache</td></tr>
+      </tbody>
+    </table>
+
+    <h2>Quick Start</h2>
+    <div class="code-block">
+# Build
+cmake -B build -DGGML_METAL=ON
+cmake --build build --config Release -j$(nproc)
+
+# Run with compaction enabled
+./build/bin/llama-server \
+    -m model.gguf \
+    --endpoint-compact \
+    -c 8192
+
+# Trigger compaction via API
+curl -X POST http://localhost:8080/compact \
+  -H "Content-Type: application/json" \
+  -d '{"id_slot": 0, "method": "select", "ratio": 4.0}'
+    </div>
+
+    <h2>9 Compaction Methods</h2>
+    <table>
+      <thead>
+        <tr><th>Method</th><th>Speed</th><th>Quality</th><th>Use Case</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>select</code></td><td>Fast</td><td>High</td><td>Production default, flash-compatible</td></tr>
+        <tr><td><code>solver</code></td><td>Medium</td><td>Higher</td><td>Best quality with beta fitting</td></tr>
+        <tr><td><code>omp</code></td><td>Slow</td><td>Highest</td><td>Orthogonal Matching Pursuit</td></tr>
+        <tr><td><code>self_study</code></td><td>Slow</td><td>High</td><td>On-policy Q generation</td></tr>
+        <tr><td><code>chunked</code></td><td>Medium</td><td>High</td><td>Long context (>8K)</td></tr>
+        <tr><td><code>on_policy</code></td><td>Slow</td><td>Highest</td><td>Iterative refinement</td></tr>
+        <tr><td><code>nonuniform</code></td><td>Medium</td><td>High</td><td>Per-head budget allocation</td></tr>
+        <tr><td><code>sequential_on_policy</code></td><td>Very slow</td><td>Highest</td><td>Per-layer sequential refinement</td></tr>
+        <tr><td><code>context_prefill</code></td><td>Medium</td><td>High</td><td>Prefill-time compaction</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <footer>
+    <p>modelai-llama.cpp is MIT licensed. <a href="https://github.com/jandhyala-dev/modelai-llama.cpp">View on GitHub</a></p>
+    <p style="margin-top: 0.5rem;">Paper: <a href="https://arxiv.org/abs/2602.16284">arXiv:2602.16284</a> — Fast KV Compaction via Attention Matching (Zweiger et al., MIT Han Lab)</p>
+  </footer>
+</body>
+</html>

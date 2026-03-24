@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>QA Transparency — modelai-llama.cpp</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <nav>
+    <span class="logo">modelai-llama.cpp</span>
+    <div class="links">
+      <a href="index.html">Home</a>
+      <a href="benchmarks.html">Benchmarks</a>
+      <a href="paper.html">Paper</a>
+      <a href="qa.html" class="active">QA</a>
+      <a href="https://github.com/jandhyala-dev/modelai-llama.cpp">GitHub</a>
+    </div>
+  </nav>
+
+  <div class="container">
+    <h1>QA Transparency</h1>
+    <p>Every merge to modelai-main is gated by adversarial review, CI tests, and benchmark verification. This page documents the process.</p>
+
+    <h2>Adversarial Review Protocol</h2>
+    <p>Every implementation slice goes through a 13-section hostile review before merge. The reviewer's job is to <strong>try to break the code</strong>, not confirm it looks reasonable.</p>
+
+    <h3>Mandatory Review Sections</h3>
+    <table>
+      <thead>
+        <tr><th>#</th><th>Section</th><th>What It Checks</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>0</td><td>Scope Gate</td><td>Changes stay within declared scope</td></tr>
+        <tr><td>1</td><td>Spec Match</td><td>Code matches plan exactly (no contract drift)</td></tr>
+        <tr><td>2</td><td>Contract Boundary</td><td>Caller/callee assumptions match</td></tr>
+        <tr><td>3</td><td>Concrete Traces</td><td>6 mandatory traces with real values</td></tr>
+        <tr><td>4</td><td>Multi-Variant Model</td><td>Tested across architecture variants</td></tr>
+        <tr><td>5</td><td>State Machine</td><td>Before/after/failure/rollback states traced</td></tr>
+        <tr><td>6</td><td>Precondition Audit</td><td>Every assumption enforced or documented</td></tr>
+        <tr><td>7</td><td>Test Reality Check</td><td>Tests actually prove correctness (not just exist)</td></tr>
+        <tr><td>8</td><td>Disprove-It Pass</td><td>Systematic attempt to find the one bug</td></tr>
+        <tr><td>9</td><td>Skepticism Hierarchy</td><td>Most skeptical of indexing, layouts, integer division</td></tr>
+        <tr><td>10</td><td>Dependency Check</td><td>License, CVE, version pinning</td></tr>
+        <tr><td>11</td><td>Performance Check</td><td>No regression on hot paths</td></tr>
+        <tr><td>12</td><td>Cross-Repo Contract</td><td>API contracts match across repositories</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Trace Types (Section 3)</h3>
+    <table>
+      <thead>
+        <tr><th>Trace</th><th>Purpose</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Production</td><td>Dominant real-world case with real numbers</td></tr>
+        <tr><td>Boundary</td><td>Smallest/closest-to-threshold valid input</td></tr>
+        <tr><td>Adversarial</td><td>Hostile input designed to break the code</td></tr>
+        <tr><td>Integer Arithmetic</td><td>Every division/modulo/stride with substituted values</td></tr>
+        <tr><td>Security</td><td>Injection, SSRF, auth bypass, secrets exposure</td></tr>
+        <tr><td>Concurrency</td><td>Race conditions, deadlocks, orphaned work</td></tr>
+      </tbody>
+    </table>
+
+    <h2>8 Engine Test Tiers</h2>
+    <table>
+      <thead>
+        <tr><th>Tier</th><th>Name</th><th>What It Tests</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>1</td><td>Server Pytests</td><td>22 existing server unit tests, CI-gated</td></tr>
+        <tr><td>2</td><td>API Snapshots</td><td>Response schema validation against frozen snapshots</td></tr>
+        <tr><td>3</td><td>Perf Regression</td><td>Speed, RSS, compaction latency vs baseline</td></tr>
+        <tr><td>4</td><td>Quality Gate</td><td>Cosine floor, KV survival, state round-trip</td></tr>
+        <tr><td>5</td><td>Windows CI</td><td>MSVC x64 build + full test suite</td></tr>
+        <tr><td>6</td><td>Stress Tests</td><td>KV exhaustion, multi-slot concurrent compaction</td></tr>
+        <tr><td>7</td><td>Contract Tests</td><td>ModelAI-specific endpoints, metrics, schema</td></tr>
+        <tr><td>8</td><td>Live Dashboard</td><td>Automated data pipeline to public benchmark page</td></tr>
+      </tbody>
+    </table>
+
+    <h2>7 CI Workflows</h2>
+    <table>
+      <thead>
+        <tr><th>Workflow</th><th>Trigger</th><th>Purpose</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>modelai-ci</td><td>Push, PR</td><td>Build + 48 main-label tests</td></tr>
+        <tr><td>modelai-server-smoke</td><td>Push, PR</td><td>Server smoke test + pytests</td></tr>
+        <tr><td>modelai-perf-smoke</td><td>Push, PR</td><td>Performance regression detection</td></tr>
+        <tr><td>modelai-ci-windows</td><td>Push, PR</td><td>Windows MSVC build + test</td></tr>
+        <tr><td>modelai-upstream-sync</td><td>Saturday 2PM PDT</td><td>Weekly upstream merge + build + test</td></tr>
+        <tr><td>modelai-dashboard</td><td>After CI success</td><td>Aggregate bench data</td></tr>
+        <tr><td>modelai-auto-label</td><td>Issues, PRs</td><td>Auto-label by path/keyword</td></tr>
+      </tbody>
+    </table>
+
+    <h2>Upstream Sync Process</h2>
+    <div class="cards" style="grid-template-columns: repeat(2, 1fr);">
+      <div class="card">
+        <div class="label">Weekly Sync</div>
+        <div class="detail">Every Saturday at 2PM PDT, CI automatically:
+          <ol style="margin-top:0.5rem; padding-left:1.5rem;">
+            <li>Fetches upstream/master</li>
+            <li>Merges into upstream-sync branch</li>
+            <li>Builds (cmake + make)</li>
+            <li>Runs full test suite</li>
+            <li>Pushes on success, opens Issue on failure</li>
+          </ol>
+        </div>
+      </div>
+      <div class="card">
+        <div class="label">3-Branch Model</div>
+        <div class="detail">
+          <strong>modelai-main</strong> — working branch<br>
+          <strong>upstream-master</strong> — clean upstream tracking<br>
+          <strong>upstream-sync</strong> — staging for merges<br>
+          <br>Three long-lived branches, no sprawl.
+        </div>
+      </div>
+    </div>
+
+    <h2>Bug Tracking</h2>
+    <div class="cards">
+      <div class="card">
+        <div class="label">Total Bugs Fixed</div>
+        <div class="value">29</div>
+        <div class="detail">All documented with root cause + commit SHA</div>
+      </div>
+      <div class="card">
+        <div class="label">Critical/Major</div>
+        <div class="value">18</div>
+        <div class="detail">Every one caught by adversarial review</div>
+      </div>
+      <div class="card">
+        <div class="label">Security Patches</div>
+        <div class="value">1</div>
+        <div class="detail">RPC RCE — synced same day</div>
+      </div>
+    </div>
+    <p>Full bug list: <a href="https://github.com/jandhyala-dev/modelai-llama.cpp/blob/modelai-main/docs/BUGS-AND-FIXES.md">BUGS-AND-FIXES.md</a></p>
+  </div>
+
+  <footer>
+    <p>modelai-llama.cpp is MIT licensed. <a href="https://github.com/jandhyala-dev/modelai-llama.cpp">View on GitHub</a></p>
+  </footer>
+</body>
+</html>
