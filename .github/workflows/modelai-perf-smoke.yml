@@ -36,7 +36,8 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  MODEL_REF: ggml-org/gemma-3-270m-qat-GGUF
+  MODEL_URL: https://huggingface.co/ggml-org/gemma-3-270m-qat-GGUF/resolve/main/gemma-3-270m-qat-Q4_0.gguf
+  MODEL_FILE: gemma-3-270m-qat-Q4_0.gguf
 
 jobs:
   perf-smoke-macos:
@@ -67,6 +68,11 @@ jobs:
           cmake --build build --config Release -j $(sysctl -n hw.logicalcpu) \
             --target llama-bench llama-perplexity
 
+      - name: Download smoke model
+        run: |
+          curl -sL -o "$MODEL_FILE" "$MODEL_URL"
+          test -s "$MODEL_FILE"
+
       - name: Create smoke corpus
         run: |
           cat > perf-smoke.txt << 'TXT'
@@ -78,12 +84,12 @@ jobs:
 
       - name: Run llama-bench smoke
         run: |
-          ./build/bin/llama-bench -hf "$MODEL_REF" -hff gemma-3-270m-qat-Q4_0.gguf -ngl 0 > llama-bench.txt
+          ./build/bin/llama-bench -m "$MODEL_FILE" -ngl 0 > llama-bench.txt
           test -s llama-bench.txt
 
       - name: Run llama-perplexity smoke
         run: |
-          ./build/bin/llama-perplexity -hf "$MODEL_REF" -hff gemma-3-270m-qat-Q4_0.gguf -f perf-smoke.txt -ngl 0 -c 512 -b 256 --chunks 1 > llama-perplexity.txt
+          ./build/bin/llama-perplexity -m "$MODEL_FILE" -f perf-smoke.txt -ngl 0 -c 512 -b 256 --chunks 1 > llama-perplexity.txt
           grep -q 'Final estimate' llama-perplexity.txt
 
       - name: Upload perf smoke artifacts
