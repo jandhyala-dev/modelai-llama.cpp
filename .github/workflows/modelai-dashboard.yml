@@ -47,6 +47,7 @@ jobs:
             --output bench-results/history.jsonl
 
       - name: Commit if changed
+        continue-on-error: true
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
@@ -55,14 +56,14 @@ jobs:
           else
             git add bench-results/history.jsonl
             git commit -m "chore: update dashboard data [skip ci]"
-            git push
+            git push || echo "::warning::Push failed (branch protection). Data commit skipped."
           fi
 
   deploy-site:
     name: deploy-site
     runs-on: ubuntu-latest
     needs: update-data
-    if: always() && (needs.update-data.result == 'success' || needs.update-data.result == 'skipped')
+    if: always()
     environment:
       name: github-pages
       url: ${{ steps.deploy.outputs.page_url }}
