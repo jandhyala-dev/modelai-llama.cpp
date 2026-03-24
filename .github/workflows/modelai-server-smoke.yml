@@ -87,7 +87,7 @@ jobs:
           trap cleanup EXIT
 
           ./build/bin/llama-server \
-            -hf "$MODEL_REF" \
+            -hf "$MODEL_REF" -hff gemma-3-270m-qat-Q4_0.gguf \
             --alias "$MODEL_ALIAS" \
             --host 127.0.0.1 \
             --port "$SERVER_PORT" \
@@ -182,12 +182,15 @@ jobs:
 
       - name: Install test dependencies
         run: |
-          pip3 install -r tools/server/tests/requirements.txt
+          python3 -m venv .venv
+          source .venv/bin/activate
+          pip install -r tools/server/tests/requirements.txt
 
       - name: Run server pytests (fast)
         env:
           LLAMA_SERVER_BIN_PATH: ./build/bin/llama-server
           N_GPU_LAYERS: 0
         run: |
+          source .venv/bin/activate
           cd tools/server/tests
           python3 -m pytest unit/ -v -x -m "not slow" --timeout=120 2>&1 | tail -60

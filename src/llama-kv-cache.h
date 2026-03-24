@@ -1,8 +1,10 @@
 #pragma once
 
 #include "llama-batch.h"
+#ifdef LLAMA_KV_COMPACTION
 #include "llama-kv-compacted-prefix-exec.h"
 #include "llama-kv-compacted-prefix.h"
+#endif
 #include "llama-graph.h"
 #include "llama-kv-cells.h"
 #include "llama-memory.h"
@@ -15,11 +17,14 @@ struct llama_cparams;
 struct llama_hparams;
 struct llama_model;
 struct llama_context;
+
+#ifdef LLAMA_KV_COMPACTION
 struct llama_kv_compact_pipeline_stats;
 struct llama_kv_compact_self_study_config;
 struct llama_kv_compact_self_study_stats;
 
 #include "llama-kv-compact-on-policy.h"
+#endif
 
 //
 // llama_kv_cache
@@ -114,8 +119,11 @@ public:
                      uint32_t   n_swa,
                llama_swa_type   swa_type,
         const layer_filter_cb & filter,
-        const  layer_reuse_cb & reuse,
-                         bool   enable_compacted_prefix = true);
+        const  layer_reuse_cb & reuse
+#ifdef LLAMA_KV_COMPACTION
+        ,                bool   enable_compacted_prefix = true
+#endif
+        );
 
     ~llama_kv_cache() = default;
 
@@ -161,6 +169,7 @@ public:
 
     bool get_has_shift() const;
 
+#ifdef LLAMA_KV_COMPACTION
     //
     // compacted-prefix internal API
     //
@@ -287,6 +296,7 @@ public:
     // Per-layer zero-beta query for flash attention eligibility (Phase 7).
     // Returns true if the specified layer has all-zero betas (flash-eligible).
     bool compacted_prefix_layer_zero_beta(llama_seq_id seq_id, int32_t il) const;
+#endif // LLAMA_KV_COMPACTION
 
     //
     // graph_build API
@@ -335,6 +345,7 @@ public:
     void set_input_kq_mask   (ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const;
     void set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const;
 
+#ifdef LLAMA_KV_COMPACTION
     bool resolve_compacted_prefix_exec(
             const llama_ubatch & ubatch,
             llama_compacted_prefix_exec_candidate & out) const;
@@ -350,8 +361,10 @@ public:
     // data in place.  Forces re-materialization of cached K/V/beta tensors on
     // the next decode.
     void compacted_prefix_bump_version() { ++compacted_prefix_version_counter; cp_cache.invalidate(); }
+#endif // LLAMA_KV_COMPACTION
 
 private:
+#ifdef LLAMA_KV_COMPACTION
     std::string compacted_prefix_last_method = "none";
 
     // Version counter for tensor caching — bumped on configure/clear/state_read.
@@ -443,6 +456,7 @@ private:
     bool compacted_prefix_runtime_supported() const;
     bool compacted_prefix_stream_owned_by_seq(uint32_t strm, llama_seq_id seq_id, std::vector<uint32_t> & live_cell_idxs) const;
     void compacted_prefix_pack_stream_tensors(uint32_t strm, const std::vector<uint32_t> & live_cell_idxs);
+#endif // LLAMA_KV_COMPACTION
 
     const llama_model & model;
     const llama_hparams & hparams;
@@ -496,7 +510,9 @@ private:
     // model layer id -> KV cache layer id
     std::unordered_map<int32_t, int32_t> map_layer_ids;
 
+#ifdef LLAMA_KV_COMPACTION
     llama_compacted_prefix_store compacted_prefix;
+#endif
 
     size_t total_size() const;
 
@@ -600,6 +616,7 @@ public:
     void set_input_kq_mask   (ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const;
     void set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const;
 
+#ifdef LLAMA_KV_COMPACTION
     bool compacted_prefix_active() const;
     llama_seq_id compacted_prefix_seq_id() const;
     uint32_t compacted_prefix_n_tokens() const;
@@ -610,6 +627,7 @@ public:
     void set_input_compacted_prefix_k   (ggml_tensor * dst, int32_t il) const;
     void set_input_compacted_prefix_v   (ggml_tensor * dst, int32_t il) const;
     void set_input_compacted_prefix_kq_b(ggml_tensor * dst, int32_t il) const;
+#endif // LLAMA_KV_COMPACTION
 
 private:
     llama_memory_status status;
@@ -644,5 +662,7 @@ private:
     // as the cache gets filled, the benefit from this heuristic disappears
     int32_t n_kv;
 
+#ifdef LLAMA_KV_COMPACTION
     llama_compacted_prefix_exec_candidate compacted_exec;
+#endif
 };

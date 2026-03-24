@@ -5,7 +5,8 @@
 #include "src/llama-kv-compact-pipeline.h"
 #include "src/llama-kv-compact-solver.h"
 #include "src/llama-kv-cache.h"
-#include "src/llama-kv-cache-iswa.h"
+#include "src/llama-kv-compact-utils.h"
+#include "kv-compact-thresholds.h"
 
 #include "ggml.h"
 
@@ -79,14 +80,7 @@ int main(int argc, char ** argv) {
         return fail("failed to initialize model/context");
     }
 
-    auto * kv = dynamic_cast<llama_kv_cache *>(ctx->get_memory());
-    llama_kv_cache_iswa * kv_iswa = nullptr;
-    if (kv == nullptr) {
-        kv_iswa = dynamic_cast<llama_kv_cache_iswa *>(ctx->get_memory());
-        if (kv_iswa != nullptr) {
-            kv = kv_iswa->get_base();
-        }
-    }
+    auto * kv = llama_kv_compact_get_cache(ctx->get_memory());
     if (kv == nullptr) {
         return fail("test requires a llama_kv_cache or llama_kv_cache_iswa memory backend");
     }
@@ -221,7 +215,7 @@ int main(int argc, char ** argv) {
     std::printf("n_prefix_tokens=%u\n", stats.n_prefix_tokens);
     std::printf("n_selected_tokens=%u\n", stats.n_selected_tokens);
 
-    if (logits_cos < 0.95f) {
+    if (logits_cos < llama_kv_compact_thresholds::COS_2X) {
         llama_batch_free(batch);
         return fail("2x continuation-logit cosine should meet the 0.95 threshold");
     }
@@ -269,7 +263,7 @@ int main(int argc, char ** argv) {
         const float cos_4x = llama_kv_compact_cosine_similarity(baseline_logits, logits_4x);
         std::printf("  4x logit_cosine_similarity=%.6f (threshold >= 0.90)\n", cos_4x);
 
-        if (cos_4x < 0.90f) {
+        if (cos_4x < llama_kv_compact_thresholds::COS_4X) {
             llama_batch_free(batch);
             return fail("4x continuation-logit cosine should meet the 0.90 threshold");
         }
@@ -318,7 +312,7 @@ int main(int argc, char ** argv) {
         const float cos_8x = llama_kv_compact_cosine_similarity(baseline_logits, logits_8x);
         std::printf("  8x logit_cosine_similarity=%.6f (threshold >= 0.85)\n", cos_8x);
 
-        if (cos_8x < 0.85f) {
+        if (cos_8x < llama_kv_compact_thresholds::COS_8X) {
             llama_batch_free(batch);
             return fail("8x continuation-logit cosine should meet the 0.85 threshold");
         }

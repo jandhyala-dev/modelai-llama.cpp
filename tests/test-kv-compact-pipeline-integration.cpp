@@ -24,7 +24,7 @@
 #include "src/llama-kv-compact-pipeline.h"
 #include "src/llama-kv-compact-solver.h"
 #include "src/llama-kv-cache.h"
-#include "src/llama-kv-cache-iswa.h"
+#include "src/llama-kv-compact-utils.h"
 
 #include <cmath>
 #include <cstdio>
@@ -107,17 +107,12 @@ int main(int argc, char ** argv) {
         return fail("failed to initialize model/context");
     }
 
-    auto * kv = dynamic_cast<llama_kv_cache *>(ctx->get_memory());
-    llama_kv_cache_iswa * kv_iswa = nullptr;
-    if (kv == nullptr) {
-        kv_iswa = dynamic_cast<llama_kv_cache_iswa *>(ctx->get_memory());
-        if (kv_iswa != nullptr) {
-            kv = kv_iswa->get_base();
-        }
-    }
+    auto * kv = llama_kv_compact_get_cache(ctx->get_memory());
     if (kv == nullptr) {
         return fail("test requires a llama_kv_cache or llama_kv_cache_iswa memory backend");
     }
+    // Needed for SWA sub-cache tests below.
+    auto * kv_iswa = dynamic_cast<llama_kv_cache_iswa *>(ctx->get_memory());
 
     // =========================================================================
     // TEST 1: #17450 — Unified KV buffer compaction support

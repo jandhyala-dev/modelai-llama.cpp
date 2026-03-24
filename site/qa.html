@@ -15,6 +15,7 @@
       <a href="paper.html">Paper</a>
       <a href="qa.html" class="active">QA</a>
       <a href="https://github.com/jandhyala-dev/modelai-llama.cpp">GitHub</a>
+      <a href="https://github.com/sponsors/jandhyala-dev" style="color:var(--green)">Sponsor</a>
     </div>
   </nav>
 
@@ -95,30 +96,65 @@
       </tbody>
     </table>
 
-    <h2>Upstream Sync Process</h2>
+    <h2>Weekly Upstream Sync and Review Process</h2>
+    <p>Every Saturday at 2PM PDT, the automated sync workflow runs. The process is designed so that no upstream change reaches <code>modelai-main</code> without passing build + test + human review.</p>
+
+    <h3>Automated Pipeline (Saturday 2PM PDT)</h3>
     <div class="cards" style="grid-template-columns: repeat(2, 1fr);">
       <div class="card">
-        <div class="label">Weekly Sync</div>
-        <div class="detail">Every Saturday at 2PM PDT, CI automatically:
+        <div class="label">Step 1: Fetch + Merge</div>
+        <div class="detail">
           <ol style="margin-top:0.5rem; padding-left:1.5rem;">
-            <li>Fetches upstream/master</li>
-            <li>Merges into upstream-sync branch</li>
-            <li>Builds (cmake + make)</li>
-            <li>Runs full test suite</li>
-            <li>Pushes on success, opens Issue on failure</li>
+            <li>Fetch latest <code>upstream/master</code></li>
+            <li>Update <code>upstream-master</code> tracking branch</li>
+            <li>Reset <code>upstream-sync</code> to <code>modelai-main</code></li>
+            <li>Merge upstream into <code>upstream-sync</code></li>
           </ol>
         </div>
       </div>
       <div class="card">
-        <div class="label">3-Branch Model</div>
+        <div class="label">Step 2: CI Gate</div>
         <div class="detail">
-          <strong>modelai-main</strong> — working branch<br>
-          <strong>upstream-master</strong> — clean upstream tracking<br>
-          <strong>upstream-sync</strong> — staging for merges<br>
-          <br>Three long-lived branches, no sprawl.
+          <ol style="margin-top:0.5rem; padding-left:1.5rem;">
+            <li>Full cmake build (Metal, tests, examples)</li>
+            <li>Run all main-label tests (48 tests)</li>
+            <li>Benchmark regression check against baseline</li>
+            <li>On success: merge into <code>modelai-main</code></li>
+            <li>On failure: open GitHub Issue with diagnostics</li>
+          </ol>
         </div>
       </div>
     </div>
+
+    <h3>Review Gate</h3>
+    <p>When the upstream delta touches compaction-related files (KV cache, graph construction, attention paths), the merge is held for manual review before integration. The reviewer checks:</p>
+    <ol style="color: var(--text-muted); padding-left: 1.5rem; margin: 1rem 0;">
+      <li><strong style="color: var(--text)">API compatibility</strong> &mdash; Do upstream KV cache API changes break our compacted prefix integration?</li>
+      <li><strong style="color: var(--text)">Graph construction</strong> &mdash; Do attention graph changes require updates to our compacted execution path?</li>
+      <li><strong style="color: var(--text)">Architecture support</strong> &mdash; Do new model architectures need compaction support added?</li>
+      <li><strong style="color: var(--text)">Test coverage</strong> &mdash; Do new upstream tests exercise compacted paths?</li>
+      <li><strong style="color: var(--text)">Security patches</strong> &mdash; CVE fixes are fast-tracked for same-day sync</li>
+    </ol>
+    <p>6 upstream KV cache changes have been audited and verified compatible: <code>#10873</code>, <code>#12695</code>, <code>#13194</code>, <code>#17450</code>, <code>#12253</code>, <code>#11213</code>.</p>
+
+    <h3>3-Branch Model</h3>
+    <div class="cards" style="grid-template-columns: repeat(3, 1fr);">
+      <div class="card">
+        <div class="label">modelai-main</div>
+        <div class="detail">Working branch. All development happens here. Protected: requires PR review + 2 status checks.</div>
+      </div>
+      <div class="card">
+        <div class="label">upstream-master</div>
+        <div class="detail">Clean upstream tracking. Force-updated to match <code>upstream/master</code> on every sync.</div>
+      </div>
+      <div class="card">
+        <div class="label">upstream-sync</div>
+        <div class="detail">Staging branch. Reset to <code>modelai-main</code>, then merged with upstream. CI-gated before integration.</div>
+      </div>
+    </div>
+
+    <h3>Emergency Hotfix Process</h3>
+    <p>Security patches (CVEs, RPC vulnerabilities) bypass the weekly schedule. Same-day sync via manual <code>workflow_dispatch</code>, followed by expedited review and merge. The RPC RCE patch was synced within hours of upstream disclosure.</p>
 
     <h2>Bug Tracking</h2>
     <div class="cards">

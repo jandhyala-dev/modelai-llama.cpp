@@ -143,3 +143,24 @@ The runtime uses internal config structures for:
 - pipeline stats collection
 
 All solver math is fp32. Fitted results are cast to the model/cache dtype for storage.
+
+## Compile-Time Guards
+
+KV compaction can be disabled at build time:
+
+```bash
+cmake -B build -DLLAMA_KV_COMPACTION=OFF
+```
+
+When `OFF`:
+- All compaction source files are excluded from compilation
+- Public API functions (`llama_kv_cache_compact`, `llama_kv_cache_set_auto_compact`) become no-op stubs that log a warning and return -1
+- Internal compaction members and methods in `llama_kv_cache` are excluded via `#ifdef LLAMA_KV_COMPACTION`
+- The `LLAMA_KV_COMPACTION` define is propagated as a PUBLIC compile definition to all targets linking against llama
+
+Default is `ON` — existing build behavior is unchanged.
+
+## Shared Utilities
+
+- `src/llama-kv-compact-utils.h` — Centralized `llama_kv_compact_get_cache()` for extracting `llama_kv_cache *` from any memory backend (plain, iSWA, hybrid, hybrid-iSWA). Single point of truth for the type-dispatch logic.
+- `src/llama-kv-compact-shared.h` — Shared `static inline` math helpers (`gather_matrix_rows`, `write_compacted_payload`, env var skip helpers) used across pipeline, self-study, and prefill-q modules.

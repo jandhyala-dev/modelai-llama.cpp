@@ -191,7 +191,7 @@ Audited fork against arXiv:2602.16284 reference implementation. Identified 16 ga
 ### CI Workflows (7 active)
 | Workflow | Trigger | Purpose |
 |----------|---------|---------|
-| `modelai-ci` | push, PR | Build + 48 main-label tests |
+| `modelai-ci` | push, PR | Build + 49 main-label tests |
 | `modelai-server-smoke` | push, PR | Server smoke + pytests |
 | `modelai-perf-smoke` | push, PR | Performance regression detection |
 | `modelai-ci-windows` | push, PR | Windows MSVC build + test |
@@ -220,6 +220,23 @@ Audited fork against arXiv:2602.16284 reference implementation. Identified 16 ga
 
 ---
 
+## OSS Hardening (Post-Review)
+
+### Review Findings Fixed
+- **F7.1-1** (Major): `upstream-sync.yml` now auto-updates `upstream-master` tracking branch
+- **P3-F1** (Medium): perf-smoke concurrency group uses `head_ref || ref_name`
+- **P3-F2** (Low): Added `permissions: contents: read` to CI and perf-smoke workflows
+
+### Phase 1.b Completion (7 remaining items)
+- **m-25**: Centralized `dynamic_cast` cascade into `llama-kv-compact-utils.h` — single point of truth for extracting `llama_kv_cache *` from any memory backend. Updated 13 callers (API, server, bench, 10 test files)
+- **m-27**: Shared test helpers (`kv-compact-test-helpers.h`) — `fail()`, `check()`, `cosine_similarity()` extracted from 3 test files
+- **m-34**: Unified cosine thresholds (`kv-compact-thresholds.h`) — named constants replace hardcoded magic numbers in 4 test files
+- **F-C-13**: Multi-token quality test (`test-kv-compact-quality-multi.cpp`) — validates 8-token continuation after 4x compaction
+- **F-C-22**: IMROPE regression test (`test-kv-compact-imrope.cpp`) — 5 sub-tests: flag storage, serialization roundtrip, seq_cp propagation, execution guards
+- **F-M-35**: Compile-time guards (`LLAMA_KV_COMPACTION` CMake option) — conditional compilation of all compaction source files, stub API when disabled, internal header guards
+
+---
+
 ## By the Numbers
 
 | Metric | Value |
@@ -233,7 +250,7 @@ Audited fork against arXiv:2602.16284 reference implementation. Identified 16 ga
 | Best quality (cosine) | 0.999 (Qwen3-30B-A3B at 4K/2x) |
 | Best speedup | +63% decode at 8K/8x (Qwen3-8B) |
 | Max effective context | 256K from 64K physical (100% recall) |
-| C++ test points | 51 CI-gated, 64 total |
+| C++ test points | 53 CI-gated, 66 total |
 | Engine test tiers | 8 (pytests → live dashboard) |
 | CI workflows | 7 active |
 | Adversarial review rounds | Every merge gated |

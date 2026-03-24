@@ -4,7 +4,7 @@
 #include "src/llama-context.h"
 #include "src/llama-kv-compact-pipeline.h"
 #include "src/llama-kv-cache.h"
-#include "src/llama-kv-cache-iswa.h"
+#include "src/llama-kv-compact-utils.h"
 
 #include <cstdio>
 #include <string>
@@ -44,13 +44,7 @@ int main(int argc, char ** argv) {
 
     GGML_UNUSED(model);
 
-    auto * kv = dynamic_cast<llama_kv_cache *>(ctx->get_memory());
-    if (kv == nullptr) {
-        auto * kv_iswa = dynamic_cast<llama_kv_cache_iswa *>(ctx->get_memory());
-        if (kv_iswa != nullptr) {
-            kv = kv_iswa->get_base();
-        }
-    }
+    auto * kv = llama_kv_compact_get_cache(ctx->get_memory());
     if (kv == nullptr) {
         return fail("test requires a llama_kv_cache or llama_kv_cache_iswa memory backend");
     }

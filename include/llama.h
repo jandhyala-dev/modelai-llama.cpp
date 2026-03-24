@@ -799,6 +799,10 @@ extern "C" {
     //
     // KV cache compaction (arXiv:2602.16284)
     //
+    // When LLAMA_KV_COMPACTION is defined (default ON), the full compaction
+    // pipeline is compiled.  When OFF, stub implementations in
+    // llama-kv-compact-stubs.cpp return -1 / log a warning.
+    //
 
     // Compact the KV cache for a sequence using Attention Matching.
     // Reduces the KV cache from its current size to target_tokens (or n/ratio).

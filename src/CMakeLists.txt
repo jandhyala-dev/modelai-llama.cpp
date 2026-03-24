@@ -20,18 +20,6 @@ add_library(llama
             llama-hparams.cpp
             llama-impl.cpp
             llama-io.cpp
-            llama-kv-compacted-prefix.cpp
-            llama-kv-compacted-prefix-exec.cpp
-            llama-kv-compact-api.cpp
-            llama-kv-compact-budget.cpp
-            llama-kv-compact-on-policy.cpp
-            llama-kv-compact-pipeline.cpp
-            llama-kv-compact-prefill-q.cpp
-            llama-kv-compact-query.cpp
-            llama-kv-compact-select.cpp
-            llama-kv-compact-self-study.cpp
-            llama-kv-compact-solver.cpp
-            $<$<PLATFORM_ID:Darwin>:llama-kv-compact-solver-metal.mm>
             llama-kv-cache.cpp
             llama-kv-cache-iswa.cpp
             llama-memory.cpp
@@ -174,18 +162,39 @@ target_compile_features   (llama PRIVATE cxx_std_17) # don't bump
 
 target_link_libraries(llama PUBLIC ggml)
 
-# Link Accelerate framework on macOS for LAPACK sgels (V2 solver core)
-# Link Metal + Foundation for GPU solver (Phase 3)
-if (APPLE)
-    find_library(ACCELERATE_FRAMEWORK Accelerate REQUIRED)
-    find_library(METAL_FRAMEWORK Metal REQUIRED)
-    find_library(FOUNDATION_FRAMEWORK Foundation REQUIRED)
-    target_link_libraries(llama PRIVATE
-        ${ACCELERATE_FRAMEWORK}
-        ${METAL_FRAMEWORK}
-        ${FOUNDATION_FRAMEWORK})
-    set_source_files_properties(llama-kv-compact-solver-metal.mm
-        PROPERTIES COMPILE_FLAGS "-fobjc-arc")
+# KV cache compaction (arXiv:2602.16284 Attention Matching)
+if (LLAMA_KV_COMPACTION)
+    target_sources(llama PRIVATE
+        llama-kv-compacted-prefix.cpp
+        llama-kv-compacted-prefix-exec.cpp
+        llama-kv-compact-api.cpp
+        llama-kv-compact-budget.cpp
+        llama-kv-compact-on-policy.cpp
+        llama-kv-compact-pipeline.cpp
+        llama-kv-compact-prefill-q.cpp
+        llama-kv-compact-query.cpp
+        llama-kv-compact-select.cpp
+        llama-kv-compact-self-study.cpp
+        llama-kv-compact-solver.cpp
+        $<$<PLATFORM_ID:Darwin>:llama-kv-compact-solver-metal.mm>
+    )
+    target_compile_definitions(llama PUBLIC LLAMA_KV_COMPACTION)
+
+    # Link Accelerate framework on macOS for LAPACK sgels (V2 solver core)
+    # Link Metal + Foundation for GPU solver (Phase 3)
+    if (APPLE)
+        find_library(ACCELERATE_FRAMEWORK Accelerate REQUIRED)
+        find_library(METAL_FRAMEWORK Metal REQUIRED)
+        find_library(FOUNDATION_FRAMEWORK Foundation REQUIRED)
+        target_link_libraries(llama PRIVATE
+            ${ACCELERATE_FRAMEWORK}
+            ${METAL_FRAMEWORK}
+            ${FOUNDATION_FRAMEWORK})
+        set_source_files_properties(llama-kv-compact-solver-metal.mm
+            PROPERTIES COMPILE_FLAGS "-fobjc-arc")
+    endif()
+else()
+    target_sources(llama PRIVATE llama-kv-compact-stubs.cpp)
 endif()
 
 if (BUILD_SHARED_LIBS)

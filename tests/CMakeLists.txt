@@ -250,6 +250,8 @@ llama_build_and_test(test-kv-compact-self-study.cpp)
 target_include_directories(test-kv-compact-self-study PRIVATE ${PROJECT_SOURCE_DIR})
 llama_build_and_test(test-kv-compact-features.cpp)
 target_include_directories(test-kv-compact-features PRIVATE ${PROJECT_SOURCE_DIR})
+llama_build_and_test(test-kv-compact-imrope.cpp)
+target_include_directories(test-kv-compact-imrope PRIVATE ${PROJECT_SOURCE_DIR})
 
 llama_build_and_test(test-model-load-cancel.cpp LABEL "model")
 llama_build_and_test(test-autorelease.cpp       LABEL "model")
@@ -271,6 +273,10 @@ set_tests_properties(test-kv-compacted-prefix-pack PROPERTIES FIXTURES_REQUIRED 
 llama_build_and_test(test-kv-compact-quality.cpp LABEL "model" ARGS -m "${MODEL_DEST}")
 target_include_directories(test-kv-compact-quality PRIVATE ${PROJECT_SOURCE_DIR})
 set_tests_properties(test-kv-compact-quality PROPERTIES FIXTURES_REQUIRED test-download-model)
+
+llama_build_and_test(test-kv-compact-quality-multi.cpp LABEL "model" ARGS -m "${MODEL_DEST}")
+target_include_directories(test-kv-compact-quality-multi PRIVATE ${PROJECT_SOURCE_DIR})
+set_tests_properties(test-kv-compact-quality-multi PROPERTIES FIXTURES_REQUIRED test-download-model)
 
 llama_build_and_test(test-kv-compact-pipeline-integration.cpp LABEL "model" ARGS -m "${MODEL_DEST}")
 target_include_directories(test-kv-compact-pipeline-integration PRIVATE ${PROJECT_SOURCE_DIR})

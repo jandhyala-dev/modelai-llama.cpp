@@ -13,9 +13,7 @@
 #include "mtmd-helper.h"
 #include "src/llama-context.h"
 #include "src/llama-kv-cache.h"
-#include "src/llama-kv-cache-iswa.h"
-#include "src/llama-memory-hybrid.h"
-#include "src/llama-memory-hybrid-iswa.h"
+#include "src/llama-kv-compact-utils.h"
 #include "src/llama-kv-compact-pipeline.h"
 #include "src/llama-kv-compact-prefill-q.h"
 #include "src/llama-kv-compact-self-study.h"
@@ -117,43 +115,17 @@ static bool is_context_q_capture_enabled() {
 }
 
 // F-M-16: Get the base llama_kv_cache from a context (handles plain, iSWA, and hybrid layouts).
-// Returns nullptr if the context has no KV cache or uses an unsupported memory type.
-// Non-const overload avoids const_cast at call sites.
-//
-// NOTE (F-M-16): The const_cast usage below is intentional and safe.  The upstream
-// API (get_base(), get_mem_attn()) returns const pointers, but the underlying objects
-// are owned by this process and are mutable.  We consolidate the cast here rather than
-// scattering it across every call site.  If the upstream API ever gains non-const
-// accessors, this helper should be updated to use them.
+// Uses centralized llama_kv_compact_get_cache() to avoid duplicating the dynamic_cast cascade.
 static llama_kv_cache * get_kv_cache_base_mut(llama_context * ctx) {
     if (!ctx) {
         return nullptr;
     }
-    auto * mem = ctx->get_memory();
-    if (!mem) {
-        return nullptr;
+    auto * kv = llama_kv_compact_get_cache(ctx->get_memory());
+    if (!kv) {
+        // F-M-17: Log diagnostic for unrecognized memory types.
+        LLAMA_LOG_WARN("%s: unrecognized memory type — compaction unavailable\n", __func__);
     }
-    auto * kv = dynamic_cast<llama_kv_cache *>(mem);
-    if (kv) {
-        return kv;
-    }
-    auto * kv_iswa = dynamic_cast<llama_kv_cache_iswa *>(mem);
-    if (kv_iswa) {
-        return const_cast<llama_kv_cache *>(kv_iswa->get_base());
-    }
-    // Hybrid models (attention + recurrent/SSM layers, e.g. Qwen3.5-35B-A3B):
-    // extract the attention KV cache, compaction applies only to attention layers.
-    auto * hybrid = dynamic_cast<llama_memory_hybrid *>(mem);
-    if (hybrid) {
-        return const_cast<llama_kv_cache *>(hybrid->get_mem_attn());
-    }
-    auto * hybrid_iswa = dynamic_cast<llama_memory_hybrid_iswa *>(mem);
-    if (hybrid_iswa) {
-        return const_cast<llama_kv_cache *>(hybrid_iswa->get_mem_attn()->get_base());
-    }
-    // F-M-17: Log diagnostic for unrecognized memory types.
-    LLAMA_LOG_WARN("%s: unrecognized memory type — compaction unavailable\n", __func__);
-    return nullptr;
+    return kv;
 }
 
 static const llama_kv_cache * get_kv_cache_base(llama_context * ctx) {

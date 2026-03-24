@@ -35,7 +35,8 @@
 #include "src/llama-kv-compact-solver.h"
 #include "src/llama-kv-compact-self-study.h"
 #include "src/llama-kv-cache.h"
-#include "src/llama-kv-cache-iswa.h"
+#include "src/llama-kv-compact-utils.h"
+#include "kv-compact-thresholds.h"
 
 #include "vendor/nlohmann/json.hpp"
 
@@ -110,9 +111,9 @@ static const char * workload_name_from_id(const char * wid) {
 
 static float lookup_threshold(const char * /*workload_id*/, int ratio) {
     // Logit cosine thresholds — looser at higher compression.
-    if (ratio <= 2) return 0.95f;
-    if (ratio <= 4) return 0.90f;
-    return 0.85f;
+    if (ratio <= 2) return llama_kv_compact_thresholds::COS_2X;
+    if (ratio <= 4) return llama_kv_compact_thresholds::COS_4X;
+    return llama_kv_compact_thresholds::COS_8X;
 }
 
 // ---------------------------------------------------------------------------
@@ -887,14 +888,7 @@ int main(int argc, char ** argv) {
         return fail("failed to initialize model/context");
     }
 
-    auto * kv = dynamic_cast<llama_kv_cache *>(ctx->get_memory());
-    llama_kv_cache_iswa * kv_iswa = nullptr;
-    if (kv == nullptr) {
-        kv_iswa = dynamic_cast<llama_kv_cache_iswa *>(ctx->get_memory());
-        if (kv_iswa != nullptr) {
-            kv = kv_iswa->get_base();
-        }
-    }
+    auto * kv = llama_kv_compact_get_cache(ctx->get_memory());
     if (kv == nullptr) {
         return fail("requires llama_kv_cache or llama_kv_cache_iswa memory backend");
     }

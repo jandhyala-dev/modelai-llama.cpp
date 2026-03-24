@@ -1,25 +1,19 @@
 #include "src/llama-kv-compact-select.h"
 #include "src/llama-kv-compact-solver.h"
+#include "kv-compact-test-helpers.h"
+#include "kv-compact-thresholds.h"
 
 #include <cmath>
 #include <cstdio>
 #include <string>
 #include <vector>
 
+using llama_kv_compact_test::check;
+using llama_kv_compact_test::fail;
+
 namespace {
 
-int fail(const std::string & message) {
-    std::fprintf(stderr, "test-kv-compact-solver: %s\n", message.c_str());
-    return 1;
-}
-
-bool check(bool cond, const std::string & message, int & rc) {
-    if (!cond) {
-        rc = fail(message);
-        return false;
-    }
-    return true;
-}
+static const std::string test_prefix = "test-kv-compact-solver";
 
 } // namespace
 
@@ -29,7 +23,7 @@ int main() {
     {
         const std::vector<float> scores = { 0.1f, 0.9f, 0.3f, 0.8f };
         const auto top = llama_kv_compact_select_topk(scores, 2);
-        if (!check(top.size() == 2 && top[0] == 1 && top[1] == 3, "top-k selection should keep the highest-scoring indices in ascending position order", rc)) return rc;
+        if (!check(test_prefix, top.size() == 2 && top[0] == 1 && top[1] == 3, "top-k selection should keep the highest-scoring indices in ascending position order", rc)) return rc;
     }
 
     llama_kv_compact_matrix queries(4, 2);
@@ -68,13 +62,13 @@ int main() {
 
     std::vector<float> beta;
     float partition_rel_err = 0.0f;
-    if (!check(llama_kv_compact_fit_beta(queries, full_k, compacted_k, opts, beta, &partition_rel_err), "beta fit should succeed", rc)) return rc;
-    if (!check(beta.size() == 2, "beta size should match compacted token count", rc)) return rc;
-    if (!check(partition_rel_err >= 0.0f && partition_rel_err < 0.5f, "partition relative error should stay bounded on the synthetic fixture", rc)) return rc;
+    if (!check(test_prefix, llama_kv_compact_fit_beta(queries, full_k, compacted_k, opts, beta, &partition_rel_err), "beta fit should succeed", rc)) return rc;
+    if (!check(test_prefix, beta.size() == 2, "beta size should match compacted token count", rc)) return rc;
+    if (!check(test_prefix, partition_rel_err >= 0.0f && partition_rel_err < 0.5f, "partition relative error should stay bounded on the synthetic fixture", rc)) return rc;
 
     llama_kv_compact_matrix compacted_v;
-    if (!check(llama_kv_compact_fit_values(queries, full_k, full_v, compacted_k, beta, opts, compacted_v), "value fit should succeed", rc)) return rc;
-    if (!check(compacted_v.rows == 2 && compacted_v.cols == 2, "compacted V shape should match selected token count and value dim", rc)) return rc;
+    if (!check(test_prefix, llama_kv_compact_fit_values(queries, full_k, full_v, compacted_k, beta, opts, compacted_v), "value fit should succeed", rc)) return rc;
+    if (!check(test_prefix, compacted_v.rows == 2 && compacted_v.cols == 2, "compacted V shape should match selected token count and value dim", rc)) return rc;
 
     llama_kv_compact_matrix full_out;
     llama_kv_compact_matrix compact_out;
@@ -82,9 +76,9 @@ int main() {
     llama_kv_compact_attention_output(queries, full_k, full_v, nullptr, full_out, &partition_sums);
     llama_kv_compact_attention_output(queries, compacted_k, compacted_v, &beta, compact_out, nullptr);
 
-    if (!check(full_out.data.size() == compact_out.data.size(), "attention outputs should be comparable", rc)) return rc;
+    if (!check(test_prefix, full_out.data.size() == compact_out.data.size(), "attention outputs should be comparable", rc)) return rc;
     const float cos = llama_kv_compact_cosine_similarity(full_out.data, compact_out.data);
-    if (!check(cos >= 0.95f, "synthetic attention-output cosine should meet the baseline threshold", rc)) return rc;
+    if (!check(test_prefix, cos >= llama_kv_compact_thresholds::COS_SOLVER_BASELINE, "synthetic attention-output cosine should meet the baseline threshold", rc)) return rc;
 
     // OMP key selection test
     {
@@ -94,18 +88,18 @@ int main() {
         auto omp_selected = llama_kv_compact_select_omp(
             queries, full_k, 2, omp_opts, omp_beta);
 
-        if (!check(omp_selected.size() == 2, "OMP should select exactly 2 keys", rc)) return rc;
-        if (!check(omp_beta.size() == 2, "OMP should produce 2 beta values", rc)) return rc;
+        if (!check(test_prefix, omp_selected.size() == 2, "OMP should select exactly 2 keys", rc)) return rc;
+        if (!check(test_prefix, omp_beta.size() == 2, "OMP should produce 2 beta values", rc)) return rc;
         std::printf("  OMP selected positions: %u, %u\n",
                     omp_selected[0], omp_selected[1]);
         std::printf("  OMP beta: %.4f, %.4f\n", omp_beta[0], omp_beta[1]);
 
         for (float b : omp_beta) {
-            if (!check(std::isfinite(b), "OMP beta values should be finite", rc)) return rc;
+            if (!check(test_prefix, std::isfinite(b), "OMP beta values should be finite", rc)) return rc;
         }
 
         // OMP results should be sorted by position
-        if (!check(omp_selected[0] < omp_selected[1], "OMP results should be position-sorted", rc)) return rc;
+        if (!check(test_prefix, omp_selected[0] < omp_selected[1], "OMP results should be position-sorted", rc)) return rc;
     }
 
     return 0;

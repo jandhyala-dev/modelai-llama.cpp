@@ -7,9 +7,7 @@
 #include "llama-impl.h"
 #include "llama-context.h"
 #include "llama-kv-cache.h"
-#include "llama-kv-cache-iswa.h"
-#include "llama-memory-hybrid.h"
-#include "llama-memory-hybrid-iswa.h"
+#include "llama-kv-compact-utils.h"
 #include "llama-kv-compact-pipeline.h"
 
 #include <algorithm>
@@ -18,27 +16,7 @@
 
 // Get the base llama_kv_cache from a context (handles plain, iSWA, hybrid).
 static llama_kv_cache * get_kv_cache(llama_context * ctx) {
-    auto * mem = ctx->get_memory();
-    if (!mem) {
-        return nullptr;
-    }
-    auto * kv = dynamic_cast<llama_kv_cache *>(mem);
-    if (kv) {
-        return kv;
-    }
-    auto * kv_iswa = dynamic_cast<llama_kv_cache_iswa *>(mem);
-    if (kv_iswa) {
-        return kv_iswa->get_base();  // m-12: removed unnecessary const_cast
-    }
-    auto * hybrid = dynamic_cast<llama_memory_hybrid *>(mem);
-    if (hybrid) {
-        return hybrid->get_mem_attn();  // m-12: removed unnecessary const_cast
-    }
-    auto * hybrid_iswa = dynamic_cast<llama_memory_hybrid_iswa *>(mem);
-    if (hybrid_iswa) {
-        return hybrid_iswa->get_mem_attn()->get_base();  // m-12: removed unnecessary const_cast
-    }
-    return nullptr;
+    return llama_kv_compact_get_cache(ctx->get_memory());
 }
 
 struct llama_compact_params llama_compact_default_params(void) {

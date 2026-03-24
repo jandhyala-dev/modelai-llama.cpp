@@ -36,6 +36,11 @@ jobs:
           git fetch upstream master
           git fetch origin modelai-main
 
+      - name: Update upstream-master tracking branch
+        run: |
+          git branch -f upstream-master upstream/master
+          git push origin upstream-master --force-with-lease
+
       - name: Reset upstream-sync to modelai-main + upstream
         id: merge
         run: |

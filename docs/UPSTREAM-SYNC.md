@@ -16,7 +16,7 @@ Three long-lived branches, no sprawl. Feature work uses short-lived branches off
 
 ## Sync Cadence
 
-- **Weekly:** Automated CI sync every Saturday 2PM PDT (`modelai-upstream-sync.yml`). Merges `upstream/master` into `upstream-sync`, builds, tests, and pushes. Opens a GitHub Issue on failure.
+- **Weekly:** Automated CI sync every Saturday 2PM PDT (`modelai-upstream-sync.yml`). Updates `upstream-master` tracking branch, merges `upstream/master` into `upstream-sync`, builds, tests, and auto-merges into `modelai-main`. Opens a GitHub Issue on failure.
 - **Emergency:** Security patches (e.g., RCE fixes) are synced and merged same-day via `workflow_dispatch`.
 
 ## What Gets Validated on Each Merge

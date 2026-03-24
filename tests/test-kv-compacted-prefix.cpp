@@ -324,7 +324,7 @@ int test_sequence_edge_cases() {
     if (!check(!store.is_enabled(8), "seq_rm all should disable sequence", rc)) return rc;
     if (!check(store.seq_allocated_bytes(8) == 0, "seq_rm all should release compacted-prefix bytes", rc)) return rc;
 
-    llama_compacted_prefix_store empty_store({});
+    llama_compacted_prefix_store empty_store;
     if (!check(empty_store.configure_seq(2, 4, { 1, 3 }, -1), "zero-layout configure_seq should succeed", rc)) return rc;
     const auto * empty_seq = empty_store.get_seq(2);
     if (empty_seq == nullptr) {

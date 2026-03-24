@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>modelai-llama.cpp — KV Cache Compaction</title>
-  <meta name="description" content="Production fork of llama.cpp adding KV cache compaction via Attention Matching. 0.946-0.999 cosine similarity, up to +63% decode speedup, 256K effective context from 64K physical.">
+  <title>modelai-llama.cpp — Production Fork of llama.cpp</title>
+  <meta name="description" content="Production fork of llama.cpp with KV cache compaction, Metal GPU acceleration, 5 architecture support, 29 bug fixes, and 7 CI workflows. MIT licensed.">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -16,14 +16,16 @@
       <a href="paper.html">Paper</a>
       <a href="qa.html">QA</a>
       <a href="https://github.com/jandhyala-dev/modelai-llama.cpp">GitHub</a>
+      <a href="https://github.com/sponsors/jandhyala-dev" style="color:var(--green)">Sponsor</a>
     </div>
   </nav>
 
   <div class="hero">
-    <h1>KV Cache Compaction for llama.cpp</h1>
-    <p>Instead of truncating or evicting old context, compaction compresses the KV cache into a smaller learned representation that preserves attention behavior.</p>
+    <h1>modelai-llama.cpp</h1>
+    <p>Production fork of <a href="https://github.com/ggml-org/llama.cpp">llama.cpp</a> adding KV cache compaction, Metal GPU acceleration, multi-architecture support, and production-grade QA infrastructure. Zero regression on upstream performance.</p>
     <span class="badge badge-green">MIT License</span>
-    <span class="badge badge-blue">15 Models Validated</span>
+    <span class="badge badge-blue">462 Commits Ahead</span>
+    <span class="badge badge-green">29 Bugs Fixed</span>
   </div>
 
   <div class="container">
@@ -31,27 +33,30 @@
       <div class="card">
         <div class="label">Quality</div>
         <div class="value">0.997</div>
-        <div class="detail">Logit cosine similarity (Qwen3-8B)</div>
+        <div class="detail">Logit cosine similarity (Qwen3-8B, select)</div>
       </div>
       <div class="card">
         <div class="label">Decode Speedup</div>
         <div class="value">+63%</div>
-        <div class="detail">At 8K context, 8x compression</div>
+        <div class="detail">After 8x compaction at 8K context</div>
       </div>
       <div class="card">
-        <div class="label">Max Effective Context</div>
+        <div class="label">Effective Context</div>
         <div class="value">256K</div>
         <div class="detail">From 64K physical KV cache</div>
       </div>
       <div class="card">
-        <div class="label">Baseline Overhead</div>
+        <div class="label">Upstream Regression</div>
         <div class="value">0%</div>
         <div class="detail">Fork matches upstream within 2%</div>
       </div>
     </div>
 
-    <h2>How It Works</h2>
-    <p>Based on <a href="https://arxiv.org/abs/2602.16284">"Fast KV Compaction via Attention Matching"</a> (Zweiger et al., MIT Han Lab). The algorithm:</p>
+    <!-- ================================================ -->
+    <!-- KV CACHE COMPACTION                              -->
+    <!-- ================================================ -->
+    <h2>KV Cache Compaction</h2>
+    <p>Based on <a href="https://arxiv.org/abs/2602.16284">"Fast KV Compaction via Attention Matching"</a> (Zweiger et al., MIT Han Lab). Instead of truncating or evicting old context, compaction compresses the KV cache into a smaller learned representation that preserves attention behavior.</p>
     <div class="code-block">
 Fill 64K KV cache -> Compact at 4x -> 16K compacted + 48K free -> Fill again -> Repeat
 Each cycle advances position IDs by ~48K
@@ -64,22 +69,103 @@ Each cycle advances position IDs by ~48K
       <li><strong style="color: var(--text)">Reclaim</strong> freed KV slots for new tokens</li>
     </ol>
 
-    <h2>Supported Architectures</h2>
+    <h3>7 Compaction Pipelines</h3>
+    <table>
+      <thead>
+        <tr><th>Pipeline</th><th>Speed</th><th>Quality</th><th>Use Case</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><code>select</code></td><td>Fast (62-185ms)</td><td>0.946-0.999</td><td>Production default, flash-compatible</td></tr>
+        <tr><td><code>solver</code></td><td>Medium</td><td>Higher</td><td>Full beta + V fitting</td></tr>
+        <tr><td><code>omp</code></td><td>Slow</td><td>Highest</td><td>Orthogonal Matching Pursuit</td></tr>
+        <tr><td><code>self_study</code></td><td>Slow</td><td>High</td><td>On-policy Q generation via autoregressive continuation</td></tr>
+        <tr><td><code>chunked</code></td><td>Medium</td><td>High</td><td>Long context (>8K prefix)</td></tr>
+        <tr><td><code>on_policy</code></td><td>Slow</td><td>Highest</td><td>Iterative quality-gated refinement</td></tr>
+        <tr><td><code>sequential</code></td><td>Very slow</td><td>Highest</td><td>Per-layer sequential on-policy</td></tr>
+      </tbody>
+    </table>
+
+    <!-- ================================================ -->
+    <!-- SOLVER ENGINE                                    -->
+    <!-- ================================================ -->
+    <h2>Pure C++ Solver Engine</h2>
+    <p>Complete Attention Matching solver with zero external dependencies. Builds on any platform cmake supports.</p>
+    <div class="cards" style="grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));">
+      <div class="card">
+        <div class="label">NNLS Beta Fitting</div>
+        <div class="detail">Projected gradient descent with lstsq+clamp fallback</div>
+      </div>
+      <div class="card">
+        <div class="label">Least-Squares V</div>
+        <div class="detail">3-tier cascade: LAPACK sgels, Cholesky, aggressive Cholesky</div>
+      </div>
+      <div class="card">
+        <div class="label">NEON SIMD</div>
+        <div class="detail">ARM NEON-optimized dot product for Apple Silicon</div>
+      </div>
+      <div class="card">
+        <div class="label">Metal GPU</div>
+        <div class="detail">Attention score + XtX assembly on Apple Silicon</div>
+      </div>
+      <div class="card">
+        <div class="label">Spectral Ridge</div>
+        <div class="detail">Power iteration for regularization parameter scaling</div>
+      </div>
+      <div class="card">
+        <div class="label">Quantized K/V</div>
+        <div class="detail">Q8_0, Q4_K extraction with block-aligned dequantization</div>
+      </div>
+    </div>
+
+    <!-- ================================================ -->
+    <!-- ARCHITECTURE SUPPORT                             -->
+    <!-- ================================================ -->
+    <h2>5 Architecture Support</h2>
     <table>
       <thead>
         <tr><th>Architecture</th><th>Status</th><th>Example Models</th></tr>
       </thead>
       <tbody>
-        <tr><td>Standard attention</td><td style="color:var(--green)">Supported</td><td>Llama, Qwen, Mistral, Granite</td></tr>
-        <tr><td>iSWA (interleaved sliding window)</td><td style="color:var(--green)">Supported</td><td>Qwen3 family</td></tr>
-        <tr><td>Hybrid SSM+Attention</td><td style="color:var(--green)">Supported</td><td>Granite3.1-Dense</td></tr>
+        <tr><td>Standard attention</td><td style="color:var(--green)">Supported</td><td>Llama, Qwen2.5, Mistral, DeepSeek-R1, Aya, Granite</td></tr>
+        <tr><td>iSWA (interleaved sliding window)</td><td style="color:var(--green)">Supported</td><td>Qwen3-8B, Qwen3-14B, Qwen3-30B-A3B</td></tr>
+        <tr><td>Hybrid SSM+Attention</td><td style="color:var(--green)">Supported</td><td>Granite3.1-Dense-8B</td></tr>
+        <tr><td>Hybrid-iSWA</td><td style="color:var(--green)">Supported</td><td>Hybrid + interleaved sliding window</td></tr>
         <tr><td>IMROPE (multi-resolution RoPE)</td><td style="color:var(--green)">Supported</td><td>Qwen3.5, Qwen3.5-MOE</td></tr>
-        <tr><td>Metal GPU solver</td><td style="color:var(--green)">Supported</td><td>All Apple Silicon</td></tr>
         <tr><td>Pure recurrent (Mamba/RWKV)</td><td style="color:var(--text-muted)">N/A</td><td>No KV cache</td></tr>
       </tbody>
     </table>
 
-    <h2>Quick Start</h2>
+    <!-- ================================================ -->
+    <!-- PUBLIC API + FEATURES                            -->
+    <!-- ================================================ -->
+    <h2>Public C API and Features</h2>
+    <div class="cards" style="grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));">
+      <div class="card">
+        <div class="label">Public C API</div>
+        <div class="detail">
+          <code>llama_kv_cache_compact()</code> &mdash; trigger compaction<br>
+          <code>llama_kv_cache_set_auto_compact()</code> &mdash; threshold-based auto-trigger<br>
+          <code>llama_kv_cache_compact_info()</code> &mdash; query compaction state
+        </div>
+      </div>
+      <div class="card">
+        <div class="label">Auto-Compaction</div>
+        <div class="detail">Threshold-triggered with one-shot guard. Server sets threshold via <code>--compact-threshold</code>, compaction fires automatically when KV fill exceeds it.</div>
+      </div>
+      <div class="card">
+        <div class="label">State Persistence</div>
+        <div class="detail">Compacted prefix survives save/restore (version 2 serialization with <code>is_imrope</code> flag). Full session recovery across server restart.</div>
+      </div>
+      <div class="card">
+        <div class="label">Per-Layer Flash Hybrid</div>
+        <div class="detail">Zero-beta layers use flash attention, non-zero use standard. Automatic per-layer decision at graph build time.</div>
+      </div>
+    </div>
+
+    <!-- ================================================ -->
+    <!-- SERVER ENDPOINTS                                 -->
+    <!-- ================================================ -->
+    <h2>Server Integration</h2>
     <div class="code-block">
 # Build
 cmake -B build -DGGML_METAL=ON
@@ -91,34 +177,153 @@ cmake --build build --config Release -j$(nproc)
     --endpoint-compact \
     -c 8192
 
-# Trigger compaction via API
+# Trigger compaction via REST API
 curl -X POST http://localhost:8080/compact \
   -H "Content-Type: application/json" \
   -d '{"id_slot": 0, "method": "select", "ratio": 4.0}'
-    </div>
 
-    <h2>9 Compaction Methods</h2>
+# Query compaction state
+curl http://localhost:8080/props | jq '.default_generation_settings.compacted_prefix'
+    </div>
+    <p>Server extensions: <code>/compact</code> REST endpoint, <code>/props</code> compaction state, Prometheus gauges (<code>llamacpp:modelai_active_n_kv_total</code>, <code>llamacpp:modelai_active_n_kv_max</code>, <code>llamacpp:modelai_sequence_state_bytes_total</code>).</p>
+
+    <!-- ================================================ -->
+    <!-- BUG FIXES                                        -->
+    <!-- ================================================ -->
+    <h2>29 Bug Fixes</h2>
+    <p>Every bug found through adversarial review, fixed with root-cause analysis, and verified with regression tests. <a href="https://github.com/jandhyala-dev/modelai-llama.cpp/blob/modelai-main/docs/BUGS-AND-FIXES.md">Full list with commit SHAs</a>.</p>
+    <div class="cards">
+      <div class="card">
+        <div class="label">Critical/Major</div>
+        <div class="value" style="color:var(--red)">18</div>
+        <div class="detail">Crashes, data corruption, quality loss</div>
+      </div>
+      <div class="card">
+        <div class="label">Minor/Infra</div>
+        <div class="value">11</div>
+        <div class="detail">CI fixes, build issues, diagnostics</div>
+      </div>
+      <div class="card">
+        <div class="label">Security</div>
+        <div class="value">1</div>
+        <div class="detail">RPC RCE synced same-day from upstream</div>
+      </div>
+    </div>
+    <p style="font-size: 0.85rem;">Notable fixes: post-compaction crash on stale prompt cache, nonuniform NaN propagation, 80+ Metal GPU sync stalls per decode, OMP infinite loop at high compression, KV shift position wrap, quantized V misalignment.</p>
+
+    <!-- ================================================ -->
+    <!-- CI AND TESTING                                   -->
+    <!-- ================================================ -->
+    <h2>CI and Testing Infrastructure</h2>
+    <div class="cards" style="grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));">
+      <div class="card">
+        <div class="label">CI Workflows</div>
+        <div class="value">7</div>
+        <div class="detail">Active on every push/PR</div>
+      </div>
+      <div class="card">
+        <div class="label">Engine Test Tiers</div>
+        <div class="value">8</div>
+        <div class="detail">Pytests to live dashboard</div>
+      </div>
+      <div class="card">
+        <div class="label">CI Tests</div>
+        <div class="value">48</div>
+        <div class="detail">Main-label, all passing</div>
+      </div>
+      <div class="card">
+        <div class="label">Models Validated</div>
+        <div class="value">17</div>
+        <div class="detail">15 pass 0.95 cosine gate</div>
+      </div>
+    </div>
     <table>
       <thead>
-        <tr><th>Method</th><th>Speed</th><th>Quality</th><th>Use Case</th></tr>
+        <tr><th>Workflow</th><th>Platform</th><th>Trigger</th></tr>
       </thead>
       <tbody>
-        <tr><td><code>select</code></td><td>Fast</td><td>High</td><td>Production default, flash-compatible</td></tr>
-        <tr><td><code>solver</code></td><td>Medium</td><td>Higher</td><td>Best quality with beta fitting</td></tr>
-        <tr><td><code>omp</code></td><td>Slow</td><td>Highest</td><td>Orthogonal Matching Pursuit</td></tr>
-        <tr><td><code>self_study</code></td><td>Slow</td><td>High</td><td>On-policy Q generation</td></tr>
-        <tr><td><code>chunked</code></td><td>Medium</td><td>High</td><td>Long context (>8K)</td></tr>
-        <tr><td><code>on_policy</code></td><td>Slow</td><td>Highest</td><td>Iterative refinement</td></tr>
-        <tr><td><code>nonuniform</code></td><td>Medium</td><td>High</td><td>Per-head budget allocation</td></tr>
-        <tr><td><code>sequential_on_policy</code></td><td>Very slow</td><td>Highest</td><td>Per-layer sequential refinement</td></tr>
-        <tr><td><code>context_prefill</code></td><td>Medium</td><td>High</td><td>Prefill-time compaction</td></tr>
+        <tr><td>modelai-ci</td><td>macOS (Apple Silicon)</td><td>Push, PR</td></tr>
+        <tr><td>modelai-server-smoke</td><td>macOS</td><td>Push, PR</td></tr>
+        <tr><td>modelai-perf-smoke</td><td>macOS</td><td>Push, PR</td></tr>
+        <tr><td>modelai-ci-windows</td><td>Windows (MSVC x64)</td><td>Push, PR</td></tr>
+        <tr><td>modelai-upstream-sync</td><td>macOS</td><td>Saturday 2PM PDT</td></tr>
+        <tr><td>modelai-dashboard</td><td>macOS</td><td>After CI success</td></tr>
+        <tr><td>modelai-auto-label</td><td>GitHub</td><td>Issues, PRs</td></tr>
+      </tbody>
+    </table>
+
+    <!-- ================================================ -->
+    <!-- UPSTREAM SYNC                                    -->
+    <!-- ================================================ -->
+    <h2>Weekly Upstream Sync and Review</h2>
+    <p>Weekly automated sync from <a href="https://github.com/ggml-org/llama.cpp">ggml-org/llama.cpp</a>. Every merge is CI-gated: build + full test suite + benchmark regression check must pass. Changes touching KV cache or attention paths trigger manual review before integration. <a href="qa.html#upstream-review">Full process details</a>.</p>
+    <div class="cards" style="grid-template-columns: repeat(3, 1fr);">
+      <div class="card">
+        <div class="label">Schedule</div>
+        <div class="value" style="font-size:1.2rem">Saturday 2PM PDT</div>
+        <div class="detail">Automated CI-gated merge</div>
+      </div>
+      <div class="card">
+        <div class="label">Branch Model</div>
+        <div class="value" style="font-size:1.2rem">3 Branches</div>
+        <div class="detail">modelai-main, upstream-master, upstream-sync</div>
+      </div>
+      <div class="card">
+        <div class="label">Security Patches</div>
+        <div class="value" style="font-size:1.2rem">Same-Day</div>
+        <div class="detail">Emergency sync for CVEs</div>
+      </div>
+    </div>
+    <p style="font-size: 0.85rem;">6 upstream KV cache changes audited and verified compatible. RPC RCE security patch synced within hours of upstream disclosure.</p>
+
+    <!-- ================================================ -->
+    <!-- MODELS                                           -->
+    <!-- ================================================ -->
+    <h2>Validated Models</h2>
+    <p>15 models pass the 0.95 logit cosine similarity quality gate (select pipeline).</p>
+    <table>
+      <thead>
+        <tr><th>Model</th><th>Architecture</th><th>Quality Gate</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>Qwen3-8B</td><td>iSWA</td><td style="color:var(--green)">Pass (0.997)</td></tr>
+        <tr><td>Qwen3-14B</td><td>iSWA</td><td style="color:var(--green)">Pass (0.992-0.999)</td></tr>
+        <tr><td>Qwen3-30B-A3B</td><td>iSWA (MoE)</td><td style="color:var(--green)">Pass (0.999)</td></tr>
+        <tr><td>DeepSeek-R1-14B</td><td>Standard</td><td style="color:var(--green)">Pass (0.993-0.999)</td></tr>
+        <tr><td>Qwen2.5-7B / 14B</td><td>Standard</td><td style="color:var(--green)">Pass</td></tr>
+        <tr><td>Granite3.1-Dense-8B</td><td>Hybrid SSM</td><td style="color:var(--green)">Pass</td></tr>
+        <tr><td>Aya-Expanse-8B</td><td>Standard</td><td style="color:var(--green)">Pass</td></tr>
+        <tr><td>Llama-3.2-3B</td><td>Standard</td><td style="color:var(--green)">Pass</td></tr>
+        <tr><td>Phi-3-mini-4k</td><td>Standard</td><td style="color:var(--green)">Pass</td></tr>
+        <tr><td>SmolLM2-1.7B</td><td>Standard</td><td style="color:var(--green)">Pass</td></tr>
+      </tbody>
+    </table>
+
+    <!-- ================================================ -->
+    <!-- DOCUMENTATION                                    -->
+    <!-- ================================================ -->
+    <h2>Documentation</h2>
+    <table>
+      <thead>
+        <tr><th>Document</th><th>Description</th></tr>
+      </thead>
+      <tbody>
+        <tr><td><a href="https://github.com/jandhyala-dev/modelai-llama.cpp/blob/modelai-main/docs/CHANGELOG.md">CHANGELOG</a></td><td>Full implementation history: V0 &rarr; V1 &rarr; V2 &rarr; V5 &rarr; Phase 8 &rarr; Phase D &rarr; OSS Launch</td></tr>
+        <tr><td><a href="https://github.com/jandhyala-dev/modelai-llama.cpp/blob/modelai-main/docs/DESIGN-DECISIONS.md">DESIGN-DECISIONS</a></td><td>13 architecture decisions with rationale</td></tr>
+        <tr><td><a href="https://github.com/jandhyala-dev/modelai-llama.cpp/blob/modelai-main/docs/BUGS-AND-FIXES.md">BUGS-AND-FIXES</a></td><td>All 29 bugs: root cause, fix, commit SHA</td></tr>
+        <tr><td><a href="https://github.com/jandhyala-dev/modelai-llama.cpp/blob/modelai-main/docs/UPSTREAM-SYNC.md">UPSTREAM-SYNC</a></td><td>Sync process, CI workflows, 3-branch model</td></tr>
+        <tr><td><a href="https://github.com/jandhyala-dev/modelai-llama.cpp/blob/modelai-main/docs/kv-compaction-algorithm.md">Algorithm</a></td><td>Selection, fitting, execution stages</td></tr>
+        <tr><td><a href="https://github.com/jandhyala-dev/modelai-llama.cpp/blob/modelai-main/docs/kv-compaction-integration.md">Integration</a></td><td>File map and architecture support matrix</td></tr>
+        <tr><td><a href="https://github.com/jandhyala-dev/modelai-llama.cpp/blob/modelai-main/docs/benchmark-fork-vs-upstream.md">Benchmarks</a></td><td>3-way fork vs upstream vs Ollama comparison</td></tr>
+        <tr><td><a href="https://github.com/jandhyala-dev/modelai-llama.cpp/blob/modelai-main/docs/paper-comparison-2602.16284.md">Paper Comparison</a></td><td>Fork vs arXiv:2602.16284 MIT reference</td></tr>
       </tbody>
     </table>
   </div>
 
   <footer>
     <p>modelai-llama.cpp is MIT licensed. <a href="https://github.com/jandhyala-dev/modelai-llama.cpp">View on GitHub</a></p>
-    <p style="margin-top: 0.5rem;">Paper: <a href="https://arxiv.org/abs/2602.16284">arXiv:2602.16284</a> — Fast KV Compaction via Attention Matching (Zweiger et al., MIT Han Lab)</p>
+    <p style="margin-top: 0.5rem;">Paper: <a href="https://arxiv.org/abs/2602.16284">arXiv:2602.16284</a> &mdash; Fast KV Compaction via Attention Matching (Zweiger et al., MIT Han Lab)</p>
+    <p style="margin-top: 0.5rem;">Upstream: <a href="https://github.com/ggml-org/llama.cpp">ggml-org/llama.cpp</a></p>
   </footer>
 </body>
 </html>

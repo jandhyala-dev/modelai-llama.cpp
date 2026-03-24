@@ -115,6 +115,9 @@ option(LLAMA_TESTS_INSTALL  "llama: install tests"        ON)
 option(LLAMA_OPENSSL    "llama: use openssl to support HTTPS" ON)
 option(LLAMA_LLGUIDANCE "llama-common: include LLGuidance library for structured output in common utils" OFF)
 
+# KV cache compaction (arXiv:2602.16284 Attention Matching)
+option(LLAMA_KV_COMPACTION "Enable KV cache compaction (Attention Matching)" ON)
+
 
 # Required for relocatable CMake package
 include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/build-info.cmake)

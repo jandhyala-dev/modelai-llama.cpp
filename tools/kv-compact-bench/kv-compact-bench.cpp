@@ -22,9 +22,7 @@
 
 #include "src/llama-context.h"
 #include "src/llama-kv-cache.h"
-#include "src/llama-kv-cache-iswa.h"
-#include "src/llama-memory-hybrid.h"
-#include "src/llama-memory-hybrid-iswa.h"
+#include "src/llama-kv-compact-utils.h"
 #include "src/llama-kv-compact-pipeline.h"
 
 #include <algorithm>
@@ -70,27 +68,7 @@ struct bench_result {
 
 // Get the base llama_kv_cache from a context (handles plain, iSWA, hybrid).
 static llama_kv_cache * get_kv_cache(llama_context * ctx) {
-    auto * mem = ctx->get_memory();
-    if (!mem) {
-        return nullptr;
-    }
-    auto * kv = dynamic_cast<llama_kv_cache *>(mem);
-    if (kv) {
-        return kv;
-    }
-    auto * kv_iswa = dynamic_cast<llama_kv_cache_iswa *>(mem);
-    if (kv_iswa) {
-        return const_cast<llama_kv_cache *>(kv_iswa->get_base());
-    }
-    auto * hybrid = dynamic_cast<llama_memory_hybrid *>(mem);
-    if (hybrid) {
-        return const_cast<llama_kv_cache *>(hybrid->get_mem_attn());
-    }
-    auto * hybrid_iswa = dynamic_cast<llama_memory_hybrid_iswa *>(mem);
-    if (hybrid_iswa) {
-        return const_cast<llama_kv_cache *>(hybrid_iswa->get_mem_attn()->get_base());
-    }
-    return nullptr;
+    return llama_kv_compact_get_cache(ctx->get_memory());
 }
 
 // Compute log-softmax for a single token prediction.
@@ -446,10 +424,18 @@ int main(int argc, char ** argv) {
     // Propagate CLI ablation flags to env vars for pipeline consumption.
     // Pipeline code reads these via static cached getenv() on first call.
     if (cfg.no_beta) {
+#ifdef _WIN32
+        _putenv_s("LLAMA_COMPACT_NO_BETA", "1");
+#else
         setenv("LLAMA_COMPACT_NO_BETA", "1", 1);
+#endif
     }
     if (cfg.no_cv) {
+#ifdef _WIN32
+        _putenv_s("LLAMA_COMPACT_NO_CV", "1");
+#else
         setenv("LLAMA_COMPACT_NO_CV", "1", 1);
+#endif
     }
 
     // Read input text.

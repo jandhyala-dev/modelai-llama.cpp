@@ -98,7 +98,7 @@ Zero regression from compaction code. MoE model (30B-A3B) is 13% faster than Oll
 
 - **29 fix commits** addressing 29 distinct bugs (18 Critical/Major)
 - **17 models tested** — 15 pass the 0.95 cosine quality gate
-- **51 CI-gated C++ tests**, 64 total (48 main-label + 3 model-label + 13 server pytests)
+- **53 CI-gated C++ tests**, 66 total (49 main-label + 4 model-label + 13 server pytests)
 - **8 engine test tiers** — pytests, API snapshots, perf regression, quality gate, Windows CI, stress tests, contract tests, live dashboard
 - **6 upstream KV cache changes** verified compatible before shipping
 - **RPC RCE security patch** synced same-day from upstream
