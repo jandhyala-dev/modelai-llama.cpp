@@ -6,12 +6,12 @@
   <title>modelai-llama.cpp — KV Cache Compaction for llama.cpp</title>
   <meta name="description" content="Production fork of llama.cpp with KV cache compaction. 50x compression, 0.9967 quality, +63% faster decoding, 256K context. 15 models validated. MIT licensed.">
   <meta property="og:title" content="modelai-llama.cpp — KV Cache Compaction for llama.cpp">
-  <meta property="og:description" content="LLMs forget long conversations. We fixed that. 50x memory compression with near-identical output quality. Drop-in replacement for llama.cpp.">
+  <meta property="og:description" content="LLMs forget long conversations. We fixed that. Compress context instead of discarding it. A 16GB laptop can hold conversations that previously required 64GB. Drop-in llama.cpp replacement.">
   <meta property="og:url" content="https://www.model-ai.org/">
   <meta property="og:type" content="website">
   <meta name="twitter:card" content="summary">
   <meta name="twitter:title" content="modelai-llama.cpp — KV Cache Compaction for llama.cpp">
-  <meta name="twitter:description" content="LLMs forget long conversations. We fixed that. 50x compression, near-identical quality.">
+  <meta name="twitter:description" content="LLMs forget long conversations. We fixed that. A 16GB laptop can hold conversations that previously required 64GB.">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%230d1117'/><text x='50' y='68' font-size='55' text-anchor='middle' fill='%2358a6ff' font-family='system-ui' font-weight='700'>M</text></svg>">
   <link rel="stylesheet" href="style.css">
 </head>
@@ -32,7 +32,8 @@
   <!-- ====== HERO ====== -->
   <div class="hero">
     <h1>LLMs forget long conversations.<br>We fixed that.</h1>
-    <p class="hero-sub">When an AI model runs out of memory mid-conversation, it throws away the oldest context and forgets what you said. <strong>modelai-llama.cpp</strong> compresses that memory instead of discarding it &mdash; so the model keeps the full conversation, runs faster, and produces nearly identical output. Built on research from MIT, implemented in production C++, and validated across 15 models.</p>
+    <p class="hero-sub">When an AI model runs out of memory mid-conversation, it throws away the oldest context and forgets what you said. <strong>modelai-llama.cpp</strong> compresses that memory instead of discarding it &mdash; shrinking earlier parts of the conversation into a compact summary that stays in context, so nothing is lost. The model keeps the full conversation, runs faster, and produces nearly identical output.</p>
+    <p class="hero-sub">This means a retail laptop with 16GB of RAM can hold conversations that previously required 64GB or a cloud API &mdash; local models stay coherent through hour-long analysis sessions instead of losing track after ten minutes. Built on research from MIT, implemented in production C++, and validated across 15 models.</p>
     <div class="hero-badges">
       <span class="badge badge-green">MIT License</span>
       <span class="badge badge-blue">Drop-in llama.cpp Replacement</span>
