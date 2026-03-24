@@ -75,12 +75,12 @@ jobs:
 
       - name: Create smoke corpus
         run: |
-          cat > perf-smoke.txt << 'TXT'
-          This is a lightweight smoke corpus for validating the llama.cpp performance tools.
-          It is not a benchmark-quality dataset and must not be used for release claims.
-          The purpose is only to confirm that the benchmarking and perplexity commands execute successfully.
-          Repeated-turn latency, allocated KV bytes, active KV length, and quality deltas belong in the full W1-W6 benchmark harness.
-          TXT
+          for i in $(seq 1 20); do
+            echo "This is a lightweight smoke corpus for validating the llama.cpp performance tools."
+            echo "It is not a benchmark-quality dataset and must not be used for release claims."
+            echo "The purpose is only to confirm that the benchmarking and perplexity commands execute successfully."
+            echo "Repeated-turn latency, allocated KV bytes, active KV length, and quality deltas belong in the full W1-W6 benchmark harness."
+          done > perf-smoke.txt
 
       - name: Run llama-bench smoke
         run: |
@@ -89,7 +89,7 @@ jobs:
 
       - name: Run llama-perplexity smoke
         run: |
-          ./build/bin/llama-perplexity -m "$MODEL_FILE" -f perf-smoke.txt -ngl 0 -c 512 -b 256 --chunks 1 > llama-perplexity.txt
+          ./build/bin/llama-perplexity -m "$MODEL_FILE" -f perf-smoke.txt -ngl 0 -c 128 -b 64 --chunks 1 > llama-perplexity.txt
           grep -q 'Final estimate' llama-perplexity.txt
 
       - name: Upload perf smoke artifacts
