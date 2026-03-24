@@ -1,6 +1,7 @@
 #include "llama-kv-compact-self-study.h"
 #include "llama-kv-compact-select.h"
 #include "llama-kv-compact-pipeline.h"
+#include "llama-kv-compact-shared.h"
 #include "llama-kv-compact-solver-metal.h"
 #include "llama-kv-cache.h"
 #include "llama-kv-compacted-prefix.h"
@@ -440,42 +441,6 @@ static float compute_row_norm_mean(const llama_kv_compact_matrix & m) {
     return (float)(sum / m.rows);
 }
 
-// Gather selected rows from a source matrix into a destination matrix.
-static bool gather_matrix_rows(
-        const llama_kv_compact_matrix & src,
-        const std::vector<uint32_t> & row_indices,
-        llama_kv_compact_matrix & dst) {
-    dst.resize((uint32_t)row_indices.size(), src.cols);
-    for (size_t i = 0; i < row_indices.size(); ++i) {
-        const uint32_t src_row = row_indices[i];
-        if (src_row >= src.rows) {
-            return false;
-        }
-        std::memcpy(dst.row((uint32_t)i), src.row(src_row), (size_t)src.cols * sizeof(float));
-    }
-    return true;
-}
-
-// Write solver output into the compacted prefix store's quantized payload.
-static void write_compacted_payload(
-        std::vector<uint8_t> & dst,
-        ggml_type type,
-        uint32_t n_tokens,
-        uint32_t head,
-        uint32_t dim,
-        const llama_kv_compact_matrix & rows) {
-    GGML_ASSERT(rows.rows == n_tokens);
-    GGML_ASSERT(rows.cols == dim);
-
-    auto from_float = ggml_get_type_traits(type)->from_float_ref;
-    GGML_ASSERT(from_float != nullptr);
-
-    const size_t token_bytes = ggml_row_size(type, dim);
-    for (uint32_t token = 0; token < n_tokens; ++token) {
-        void * dst_ptr = dst.data() + (size_t(head) * n_tokens + token) * token_bytes;
-        from_float(rows.row(token), dst_ptr, dim);
-    }
-}
 
 bool llama_kv_compact_self_study_from_live_kv(
         struct llama_context * ctx,
@@ -859,13 +824,13 @@ bool llama_kv_compact_self_study_from_live_kv(
                     }
                 }
                 write_compacted_payload(dst_layer.v_data, layout.type_v,
-                                        n_selected, head,
+                                        layout.n_head_kv, n_selected, head,
                                         layout.n_embd_head_v, compacted_v);
             }
 
             // Write compacted K payload
             write_compacted_payload(dst_layer.k_data, layout.type_k,
-                                    n_selected, head,
+                                    layout.n_head_kv, n_selected, head,
                                     layout.n_embd_head_k, compacted_k);
 
             // Write beta
@@ -1396,13 +1361,13 @@ bool llama_kv_compact_chunked_self_study_from_live_kv(
                     }
                 }
                 write_compacted_payload(dst_layer.v_data, layout.type_v,
-                                        actual_selected, head,
+                                        layout.n_head_kv, actual_selected, head,
                                         layout.n_embd_head_v, compacted_v);
             }
 
             // Write compacted K payload.
             write_compacted_payload(dst_layer.k_data, layout.type_k,
-                                    actual_selected, head,
+                                    layout.n_head_kv, actual_selected, head,
                                     layout.n_embd_head_k, compacted_k);
 
             // Write beta.

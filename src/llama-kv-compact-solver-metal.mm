@@ -1,6 +1,6 @@
 // Metal GPU acceleration for KV compaction solver.
 //
-// Three compute kernels:
+// Four compute kernels:
 //   1. kernel_attn_score    — Q·Kᵀ/√d score matrix
 //   2. kernel_softmax       — per-row softmax in-place
 //   3. kernel_col_sum       — column reduction → per-key aggregated scores
@@ -175,6 +175,8 @@ struct llama_kv_compact_metal_ctx {
     size_t        scores_cap;
     id<MTLBuffer> buf_output;
     size_t        output_cap;
+    id<MTLBuffer> buf_xtx_out;
+    size_t        xtx_out_cap;
 };
 
 // ---------------------------------------------------------------------------
@@ -249,10 +251,12 @@ llama_kv_compact_metal_ctx * llama_kv_compact_metal_create() {
         return nullptr;
     }
 
-    ctx->buf_scores = nil;
-    ctx->scores_cap = 0;
-    ctx->buf_output = nil;
-    ctx->output_cap = 0;
+    ctx->buf_scores  = nil;
+    ctx->scores_cap  = 0;
+    ctx->buf_output  = nil;
+    ctx->output_cap  = 0;
+    ctx->buf_xtx_out = nil;
+    ctx->xtx_out_cap = 0;
 
     LLAMA_LOG_INFO("metal solver: initialized on %s\n",
                    device.name.UTF8String);
@@ -273,15 +277,39 @@ bool llama_kv_compact_metal_attention_scores(
 
     @autoreleasepool {
         // Input buffers (shared storage — zero-copy on Apple Silicon).
+        // Try newBufferWithBytesNoCopy first (requires page-aligned data),
+        // fall back to newBufferWithBytes if NoCopy returns nil.
+        const size_t Q_bytes = (size_t)n * d * sizeof(float);
+        const size_t K_bytes = (size_t)T * d * sizeof(float);
+
         id<MTLBuffer> buf_Q = [ctx->device
-            newBufferWithBytes:Q_data
-                        length:(size_t)n * d * sizeof(float)
-                       options:MTLResourceStorageModeShared];
+            newBufferWithBytesNoCopy:(void *)Q_data
+                              length:Q_bytes
+                             options:MTLResourceStorageModeShared
+                         deallocator:nil];
+        if (!buf_Q) {
+            buf_Q = [ctx->device
+                newBufferWithBytes:Q_data
+                            length:Q_bytes
+                           options:MTLResourceStorageModeShared];
+        }
+
         id<MTLBuffer> buf_K = [ctx->device
-            newBufferWithBytes:K_data
-                        length:(size_t)T * d * sizeof(float)
-                       options:MTLResourceStorageModeShared];
-        if (!buf_Q || !buf_K) return false;
+            newBufferWithBytesNoCopy:(void *)K_data
+                              length:K_bytes
+                             options:MTLResourceStorageModeShared
+                         deallocator:nil];
+        if (!buf_K) {
+            buf_K = [ctx->device
+                newBufferWithBytes:K_data
+                            length:K_bytes
+                           options:MTLResourceStorageModeShared];
+        }
+
+        if (!buf_Q || !buf_K) {
+            LLAMA_LOG_WARN("metal solver: failed to allocate Q/K input buffers\n");
+            return false;
+        }
 
         // Intermediate + output buffers (cached, grown as needed).
         if (!ensure_buffer(ctx->device, ctx->buf_scores, ctx->scores_cap,
@@ -373,10 +401,8 @@ bool llama_kv_compact_metal_xtx(
         if (!buf_X) return false;
 
         const size_t out_bytes = (size_t)t * t * sizeof(float);
-        id<MTLBuffer> buf_out = [ctx->device
-            newBufferWithLength:out_bytes
-                        options:MTLResourceStorageModeShared];
-        if (!buf_out) return false;
+        if (!ensure_buffer(ctx->device, ctx->buf_xtx_out, ctx->xtx_out_cap,
+                           out_bytes)) return false;
 
         id<MTLCommandBuffer> cmdbuf = [ctx->queue commandBuffer];
         if (!cmdbuf) return false;
@@ -384,8 +410,8 @@ bool llama_kv_compact_metal_xtx(
         {
             id<MTLComputeCommandEncoder> enc = [cmdbuf computeCommandEncoder];
             [enc setComputePipelineState:ctx->ps_xtx];
-            [enc setBuffer:buf_X   offset:0 atIndex:0];
-            [enc setBuffer:buf_out offset:0 atIndex:1];
+            [enc setBuffer:buf_X           offset:0 atIndex:0];
+            [enc setBuffer:ctx->buf_xtx_out offset:0 atIndex:1];
             [enc setBytes:&n length:sizeof(n) atIndex:2];
             [enc setBytes:&t length:sizeof(t) atIndex:3];
             [enc dispatchThreads:MTLSizeMake(t, t, 1)
@@ -402,7 +428,7 @@ bool llama_kv_compact_metal_xtx(
             return false;
         }
 
-        memcpy(xtx_out, buf_out.contents, out_bytes);
+        memcpy(xtx_out, ctx->buf_xtx_out.contents, out_bytes);
     }
 
     return true;

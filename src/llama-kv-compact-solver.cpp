@@ -32,7 +32,9 @@ typedef __LAPACK_int lapack_int;
 
 namespace {
 
-using llama_kv_compact_math::dot_row;
+static inline auto dot_row(const float * a, const float * b, uint32_t n) {
+    return llama_kv_compact_dot_row(a, b, n);
+}
 
 // -----------------------------------------------------------------------
 // Cholesky solver (kept from V1, used as fallback)
@@ -442,7 +444,12 @@ float compute_spectral_norm(const llama_kv_compact_matrix & m) {
     std::vector<float> tmp_n(n, 0.0f);
     std::vector<float> tmp_t(t, 0.0f);
 
+    std::vector<float> v_prev(t);
+    constexpr float epsilon = 1e-6f;
+
     for (int iter = 0; iter < 8; ++iter) {
+        std::copy(v.begin(), v.end(), v_prev.begin());
+
         std::fill(tmp_n.begin(), tmp_n.end(), 0.0f);
         for (uint32_t r = 0; r < n; ++r) {
             tmp_n[r] = dot_row(m.row(r), v.data(), t);
@@ -465,6 +472,16 @@ float compute_spectral_norm(const llama_kv_compact_matrix & m) {
         }
         for (uint32_t c = 0; c < t; ++c) {
             v[c] = tmp_t[c] / norm;
+        }
+
+        // Early convergence check: ||v_new - v_old||
+        float delta = 0.0f;
+        for (uint32_t c = 0; c < t; ++c) {
+            float d = v[c] - v_prev[c];
+            delta += d * d;
+        }
+        if (std::sqrt(delta) < epsilon) {
+            break;
         }
     }
 
@@ -489,7 +506,7 @@ float compute_spectral_norm(const llama_kv_compact_matrix & m) {
     return std::max(num, 1e-6f);
 }
 
-// Frobenius norm squared divided by t = average eigenvalue of XᵀX
+// Frobenius norm squared divided by t = trace(XtX)/t
 float compute_frobenius_scale(const llama_kv_compact_matrix & m) {
     float sum = 0.0f;
     for (size_t i = 0; i < m.data.size(); ++i) {

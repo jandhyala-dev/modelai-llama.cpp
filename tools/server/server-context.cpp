@@ -119,6 +119,12 @@ static bool is_context_q_capture_enabled() {
 // F-M-16: Get the base llama_kv_cache from a context (handles plain, iSWA, and hybrid layouts).
 // Returns nullptr if the context has no KV cache or uses an unsupported memory type.
 // Non-const overload avoids const_cast at call sites.
+//
+// NOTE (F-M-16): The const_cast usage below is intentional and safe.  The upstream
+// API (get_base(), get_mem_attn()) returns const pointers, but the underlying objects
+// are owned by this process and are mutable.  We consolidate the cast here rather than
+// scattering it across every call site.  If the upstream API ever gains non-const
+// accessors, this helper should be updated to use them.
 static llama_kv_cache * get_kv_cache_base_mut(llama_context * ctx) {
     if (!ctx) {
         return nullptr;
@@ -3334,15 +3340,17 @@ private:
 
                     if (n_batch == 1 && ret == 1) {
                         // V4-F: auto-compaction — try compacting before giving up.
+                        // F-M-19: auto-compact must respect --endpoint-compact, same
+                        // gate as the HTTP /compact endpoint (server.cpp).
                         bool auto_compacted = false;
-                        if (ctx->auto_compact.enabled) {
+                        if (ctx->auto_compact_enabled() && params_base.endpoint_compact) {
                             for (auto & slot : slots) {
                                 if (slot.is_processing() && !slot.auto_compact_attempted) {
                                     slot.auto_compact_attempted = true;
                                     SRV_INF("auto-compact: attempting compaction for slot %d (ratio=%.1f)\n",
-                                            slot.id, ctx->auto_compact.ratio);
+                                            slot.id, ctx->auto_compact_ratio());
                                     const int32_t result = llama_kv_cache_compact(
-                                        ctx, slot.id, ctx->auto_compact.params);
+                                        ctx, slot.id, ctx->auto_compact_params());
                                     if (result > 0) {
                                         SRV_INF("auto-compact: success, %d tokens retained\n", result);
                                         auto_compacted = true;

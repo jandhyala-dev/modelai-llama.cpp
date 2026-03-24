@@ -2249,6 +2249,29 @@ void llama_kv_cache::set_input_compacted_prefix_mask(
     llama_compacted_prefix_set_input_mask(dst, *state, *ubatch, hparams, causal_attn);
 }
 
+// m-19b: Shared helper — ensure cp_cache structure is initialized for the
+// current compacted-prefix version and sequence.  Avoids triplicating the
+// init block across the K / V / beta set_input functions.
+//
+// Templated so the free function doesn't need to name the private nested type.
+template <typename Cache>
+static void cp_cache_ensure_init(
+        Cache & cache,
+        uint64_t ver,
+        llama_seq_id seq_id,
+        size_t n_layers) {
+    if (cache.version != ver || cache.seq_id != seq_id) {
+        cache.version  = ver;
+        cache.seq_id   = seq_id;
+        cache.k_bytes.clear();
+        cache.v_bytes.clear();
+        cache.beta_bytes.clear();
+        cache.k_bytes.resize(n_layers);
+        cache.v_bytes.resize(n_layers);
+        cache.beta_bytes.resize(n_layers);
+    }
+}
+
 void llama_kv_cache::set_input_compacted_prefix_k(ggml_tensor * dst, int32_t il, llama_seq_id seq_id) const {
     const auto * state = compacted_prefix.get_seq(seq_id);
     if (state == nullptr || !state->enabled || !state->is_execution_enabled()) {
@@ -2261,17 +2284,7 @@ void llama_kv_cache::set_input_compacted_prefix_k(ggml_tensor * dst, int32_t il,
     const uint64_t ver = compacted_prefix_version_counter;
     const size_t nbytes = ggml_nbytes(dst);
 
-    // Ensure cache structure is initialized for this version.
-    if (cp_cache.version != ver || cp_cache.seq_id != seq_id) {
-        cp_cache.version = ver;
-        cp_cache.seq_id = seq_id;
-        cp_cache.k_bytes.clear();
-        cp_cache.v_bytes.clear();
-        cp_cache.beta_bytes.clear();
-        cp_cache.k_bytes.resize(state->layers.size());
-        cp_cache.v_bytes.resize(state->layers.size());
-        cp_cache.beta_bytes.resize(state->layers.size());
-    }
+    cp_cache_ensure_init(cp_cache, ver, seq_id, state->layers.size());
 
     // Cache hit: upload cached staging buffer to tensor (B5: backend-agnostic).
     if (cp_cache.k_bytes[ikv].size() == nbytes) {
@@ -2279,18 +2292,12 @@ void llama_kv_cache::set_input_compacted_prefix_k(ggml_tensor * dst, int32_t il,
         return;
     }
 
-    // Cache miss: materialize into host staging buffer, then upload.
-    // RAII guard ensures dst->data is restored even if exec throws.
+    // Cache miss: materialize into a staging-backed tensor copy, then upload.
+    // F-M-02: use a stack-local tensor copy instead of swapping dst->data.
     cp_cache.k_bytes[ikv].resize(nbytes);
-    void * original_data = dst->data;
-    dst->data = cp_cache.k_bytes[ikv].data();
-    try {
-        llama_compacted_prefix_set_input_k(dst, state->layers[ikv]);
-    } catch (...) {
-        dst->data = original_data;
-        throw;
-    }
-    dst->data = original_data;
+    ggml_tensor tmp = *dst;
+    tmp.data = cp_cache.k_bytes[ikv].data();
+    llama_compacted_prefix_set_input_k(&tmp, state->layers[ikv]);
     ggml_backend_tensor_set(dst, cp_cache.k_bytes[ikv].data(), 0, nbytes);
 }
 
@@ -2306,17 +2313,7 @@ void llama_kv_cache::set_input_compacted_prefix_v(ggml_tensor * dst, int32_t il,
     const uint64_t ver = compacted_prefix_version_counter;
     const size_t nbytes = ggml_nbytes(dst);
 
-    // Ensure cache structure is initialized for this version.
-    if (cp_cache.version != ver || cp_cache.seq_id != seq_id) {
-        cp_cache.version = ver;
-        cp_cache.seq_id = seq_id;
-        cp_cache.k_bytes.clear();
-        cp_cache.v_bytes.clear();
-        cp_cache.beta_bytes.clear();
-        cp_cache.k_bytes.resize(state->layers.size());
-        cp_cache.v_bytes.resize(state->layers.size());
-        cp_cache.beta_bytes.resize(state->layers.size());
-    }
+    cp_cache_ensure_init(cp_cache, ver, seq_id, state->layers.size());
 
     // Cache hit: upload cached staging buffer to tensor (B5: backend-agnostic).
     if (cp_cache.v_bytes[ikv].size() == nbytes) {
@@ -2324,18 +2321,12 @@ void llama_kv_cache::set_input_compacted_prefix_v(ggml_tensor * dst, int32_t il,
         return;
     }
 
-    // Cache miss: materialize into host staging buffer, then upload.
-    // RAII guard ensures dst->data is restored even if exec throws.
+    // Cache miss: materialize into a staging-backed tensor copy, then upload.
+    // F-M-02: use a stack-local tensor copy instead of swapping dst->data.
     cp_cache.v_bytes[ikv].resize(nbytes);
-    void * original_data = dst->data;
-    dst->data = cp_cache.v_bytes[ikv].data();
-    try {
-        llama_compacted_prefix_set_input_v(dst, state->layers[ikv]);
-    } catch (...) {
-        dst->data = original_data;
-        throw;
-    }
-    dst->data = original_data;
+    ggml_tensor tmp = *dst;
+    tmp.data = cp_cache.v_bytes[ikv].data();
+    llama_compacted_prefix_set_input_v(&tmp, state->layers[ikv]);
     ggml_backend_tensor_set(dst, cp_cache.v_bytes[ikv].data(), 0, nbytes);
 }
 
@@ -2352,17 +2343,7 @@ void llama_kv_cache::set_input_compacted_prefix_kq_b(ggml_tensor * dst, int32_t 
     const size_t nbytes = ggml_nbytes(dst);
     const uint32_t n_tps = (uint32_t)dst->ne[1];
 
-    // Ensure cache structure is initialized for this version.
-    if (cp_cache.version != ver || cp_cache.seq_id != seq_id) {
-        cp_cache.version = ver;
-        cp_cache.seq_id = seq_id;
-        cp_cache.k_bytes.clear();
-        cp_cache.v_bytes.clear();
-        cp_cache.beta_bytes.clear();
-        cp_cache.k_bytes.resize(state->layers.size());
-        cp_cache.v_bytes.resize(state->layers.size());
-        cp_cache.beta_bytes.resize(state->layers.size());
-    }
+    cp_cache_ensure_init(cp_cache, ver, seq_id, state->layers.size());
 
     // Cache hit: upload cached staging buffer to tensor (B5: backend-agnostic).
     if (cp_cache.beta_bytes[ikv].size() == nbytes && cp_cache.beta_n_tps == n_tps) {
@@ -2370,18 +2351,12 @@ void llama_kv_cache::set_input_compacted_prefix_kq_b(ggml_tensor * dst, int32_t 
         return;
     }
 
-    // Cache miss: materialize into host staging buffer, then upload.
-    // RAII guard ensures dst->data is restored even if exec throws.
+    // Cache miss: materialize into a staging-backed tensor copy, then upload.
+    // F-M-02: use a stack-local tensor copy instead of swapping dst->data.
     cp_cache.beta_bytes[ikv].resize(nbytes);
-    void * original_data = dst->data;
-    dst->data = cp_cache.beta_bytes[ikv].data();
-    try {
-        llama_compacted_prefix_set_input_beta(dst, state->layers[ikv], hparams.n_head(il));
-    } catch (...) {
-        dst->data = original_data;
-        throw;
-    }
-    dst->data = original_data;
+    ggml_tensor tmp = *dst;
+    tmp.data = cp_cache.beta_bytes[ikv].data();
+    llama_compacted_prefix_set_input_beta(&tmp, state->layers[ikv], hparams.n_head(il));
     ggml_backend_tensor_set(dst, cp_cache.beta_bytes[ikv].data(), 0, nbytes);
     cp_cache.beta_n_tps = n_tps;
 }

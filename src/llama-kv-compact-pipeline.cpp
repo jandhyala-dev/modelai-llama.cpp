@@ -5,6 +5,7 @@
 #include "llama-kv-compact-query.h"
 #include "llama-kv-compact-select.h"
 #include "llama-kv-compact-self-study.h"
+#include "llama-kv-compact-shared.h"
 #include "llama-kv-compact-solver.h"
 #include "llama-kv-compacted-prefix.h"
 #include "llama-context.h"
@@ -25,24 +26,6 @@
 // For solver/omp pipelines, the system becomes severely underdetermined
 // when target_tokens is too small relative to the number of KV heads.
 static constexpr uint32_t LLAMA_KV_COMPACT_MIN_TARGET_TOKENS = 2;
-
-// Ablation: skip beta fitting when LLAMA_COMPACT_NO_BETA=1 (zero-beta, selection only).
-static bool llama_kv_compact_skip_beta_fit() {
-    static const bool skip = [] {
-        const char * env = std::getenv("LLAMA_COMPACT_NO_BETA");
-        return env && env[0] == '1';
-    }();
-    return skip;
-}
-
-// Ablation: skip C_v fitting when LLAMA_COMPACT_NO_CV=1 (keeps original V at selected positions).
-static bool llama_kv_compact_skip_cv_fit() {
-    static const bool skip = [] {
-        const char * env = std::getenv("LLAMA_COMPACT_NO_CV");
-        return env && env[0] == '1';
-    }();
-    return skip;
-}
 
 // V4-I: Use influence-curve budgets instead of entropy when LLAMA_COMPACT_INFLUENCE_BUDGETS=1.
 static bool llama_kv_compact_use_influence_budgets() {
@@ -73,27 +56,6 @@ bool gather_matrix_rows(
         std::memcpy(dst.row(i), src.data() + size_t(src_row) * cols, size_t(cols) * sizeof(float));
     }
     return true;
-}
-
-void write_compacted_payload(
-        std::vector<uint8_t> & dst,
-        ggml_type type,
-        uint32_t /*n_head_kv*/,
-        uint32_t n_tokens,
-        uint32_t head,
-        uint32_t dim,
-        const llama_kv_compact_matrix & rows) {
-    GGML_ASSERT(rows.rows == n_tokens);
-    GGML_ASSERT(rows.cols == dim);
-
-    auto from_float = ggml_get_type_traits(type)->from_float_ref;
-    GGML_ASSERT(from_float != nullptr);
-
-    const size_t token_bytes = ggml_row_size(type, dim);
-    for (uint32_t token = 0; token < n_tokens; ++token) {
-        void * dst_ptr = dst.data() + (size_t(head) * n_tokens + token) * token_bytes;
-        from_float(rows.row(token), dst_ptr, dim);
-    }
 }
 
 // Cached per-head data from Phase 1, reused in Phase 2.

@@ -11,9 +11,7 @@
 #include <arm_neon.h>
 #endif
 
-namespace llama_kv_compact_math {
-
-inline float dot_row(const float * a, const float * b, uint32_t n) {
+static inline float llama_kv_compact_dot_row(const float * a, const float * b, uint32_t n) {
 #ifdef __ARM_NEON__
     float32x4_t sum0 = vdupq_n_f32(0.0f);
     float32x4_t sum1 = vdupq_n_f32(0.0f);
@@ -50,5 +48,3 @@ inline float dot_row(const float * a, const float * b, uint32_t n) {
     return v;
 #endif
 }
-
-} // namespace llama_kv_compact_math

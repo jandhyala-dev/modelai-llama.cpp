@@ -184,6 +184,7 @@ int32_t llama_kv_cache_compact(
     return (int32_t)target_tokens;
 }
 
+// NOTE: Not thread-safe — must be called before inference begins or with external synchronization.
 void llama_kv_cache_set_auto_compact(
         struct llama_context       * ctx,
                float                 ratio,
@@ -192,14 +193,11 @@ void llama_kv_cache_set_auto_compact(
         return;
     }
     if (ratio <= 0.0f) {
-        ctx->auto_compact.enabled = false;
-        ctx->auto_compact.ratio   = 0.0f;
+        ctx->set_auto_compact(false, 0.0f, llama_compact_default_params());
         LLAMA_LOG_INFO("%s: auto-compaction disabled\n", __func__);
         return;
     }
-    ctx->auto_compact.enabled = true;
-    ctx->auto_compact.ratio   = ratio;
-    ctx->auto_compact.params  = params;
+    ctx->set_auto_compact(true, ratio, params);
     LLAMA_LOG_INFO("%s: auto-compaction enabled (ratio=%.1f, method=%d)\n",
                    __func__, ratio, (int)params.method);
 }

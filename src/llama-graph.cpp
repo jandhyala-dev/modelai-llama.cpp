@@ -19,6 +19,101 @@
 
 // dedup helpers
 
+// Result struct for build_compacted_prefix_concat.
+struct compacted_prefix_concat_result {
+    ggml_tensor * k;
+    ggml_tensor * v;
+    ggml_tensor * kq_b_combined;
+    ggml_tensor * kq_mask_combined;
+};
+
+// Concatenate compacted-prefix K/V/mask/bias tensors with the live KV cache tensors.
+// Shared by build_attn(llm_graph_input_attn_kv) and build_attn(llm_graph_input_attn_kv_iswa).
+template <typename InputType>
+static compacted_prefix_concat_result build_compacted_prefix_concat(
+        const llm_graph_context & gctx,
+        InputType * inp,
+        bool layer_zb,
+        bool zero_beta,
+        ggml_tensor * k,
+        ggml_tensor * v,
+        ggml_tensor * kq_b,
+        ggml_tensor * kq_mask,
+        int il) {
+    ggml_context * ctx0 = gctx.ctx0;
+    const auto & hparams = gctx.hparams;
+    const auto & cparams = gctx.cparams;
+    const int64_t n_tokens = gctx.n_tokens;
+
+    const int64_t live_n_kv = k->ne[2];
+
+    const auto * compacted = inp->ensure_compacted_prefix_layer(
+            ctx0,
+            il,
+            k->type,
+            v->type,
+            hparams.n_embd_head_k(il),
+            hparams.n_embd_head_v(il),
+            n_tokens,
+            hparams.n_head(il),
+            hparams.n_head_kv(il),
+            layer_zb);
+
+    GGML_ASSERT(compacted != nullptr);
+
+    k = ggml_concat(ctx0, compacted->k, k, 2);
+
+    if (v->nb[1] > v->nb[2]) {
+        v = ggml_cont(ctx0, ggml_permute(ctx0, v, 2, 1, 0, 3));
+        gctx.cb(v, "v_live_nontrans", il);
+    }
+
+    v = ggml_concat(ctx0, compacted->v, v, 2);
+
+    ggml_tensor * kq_mask_combined = ggml_concat(ctx0, inp->get_compacted_kq_mask(), kq_mask, 0);
+    ggml_tensor * kq_b_combined = kq_b;
+
+    if (zero_beta) {
+        // Zero-beta path: no kq_b needed, compatible with flash attention.
+        // Cast mask to F16 only when flash attention will actually be used
+        // (requires both flash_attn enabled and kq_b_combined == nullptr).
+        if (cparams.flash_attn && kq_b_combined == nullptr && kq_mask_combined->type != GGML_TYPE_F16) {
+            kq_mask_combined = ggml_cast(ctx0, kq_mask_combined, GGML_TYPE_F16);
+        }
+    } else if (kq_b) {
+        GGML_ASSERT(kq_b->ne[1] == compacted->kq_b->ne[1] && "compacted-prefix kq_b concat does not support broadcast token dimensions");
+        GGML_ASSERT(kq_b->ne[2] == compacted->kq_b->ne[2] && "compacted-prefix kq_b concat requires matching head dimensions");
+        GGML_ASSERT(kq_b->ne[3] == compacted->kq_b->ne[3] && "compacted-prefix kq_b concat requires matching stream dimensions");
+        kq_b_combined = ggml_concat(ctx0, compacted->kq_b, kq_b, 0);
+    } else {
+        // No live kq_b but compacted prefix has one: create a zero tensor for the live portion.
+        // m-20 fix: 3 graph nodes (view + scale + repeat) instead of the original 4 (view + cont + scale + repeat).
+        // The ggml_cont was unnecessary — a 1-element ggml_view_1d at offset 0 is already contiguous.
+        ggml_tensor * live_kq_b_shape = ggml_new_tensor_4d(
+                ctx0,
+                GGML_TYPE_F32,
+                live_n_kv,
+                compacted->kq_b->ne[1],
+                compacted->kq_b->ne[2],
+                compacted->kq_b->ne[3]);
+        ggml_tensor * zero_scalar = ggml_scale(
+                ctx0,
+                ggml_view_1d(ctx0, compacted->kq_b, 1, 0),
+                0.0f);
+        ggml_tensor * live_kq_b_zero = ggml_repeat(ctx0, zero_scalar, live_kq_b_shape);
+        kq_b_combined = ggml_concat(ctx0, compacted->kq_b, live_kq_b_zero, 0);
+    }
+
+    gctx.cb(k, "k_compacted_plus_live", il);
+    gctx.cb(v, "v_compacted_plus_live", il);
+    gctx.cb(kq_mask_combined, "kq_mask_compacted_plus_live", il);
+    if (kq_b_combined) {
+        gctx.cb(kq_b_combined, "kq_b_compacted_plus_live", il);
+    }
+
+    return { k, v, kq_b_combined, kq_mask_combined };
+}
+
 static ggml_tensor * build_kq_mask(
         ggml_context * ctx,
         const llama_kv_cache_context * mctx,
@@ -2226,75 +2321,14 @@ ggml_tensor * llm_graph_context::build_attn(
     ggml_tensor * kq_mask_combined = kq_mask;
 
     if (inp->has_compacted_prefix()) {
-        // Phase 7: per-layer flash eligibility.
-        // Query per-layer zero-beta status from the KV cache context.
         const bool layer_zb = inp->mctx->compacted_prefix_layer_zero_beta(il);
         const bool zero_beta = inp->compacted_prefix_is_zero_beta || layer_zb;
 
-        const int64_t live_n_kv = k->ne[2];
-
-        const auto * compacted = inp->ensure_compacted_prefix_layer(
-                ctx0,
-                il,
-                k->type,
-                v->type,
-                hparams.n_embd_head_k(il),
-                hparams.n_embd_head_v(il),
-                n_tokens,
-                hparams.n_head(il),
-                hparams.n_head_kv(il),
-                layer_zb);
-
-        GGML_ASSERT(compacted != nullptr);
-
-        k = ggml_concat(ctx0, compacted->k, k, 2);
-
-        if (v->nb[1] > v->nb[2]) {
-            v = ggml_cont(ctx0, ggml_permute(ctx0, v, 2, 1, 0, 3));
-            cb(v, "v_live_nontrans", il);
-        }
-
-        v = ggml_concat(ctx0, compacted->v, v, 2);
-        kq_mask_combined = ggml_concat(ctx0, inp->get_compacted_kq_mask(), kq_mask, 0);
-
-        if (zero_beta) {
-            // Zero-beta path: no kq_b needed, compatible with flash attention.
-            // kq_b_combined stays as the incoming kq_b (nullptr for most models).
-            // Phase 7: cast mask to F16 only when flash attention will actually be used
-            // (requires both flash_attn enabled and kq_b_combined == nullptr).
-            if (cparams.flash_attn && kq_b_combined == nullptr && kq_mask_combined->type != GGML_TYPE_F16) {
-                kq_mask_combined = ggml_cast(ctx0, kq_mask_combined, GGML_TYPE_F16);
-            }
-        } else if (kq_b) {
-            GGML_ASSERT(kq_b->ne[1] == compacted->kq_b->ne[1] && "compacted-prefix kq_b concat does not support broadcast token dimensions");
-            GGML_ASSERT(kq_b->ne[2] == compacted->kq_b->ne[2] && "compacted-prefix kq_b concat requires matching head dimensions");
-            GGML_ASSERT(kq_b->ne[3] == compacted->kq_b->ne[3] && "compacted-prefix kq_b concat requires matching stream dimensions");
-            kq_b_combined = ggml_concat(ctx0, compacted->kq_b, kq_b, 0);
-        } else {
-            ggml_tensor * live_kq_b_shape = ggml_new_tensor_4d(
-                    ctx0,
-                    GGML_TYPE_F32,
-                    live_n_kv,
-                    compacted->kq_b->ne[1],
-                    compacted->kq_b->ne[2],
-                    compacted->kq_b->ne[3]);
-            ggml_tensor * zero_scalar_src = ggml_cont(
-                    ctx0,
-                    ggml_view_1d(ctx0, compacted->kq_b, 1, 0));
-            ggml_tensor * zero_scalar = ggml_scale(
-                    ctx0,
-                    zero_scalar_src,
-                    0.0f);
-            ggml_tensor * live_kq_b_zero = ggml_repeat(ctx0, zero_scalar, live_kq_b_shape);
-            kq_b_combined = ggml_concat(ctx0, compacted->kq_b, live_kq_b_zero, 0);
-        }
-
-        cb(k, "k_compacted_plus_live", il);
-        cb(v, "v_compacted_plus_live", il);
-        cb(kq_mask_combined, "kq_mask_compacted_plus_live", il);
-        if (kq_b_combined) {
-            cb(kq_b_combined, "kq_b_compacted_plus_live", il);
-        }
+        const auto r = build_compacted_prefix_concat(*this, inp, layer_zb, zero_beta, k, v, kq_b, kq_mask, il);
+        k              = r.k;
+        v              = r.v;
+        kq_b_combined  = r.kq_b_combined;
+        kq_mask_combined = r.kq_mask_combined;
     }
 
     ggml_tensor * cur = build_attn_mha(q, k, v, kq_b_combined, kq_mask_combined, sinks, v_mla, kq_scale, il);
@@ -2450,72 +2484,14 @@ ggml_tensor * llm_graph_context::build_attn(
 
     // Compacted prefix: only for base (non-SWA) layers.
     if (!is_swa && inp->has_compacted_prefix()) {
-        // Phase 7: per-layer flash eligibility.
         const bool layer_zb = mctx_cur->compacted_prefix_layer_zero_beta(il);
         const bool zero_beta = inp->compacted_prefix_is_zero_beta || layer_zb;
 
-        const int64_t live_n_kv = k->ne[2];
-
-        const auto * compacted = inp->ensure_compacted_prefix_layer(
-                ctx0,
-                il,
-                k->type,
-                v->type,
-                hparams.n_embd_head_k(il),
-                hparams.n_embd_head_v(il),
-                n_tokens,
-                hparams.n_head(il),
-                hparams.n_head_kv(il),
-                layer_zb);
-
-        GGML_ASSERT(compacted != nullptr);
-
-        k = ggml_concat(ctx0, compacted->k, k, 2);
-
-        if (v->nb[1] > v->nb[2]) {
-            v = ggml_cont(ctx0, ggml_permute(ctx0, v, 2, 1, 0, 3));
-            cb(v, "v_live_nontrans", il);
-        }
-
-        v = ggml_concat(ctx0, compacted->v, v, 2);
-        kq_mask_combined = ggml_concat(ctx0, inp->get_compacted_kq_mask(), kq_mask_combined, 0);
-
-        if (zero_beta) {
-            // Zero-beta path: no kq_b needed, compatible with flash attention.
-            // Phase 7: cast mask to F16 only when flash attention will actually be used.
-            if (cparams.flash_attn && kq_b_combined == nullptr && kq_mask_combined->type != GGML_TYPE_F16) {
-                kq_mask_combined = ggml_cast(ctx0, kq_mask_combined, GGML_TYPE_F16);
-            }
-        } else if (kq_b) {
-            GGML_ASSERT(kq_b->ne[1] == compacted->kq_b->ne[1] && "compacted-prefix kq_b concat does not support broadcast token dimensions");
-            GGML_ASSERT(kq_b->ne[2] == compacted->kq_b->ne[2] && "compacted-prefix kq_b concat requires matching head dimensions");
-            GGML_ASSERT(kq_b->ne[3] == compacted->kq_b->ne[3] && "compacted-prefix kq_b concat requires matching stream dimensions");
-            kq_b_combined = ggml_concat(ctx0, compacted->kq_b, kq_b, 0);
-        } else {
-            ggml_tensor * live_kq_b_shape = ggml_new_tensor_4d(
-                    ctx0,
-                    GGML_TYPE_F32,
-                    live_n_kv,
-                    compacted->kq_b->ne[1],
-                    compacted->kq_b->ne[2],
-                    compacted->kq_b->ne[3]);
-            ggml_tensor * zero_scalar_src = ggml_cont(
-                    ctx0,
-                    ggml_view_1d(ctx0, compacted->kq_b, 1, 0));
-            ggml_tensor * zero_scalar = ggml_scale(
-                    ctx0,
-                    zero_scalar_src,
-                    0.0f);
-            ggml_tensor * live_kq_b_zero = ggml_repeat(ctx0, zero_scalar, live_kq_b_shape);
-            kq_b_combined = ggml_concat(ctx0, compacted->kq_b, live_kq_b_zero, 0);
-        }
-
-        cb(k, "k_compacted_plus_live", il);
-        cb(v, "v_compacted_plus_live", il);
-        cb(kq_mask_combined, "kq_mask_compacted_plus_live", il);
-        if (kq_b_combined) {
-            cb(kq_b_combined, "kq_b_compacted_plus_live", il);
-        }
+        const auto r = build_compacted_prefix_concat(*this, inp, layer_zb, zero_beta, k, v, kq_b, kq_mask_combined, il);
+        k              = r.k;
+        v              = r.v;
+        kq_b_combined  = r.kq_b_combined;
+        kq_mask_combined = r.kq_mask_combined;
     }
 
     ggml_tensor * cur = build_attn_mha(q, k, v, kq_b_combined, kq_mask_combined, sinks, v_mla, kq_scale, il);

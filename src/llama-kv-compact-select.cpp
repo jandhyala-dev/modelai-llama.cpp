@@ -8,7 +8,16 @@
 #include <limits>
 #include <numeric>
 
-using llama_kv_compact_math::dot_row;
+static inline auto dot_row(const float * a, const float * b, uint32_t n) {
+    return llama_kv_compact_dot_row(a, b, n);
+}
+
+// MIT default progressive schedule (declared extern in header).
+const llama_kv_compact_omp_schedule_entry LLAMA_KV_COMPACT_DEFAULT_OMP_SCHEDULE[] = {
+    {  300, 1, 1 },
+    { 1500, 2, 2 },
+    { UINT32_MAX, 4, 2 },
+};
 
 void llama_kv_compact_accumulate_attention_scores(
         const llama_kv_compact_matrix & queries,
@@ -131,12 +140,24 @@ std::vector<uint32_t> llama_kv_compact_select_topk(
 
 namespace {
 
+// Default Tikhonov regularization for the OMP NNLS solver.
+// Matches llama_kv_compact_solver_opts::lambda default.
+static constexpr float OMP_NNLS_DEFAULT_LAMBDA = 1e-6f;
+
 // Solve NNLS via Cholesky normal equations + clamp.
 // Used inside OMP loop for fast beta refit.
+//
+// NOTE: The V2 solver in llama-kv-compact-solver.cpp (solve_nnls_v2) provides
+// a more robust implementation with LAPACK sgels, adaptive ridge scaling, and
+// PGD refinement.  That solver is not exposed in the public header (it lives
+// inside an anonymous namespace), so we keep this lightweight Cholesky variant
+// for the OMP inner loop where latency matters.  The `lambda` parameter here
+// corresponds to opts.lambda in llama_kv_compact_solver_opts.
 bool omp_solve_nnls(
         const llama_kv_compact_matrix & M,
         const std::vector<float> & target,
         float lower_bound,
+        float lambda,
         std::vector<float> & B_out) {
     const uint32_t n = M.rows;
     const uint32_t t = M.cols;
@@ -159,7 +180,6 @@ bool omp_solve_nnls(
     // Symmetrize + regularize
     // F-C-15: Upper triangle is uninitialized (MtM only fills lower triangle).
     // Copy lower→upper instead of averaging with uninitialized values.
-    const float lambda = 1e-6f;
     for (uint32_t i = 0; i < t; ++i) {
         for (uint32_t j = 0; j < i; ++j) {
             mtm[size_t(j) * t + i] = mtm[size_t(i) * t + j];
@@ -304,7 +324,7 @@ std::vector<uint32_t> llama_kv_compact_select_omp(
             }
         }
         std::vector<float> B;
-        if (!omp_solve_nnls(M, target, opts.lower_bound, B)) {
+        if (!omp_solve_nnls(M, target, opts.lower_bound, OMP_NNLS_DEFAULT_LAMBDA, B)) {
             B.assign(use_t, opts.lower_bound);
         }
 
@@ -331,6 +351,7 @@ std::vector<uint32_t> llama_kv_compact_select_omp(
     std::vector<float> current(n, 0.0f);
     std::vector<float> B;
     std::vector<float> corr(T);
+    std::vector<uint32_t> candidates(T);  // m-15: hoisted out of while loop
 
     uint32_t iteration = 0;
     uint32_t refinement_count = 0;
@@ -381,7 +402,6 @@ std::vector<uint32_t> llama_kv_compact_select_omp(
                 break;
             }
             // Use partial sort to find the top candidates efficiently.
-            std::vector<uint32_t> candidates(T);
             std::iota(candidates.begin(), candidates.end(), 0);
             // partial_sort only needs to find the top k_select candidates.
             // Masked keys have corr=-inf and sort to the end, so k_select
@@ -416,7 +436,7 @@ std::vector<uint32_t> llama_kv_compact_select_omp(
                         M(qi, si) = exp_scores(qi, selected[si]);
                     }
                 }
-                if (!omp_solve_nnls(M, target, opts.lower_bound, B)) {
+                if (!omp_solve_nnls(M, target, opts.lower_bound, OMP_NNLS_DEFAULT_LAMBDA, B)) {
                     B.assign(sel_count, opts.lower_bound);
                 }
             } else {
@@ -447,7 +467,7 @@ std::vector<uint32_t> llama_kv_compact_select_omp(
                     M(qi, si) = exp_scores(qi, selected[si]);
                 }
             }
-            if (!omp_solve_nnls(M, target, opts.lower_bound, B)) {
+            if (!omp_solve_nnls(M, target, opts.lower_bound, OMP_NNLS_DEFAULT_LAMBDA, B)) {
                 break;  // NNLS failed — accept current selection
             }
 
@@ -532,7 +552,7 @@ std::vector<uint32_t> llama_kv_compact_select_omp(
                 M(qi, si) = exp_scores(qi, selected[si]);
             }
         }
-        omp_solve_nnls(M, target, opts.lower_bound, B);
+        omp_solve_nnls(M, target, opts.lower_bound, OMP_NNLS_DEFAULT_LAMBDA, B);
     }
 
     // Convert to beta (log-weights) and sort by position.

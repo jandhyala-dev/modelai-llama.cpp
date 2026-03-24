@@ -92,6 +92,13 @@ jobs:
         run: |
           git push origin upstream-sync --force-with-lease
 
+      - name: Merge into modelai-main
+        if: steps.merge.outputs.conflict == 'false' && steps.build.outcome == 'success' && steps.test.outcome == 'success'
+        run: |
+          git checkout modelai-main
+          git merge upstream-sync --no-edit
+          git push origin modelai-main
+
       - name: Open issue on failure
         if: failure() || steps.merge.outputs.conflict == 'true'
         env:

@@ -199,7 +199,7 @@ void io_read_floats(llama_io_read_i & io, std::vector<float> & data) {
         io.read_to(data.data(), (size_t) n_elem * sizeof(float));
     }
 }
-}
+} // namespace
 
 void llama_compacted_prefix_store::layer_storage::configure(uint32_t n_tokens) {
     if (!is_supported_compacted_type(layout.type_k, layout.n_embd_head_k, layout.n_embd_head_v) ||
@@ -314,8 +314,8 @@ bool llama_compacted_prefix_store::sequence_state::set_execution_enabled(bool en
         }
     }
 
-    LLAMA_LOG_INFO("%s: compacted prefix enabled — %d/%zu layers zero-beta (flash-eligible)\n",
-                   __func__, n_zero_beta, layers.size());
+    LLAMA_LOG_DEBUG("%s: compacted prefix enabled — %d/%zu layers zero-beta (flash-eligible)\n",
+                    __func__, n_zero_beta, layers.size());
 
     execution_enabled = true;
     return true;

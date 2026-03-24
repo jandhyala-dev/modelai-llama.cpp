@@ -65,12 +65,8 @@ struct llama_kv_compact_omp_schedule_entry {
     uint32_t nnls_interval;  // NNLS solve frequency (1=every iter, 2=every other)
 };
 
-// MIT default progressive schedule.
-static const llama_kv_compact_omp_schedule_entry LLAMA_KV_COMPACT_DEFAULT_OMP_SCHEDULE[] = {
-    {  300, 1, 1 },
-    { 1500, 2, 2 },
-    { UINT32_MAX, 4, 2 },
-};
+// MIT default progressive schedule (defined in llama-kv-compact-select.cpp).
+extern const llama_kv_compact_omp_schedule_entry LLAMA_KV_COMPACT_DEFAULT_OMP_SCHEDULE[3];
 
 // OMP key selection options.
 // Reference: omp.py class OMPCompaction.__init__() lines 138-206

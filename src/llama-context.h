@@ -236,15 +236,25 @@ public:
 
     bool set_sampler(llama_seq_id seq_id, llama_sampler * sampler);
 
+    // V4-F: auto-compaction accessors (F-M-13).
+    bool                              auto_compact_enabled() const { return auto_compact_.enabled; }
+    float                             auto_compact_ratio()   const { return auto_compact_.ratio;   }
+    const struct llama_compact_params & auto_compact_params() const { return auto_compact_.params;  }
+
+    void set_auto_compact(bool enabled, float ratio, struct llama_compact_params params) {
+        auto_compact_.enabled = enabled;
+        auto_compact_.ratio   = ratio;
+        auto_compact_.params  = params;
+    }
+
+private:
     // V4-F: auto-compaction state (set via llama_kv_cache_set_auto_compact).
-    // F-M-13: private + accessors.
     struct {
         bool                       enabled = false;
         float                      ratio   = 0.0f;
         struct llama_compact_params params  = llama_compact_default_params();
-    } auto_compact;
+    } auto_compact_;
 
-private:
     llm_graph_params graph_params(
                         llm_graph_result * res,
                       const llama_ubatch & ubatch,

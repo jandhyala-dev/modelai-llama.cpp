@@ -1,6 +1,7 @@
 #include "llama-kv-compact-prefill-q.h"
 #include "llama-kv-compact-query.h"
 #include "llama-kv-compact-select.h"
+#include "llama-kv-compact-shared.h"
 #include "llama-kv-cache.h"
 #include "llama-kv-compacted-prefix.h"
 #include "llama-context.h"
@@ -13,64 +14,6 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
-
-// Ablation: skip beta fitting when LLAMA_COMPACT_NO_BETA=1.
-static bool llama_kv_compact_skip_beta_fit() {
-    static const bool skip = [] {
-        const char * env = std::getenv("LLAMA_COMPACT_NO_BETA");
-        return env && env[0] == '1';
-    }();
-    return skip;
-}
-
-// Ablation: skip C_v fitting when LLAMA_COMPACT_NO_CV=1.
-static bool llama_kv_compact_skip_cv_fit() {
-    static const bool skip = [] {
-        const char * env = std::getenv("LLAMA_COMPACT_NO_CV");
-        return env && env[0] == '1';
-    }();
-    return skip;
-}
-
-// Gather selected rows from a source matrix.
-static bool gather_rows(
-        const llama_kv_compact_matrix & src,
-        const std::vector<uint32_t> & row_indices,
-        llama_kv_compact_matrix & dst) {
-    dst.resize((uint32_t) row_indices.size(), src.cols);
-    for (size_t i = 0; i < row_indices.size(); ++i) {
-        const uint32_t r = row_indices[i];
-        if (r >= src.rows) {
-            return false;
-        }
-        std::memcpy(dst.row((uint32_t) i), src.row(r), (size_t) src.cols * sizeof(float));
-    }
-    return true;
-}
-
-// Write solver output into quantized payload.
-static void write_payload(
-        std::vector<uint8_t> & dst,
-        ggml_type type,
-        uint32_t n_head_kv,
-        uint32_t n_tokens,
-        uint32_t head,
-        uint32_t dim,
-        const llama_kv_compact_matrix & rows) {
-    GGML_ASSERT(rows.rows == n_tokens);
-    GGML_ASSERT(rows.cols == dim);
-
-    auto from_float = ggml_get_type_traits(type)->from_float_ref;
-    GGML_ASSERT(from_float != nullptr);
-
-    const size_t token_bytes = ggml_row_size(type, dim);
-    for (uint32_t token = 0; token < n_tokens; ++token) {
-        void * dst_ptr = dst.data() + (size_t(head) * n_tokens + token) * token_bytes;
-        from_float(rows.row(token), dst_ptr, dim);
-    }
-
-    (void) n_head_kv;
-}
 
 // Mean L2 row norm for Q/K scale normalization.
 static float row_norm_mean(const llama_kv_compact_matrix & m) {
@@ -322,7 +265,7 @@ bool llama_kv_compact_prefill_q_with_captured_state(
             full_v.data = std::move(full_v_data);
 
             llama_kv_compact_matrix compacted_k;
-            if (!gather_rows(entry.k, selected_local, compacted_k)) {
+            if (!gather_matrix_rows(entry.k, selected_local, compacted_k)) {
                 return false;
             }
 
@@ -360,16 +303,16 @@ bool llama_kv_compact_prefill_q_with_captured_state(
                         LLAMA_LOG_WARN("prefill-Q: V fitting failed for layout %zu head %u — using original V\n",
                                        li, head);
                     }
-                    if (!gather_rows(full_v, selected_local, compacted_v)) {
+                    if (!gather_matrix_rows(full_v, selected_local, compacted_v)) {
                         return false;
                     }
                 }
-                write_payload(dst_layer.v_data, layout.type_v,
+                write_compacted_payload(dst_layer.v_data, layout.type_v,
                               layout.n_head_kv, n_selected, head,
                               layout.n_embd_head_v, compacted_v);
             }
 
-            write_payload(dst_layer.k_data, layout.type_k,
+            write_compacted_payload(dst_layer.k_data, layout.type_k,
                           layout.n_head_kv, n_selected, head,
                           layout.n_embd_head_k, compacted_k);
             for (uint32_t token = 0; token < n_selected; ++token) {
@@ -526,7 +469,7 @@ bool llama_kv_compact_refit_single_layer(
 
         // Gather compacted K rows.
         llama_kv_compact_matrix compacted_k;
-        if (!gather_rows(full_k, selected_local_indices, compacted_k)) {
+        if (!gather_matrix_rows(full_k, selected_local_indices, compacted_k)) {
             return false;
         }
 
@@ -554,13 +497,13 @@ bool llama_kv_compact_refit_single_layer(
                                               compacted_v)) {
                 return false;
             }
-            write_payload(dst_layer.v_data, layout.type_v,
+            write_compacted_payload(dst_layer.v_data, layout.type_v,
                           layout.n_head_kv, n_selected, head,
                           layout.n_embd_head_v, compacted_v);
         }
 
         // Write K and beta.
-        write_payload(dst_layer.k_data, layout.type_k,
+        write_compacted_payload(dst_layer.k_data, layout.type_k,
                       layout.n_head_kv, n_selected, head,
                       layout.n_embd_head_k, compacted_k);
         for (uint32_t token = 0; token < n_selected; ++token) {

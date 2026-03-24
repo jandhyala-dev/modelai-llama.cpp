@@ -21,6 +21,8 @@ struct llama_kv_compact_self_study_config {
 
     // Multi-round diversity (V2 — GAP-03)
     uint32_t n_rounds                = 3;      // generation rounds with different temperatures
+    // Per-round sampling temperatures. Only the first n_rounds entries are used.
+    // Rounds beyond the initializer list (i.e. rounds 4-8) default to 0.0f (greedy/argmax).
     float    temperatures[LLAMA_KV_COMPACT_MAX_ROUNDS] = {0.6f, 0.8f, 1.0f};  // per-round sampling temperature
 
     // Memory budget for Q-capture (V2 — M-01 fix).

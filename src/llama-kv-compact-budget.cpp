@@ -12,7 +12,9 @@
 #include <numeric>
 #include <set>
 
-using llama_kv_compact_math::dot_row;
+static inline auto dot_row(const float * a, const float * b, uint32_t n) {
+    return llama_kv_compact_dot_row(a, b, n);
+}
 
 float llama_kv_compact_head_entropy(
         const llama_kv_compact_matrix & queries,
