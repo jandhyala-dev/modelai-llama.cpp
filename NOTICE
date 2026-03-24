@@ -1,0 +1,9 @@
+modelai-llama.cpp
+Copyright (c) 2026 COT Labs
+
+KV cache compaction implementation based on:
+"Fast KV Compaction via Attention Matching"
+Zweiger et al., arXiv:2602.16284, MIT Han Lab
+
+This project is a fork of llama.cpp (https://github.com/ggml-org/llama.cpp)
+and is licensed under the MIT License. See LICENSE for details.
