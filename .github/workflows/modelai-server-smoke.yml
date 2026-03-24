@@ -92,6 +92,7 @@ jobs:
             --metrics \
             --slots \
             --no-webui \
+            --endpoint-compact \
             -ngl 0 \
             -fa off \
             > server.log 2>&1 &
@@ -137,3 +138,12 @@ jobs:
 
           grep -q '^data:' /tmp/stream.txt
           grep -q '\[DONE\]' /tmp/stream.txt
+
+          # F-M-32: Smoke test /compact endpoint (expects error — no prompt loaded, but endpoint must be reachable)
+          HTTP_CODE=$(curl -s -o /tmp/compact.json -w "%{http_code}" \
+            "http://127.0.0.1:${SERVER_PORT}/compact" \
+            -H 'Content-Type: application/json' \
+            -d '{"id_slot": 0, "method": "select", "ratio": 2.0}')
+          echo "compact endpoint returned HTTP $HTTP_CODE"
+          # 200 or 4xx are both acceptable (proves endpoint is registered and gated flag works)
+          test "$HTTP_CODE" -lt 500

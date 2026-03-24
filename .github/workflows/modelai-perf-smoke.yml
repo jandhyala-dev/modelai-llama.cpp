@@ -2,6 +2,18 @@ name: ModelAI Perf Smoke
 
 on:
   workflow_dispatch:
+  pull_request:
+    branches:
+      - modelai-main
+    paths:
+      - '.github/workflows/modelai-perf-smoke.yml'
+      - 'src/**'
+      - 'ggml/**'
+      - 'common/**'
+      - 'include/**'
+      - 'tools/llama-bench/**'
+      - 'tools/perplexity/**'
+      - '**/CMakeLists.txt'
   push:
     branches:
       - modelai-main
