@@ -84,12 +84,12 @@ jobs:
 
       - name: Run llama-bench smoke
         run: |
-          ./build/bin/llama-bench -m "$MODEL_FILE" -ngl 0 > llama-bench.txt
+          ./build/bin/llama-bench -m "$MODEL_FILE" -ngl 0 > llama-bench.txt 2>&1
           test -s llama-bench.txt
 
       - name: Run llama-perplexity smoke
         run: |
-          ./build/bin/llama-perplexity -m "$MODEL_FILE" -f perf-smoke.txt -ngl 0 -c 128 -b 64 --chunks 1 > llama-perplexity.txt
+          ./build/bin/llama-perplexity -m "$MODEL_FILE" -f perf-smoke.txt -ngl 0 -c 128 -b 64 --chunks 1 > llama-perplexity.txt 2>&1
           grep -q 'Final estimate' llama-perplexity.txt
 
       - name: Upload perf smoke artifacts
