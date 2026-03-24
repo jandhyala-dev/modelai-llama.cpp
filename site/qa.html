@@ -3,18 +3,19 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>QA Transparency — modelai-llama.cpp</title>
-  <meta name="description" content="QA process for modelai-llama.cpp: 13-section adversarial review, 8 test tiers, 7 CI workflows, weekly upstream sync with review gate.">
-  <meta property="og:title" content="QA Transparency — modelai-llama.cpp">
-  <meta property="og:description" content="13-section adversarial review protocol, 8 test tiers, 7 CI workflows, weekly upstream sync.">
+  <title>QA — modelai-llama.cpp</title>
+  <meta name="description" content="Quality assurance for modelai-llama.cpp: 13-section adversarial review, 8 test tiers, 7 CI workflows, weekly upstream sync with review gate.">
+  <meta property="og:title" content="QA — modelai-llama.cpp">
+  <meta property="og:description" content="How we test: 13-section adversarial review, 8 test tiers, 7 CI workflows, weekly upstream sync.">
   <meta property="og:url" content="https://www.model-ai.org/qa.html">
   <meta property="og:type" content="website">
+  <meta name="twitter:card" content="summary">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%230d1117'/><text x='50' y='68' font-size='55' text-anchor='middle' fill='%2358a6ff' font-family='system-ui' font-weight='700'>M</text></svg>">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
   <nav>
-    <span class="logo">modelai-llama.cpp</span>
+    <a href="index.html" class="logo">modelai-llama.cpp</a>
     <button class="nav-toggle" aria-label="Toggle navigation">&#9776;</button>
     <div class="links">
       <a href="index.html">Home</a>
@@ -27,91 +28,118 @@
   </nav>
 
   <div class="container">
-    <h1>QA Transparency</h1>
-    <p>Every merge to modelai-main is gated by adversarial review, CI tests, and benchmark verification. This page documents the process.</p>
+    <h1>Quality Assurance</h1>
+    <p>Every merge to <code>modelai-main</code> is gated by adversarial review, automated CI, and benchmark verification. This page documents the full process.</p>
 
-    <h2>Adversarial Review Protocol</h2>
-    <p>Every implementation slice goes through a 13-section hostile review before merge. The reviewer's job is to <strong>try to break the code</strong>, not confirm it looks reasonable.</p>
+    <!-- ====== REVIEW ====== -->
+    <h2>Adversarial review protocol</h2>
+    <p>Every implementation slice goes through a 13-section hostile review before merge. The reviewer's job is to <strong style="color:var(--text)">try to break the code</strong> &mdash; not confirm it looks reasonable. This protocol has caught all 18 Critical/Major bugs in the fork's history.</p>
 
-    <h3>Mandatory Review Sections</h3>
+    <div class="table-wrap">
     <table>
       <thead>
-        <tr><th>#</th><th>Section</th><th>What It Checks</th></tr>
+        <tr>
+          <th style="text-align:center">#</th>
+          <th style="text-align:left">Section</th>
+          <th style="text-align:left">What it checks</th>
+        </tr>
       </thead>
       <tbody>
-        <tr><td>0</td><td>Scope Gate</td><td>Changes stay within declared scope</td></tr>
-        <tr><td>1</td><td>Spec Match</td><td>Code matches plan exactly (no contract drift)</td></tr>
-        <tr><td>2</td><td>Contract Boundary</td><td>Caller/callee assumptions match</td></tr>
-        <tr><td>3</td><td>Concrete Traces</td><td>6 mandatory traces with real values</td></tr>
-        <tr><td>4</td><td>Multi-Variant Model</td><td>Tested across architecture variants</td></tr>
-        <tr><td>5</td><td>State Machine</td><td>Before/after/failure/rollback states traced</td></tr>
-        <tr><td>6</td><td>Precondition Audit</td><td>Every assumption enforced or documented</td></tr>
-        <tr><td>7</td><td>Test Reality Check</td><td>Tests actually prove correctness (not just exist)</td></tr>
-        <tr><td>8</td><td>Disprove-It Pass</td><td>Systematic attempt to find the one bug</td></tr>
-        <tr><td>9</td><td>Skepticism Hierarchy</td><td>Most skeptical of indexing, layouts, integer division</td></tr>
-        <tr><td>10</td><td>Dependency Check</td><td>License, CVE, version pinning</td></tr>
-        <tr><td>11</td><td>Performance Check</td><td>No regression on hot paths</td></tr>
-        <tr><td>12</td><td>Cross-Repo Contract</td><td>API contracts match across repositories</td></tr>
+        <tr><td style="text-align:center">0</td><td style="text-align:left">Scope gate</td><td style="text-align:left">Changes stay within declared scope</td></tr>
+        <tr><td style="text-align:center">1</td><td style="text-align:left">Spec match</td><td style="text-align:left">Code matches plan exactly &mdash; no contract drift</td></tr>
+        <tr><td style="text-align:center">2</td><td style="text-align:left">Contract boundary</td><td style="text-align:left">Caller/callee assumptions match at every interface</td></tr>
+        <tr><td style="text-align:center">3</td><td style="text-align:left">Concrete traces</td><td style="text-align:left">6 mandatory traces with real values (see below)</td></tr>
+        <tr><td style="text-align:center">4</td><td style="text-align:left">Multi-variant model</td><td style="text-align:left">Tested across architecture variants (GQA, iSWA, hybrid)</td></tr>
+        <tr><td style="text-align:center">5</td><td style="text-align:left">State machine</td><td style="text-align:left">Before / after / failure / rollback states traced</td></tr>
+        <tr><td style="text-align:center">6</td><td style="text-align:left">Precondition audit</td><td style="text-align:left">Every assumption enforced or documented</td></tr>
+        <tr><td style="text-align:center">7</td><td style="text-align:left">Test reality check</td><td style="text-align:left">Tests actually prove correctness (not just exist)</td></tr>
+        <tr><td style="text-align:center">8</td><td style="text-align:left">Disprove-it pass</td><td style="text-align:left">Assume one bug exists &mdash; systematically find it</td></tr>
+        <tr><td style="text-align:center">9</td><td style="text-align:left">Skepticism hierarchy</td><td style="text-align:left">Most skeptical of: indexing, layouts, integer division</td></tr>
+        <tr><td style="text-align:center">10</td><td style="text-align:left">Dependency check</td><td style="text-align:left">License, CVE, version pinning</td></tr>
+        <tr><td style="text-align:center">11</td><td style="text-align:left">Performance check</td><td style="text-align:left">No regression on hot paths</td></tr>
+        <tr><td style="text-align:center">12</td><td style="text-align:left">Cross-repo contract</td><td style="text-align:left">API contracts match across repositories</td></tr>
       </tbody>
     </table>
+    </div>
 
-    <h3>Trace Types (Section 3)</h3>
+    <h3>6 mandatory trace types</h3>
+    <p>Section 3 requires six concrete traces with real numbers &mdash; not pseudocode or handwaving:</p>
+    <div class="table-wrap">
     <table>
       <thead>
-        <tr><th>Trace</th><th>Purpose</th></tr>
+        <tr>
+          <th style="text-align:left">Trace</th>
+          <th style="text-align:left">Purpose</th>
+        </tr>
       </thead>
       <tbody>
-        <tr><td>Production</td><td>Dominant real-world case with real numbers</td></tr>
-        <tr><td>Boundary</td><td>Smallest/closest-to-threshold valid input</td></tr>
-        <tr><td>Adversarial</td><td>Hostile input designed to break the code</td></tr>
-        <tr><td>Integer Arithmetic</td><td>Every division/modulo/stride with substituted values</td></tr>
-        <tr><td>Security</td><td>Injection, SSRF, auth bypass, secrets exposure</td></tr>
-        <tr><td>Concurrency</td><td>Race conditions, deadlocks, orphaned work</td></tr>
+        <tr><td style="text-align:left">Production</td><td style="text-align:left">Dominant real-world case with real numbers end-to-end</td></tr>
+        <tr><td style="text-align:left">Boundary</td><td style="text-align:left">Smallest / closest-to-threshold valid input</td></tr>
+        <tr><td style="text-align:left">Adversarial</td><td style="text-align:left">Hostile input specifically designed to break the code</td></tr>
+        <tr><td style="text-align:left">Integer arithmetic</td><td style="text-align:left">Every division, modulo, stride checked with substituted values</td></tr>
+        <tr><td style="text-align:left">Security</td><td style="text-align:left">Injection, SSRF, auth bypass, secrets exposure</td></tr>
+        <tr><td style="text-align:left">Concurrency</td><td style="text-align:left">Race conditions, deadlocks, orphaned work</td></tr>
       </tbody>
     </table>
+    </div>
 
-    <h2>8 Engine Test Tiers</h2>
+    <!-- ====== TEST TIERS ====== -->
+    <h2>8 test tiers</h2>
+    <p>Testing spans from fast unit tests to live performance dashboards:</p>
+    <div class="table-wrap">
     <table>
       <thead>
-        <tr><th>Tier</th><th>Name</th><th>What It Tests</th></tr>
+        <tr>
+          <th style="text-align:center">Tier</th>
+          <th style="text-align:left">Name</th>
+          <th style="text-align:left">What it tests</th>
+        </tr>
       </thead>
       <tbody>
-        <tr><td>1</td><td>Server Pytests</td><td>22 existing server unit tests, CI-gated</td></tr>
-        <tr><td>2</td><td>API Snapshots</td><td>Response schema validation against frozen snapshots</td></tr>
-        <tr><td>3</td><td>Perf Regression</td><td>Speed, RSS, compaction latency vs baseline</td></tr>
-        <tr><td>4</td><td>Quality Gate</td><td>Cosine floor, KV survival, state round-trip</td></tr>
-        <tr><td>5</td><td>Windows CI</td><td>MSVC x64 build + full test suite</td></tr>
-        <tr><td>6</td><td>Stress Tests</td><td>KV exhaustion, multi-slot concurrent compaction</td></tr>
-        <tr><td>7</td><td>Contract Tests</td><td>ModelAI-specific endpoints, metrics, schema</td></tr>
-        <tr><td>8</td><td>Live Dashboard</td><td>Automated data pipeline to public benchmark page</td></tr>
+        <tr><td style="text-align:center">1</td><td style="text-align:left">Server pytests</td><td style="text-align:left">13 server unit tests, CI-gated on every push</td></tr>
+        <tr><td style="text-align:center">2</td><td style="text-align:left">API snapshots</td><td style="text-align:left">Response schema validation against frozen JSON snapshots</td></tr>
+        <tr><td style="text-align:center">3</td><td style="text-align:left">Perf regression</td><td style="text-align:left">Decode speed, RSS memory, compaction latency vs baseline</td></tr>
+        <tr><td style="text-align:center">4</td><td style="text-align:left">Quality gate</td><td style="text-align:left">Cosine floor (&ge;0.95), KV survival, state round-trip</td></tr>
+        <tr><td style="text-align:center">5</td><td style="text-align:left">Windows CI</td><td style="text-align:left">MSVC x64 build + full test suite</td></tr>
+        <tr><td style="text-align:center">6</td><td style="text-align:left">Stress tests</td><td style="text-align:left">KV exhaustion, multi-slot concurrent compaction</td></tr>
+        <tr><td style="text-align:center">7</td><td style="text-align:left">Contract tests</td><td style="text-align:left">/props, /metrics, /compact endpoint validation</td></tr>
+        <tr><td style="text-align:center">8</td><td style="text-align:left">Live dashboard</td><td style="text-align:left">Automated data pipeline to benchmark page</td></tr>
       </tbody>
     </table>
+    </div>
 
-    <h2>7 CI Workflows</h2>
+    <!-- ====== CI WORKFLOWS ====== -->
+    <h2>7 CI workflows</h2>
+    <div class="table-wrap">
     <table>
       <thead>
-        <tr><th>Workflow</th><th>Trigger</th><th>Purpose</th></tr>
+        <tr>
+          <th style="text-align:left">Workflow</th>
+          <th style="text-align:left">Trigger</th>
+          <th style="text-align:left">What it does</th>
+        </tr>
       </thead>
       <tbody>
-        <tr><td>modelai-ci</td><td>Push, PR</td><td>Build + 49 main-label tests</td></tr>
-        <tr><td>modelai-server-smoke</td><td>Push, PR</td><td>Server smoke test + pytests</td></tr>
-        <tr><td>modelai-perf-smoke</td><td>Push, PR</td><td>Performance regression detection</td></tr>
-        <tr><td>modelai-ci-windows</td><td>Push, PR</td><td>Windows MSVC build + test</td></tr>
-        <tr><td>modelai-upstream-sync</td><td>Saturday 2PM PDT</td><td>Weekly upstream merge + build + test</td></tr>
-        <tr><td>modelai-dashboard</td><td>After CI success</td><td>Aggregate bench data</td></tr>
-        <tr><td>modelai-auto-label</td><td>Issues, PRs</td><td>Auto-label by path/keyword</td></tr>
+        <tr><td style="text-align:left">modelai-ci</td><td style="text-align:left">Push, PR</td><td style="text-align:left">Build + 49 main-label C++ tests</td></tr>
+        <tr><td style="text-align:left">modelai-server-smoke</td><td style="text-align:left">Push, PR</td><td style="text-align:left">Server smoke test + 13 pytests</td></tr>
+        <tr><td style="text-align:left">modelai-perf-smoke</td><td style="text-align:left">Push, PR</td><td style="text-align:left">Performance regression detection</td></tr>
+        <tr><td style="text-align:left">modelai-ci-windows</td><td style="text-align:left">Push, PR</td><td style="text-align:left">Windows MSVC x64 build + test</td></tr>
+        <tr><td style="text-align:left">modelai-upstream-sync</td><td style="text-align:left">Saturday 2PM PDT</td><td style="text-align:left">Weekly upstream merge + build + test</td></tr>
+        <tr><td style="text-align:left">modelai-dashboard</td><td style="text-align:left">After CI success</td><td style="text-align:left">Aggregate benchmark data to dashboard</td></tr>
+        <tr><td style="text-align:left">modelai-auto-label</td><td style="text-align:left">Issues, PRs</td><td style="text-align:left">Auto-label by file path and keyword</td></tr>
       </tbody>
     </table>
+    </div>
 
-    <h2 id="upstream-review">Weekly Upstream Sync and Review Process</h2>
-    <p>Every Saturday at 2PM PDT, the automated sync workflow runs. The process is designed so that no upstream change reaches <code>modelai-main</code> without passing build + test + human review.</p>
+    <!-- ====== UPSTREAM SYNC ====== -->
+    <h2 id="upstream-review">Upstream sync process</h2>
+    <p>Every Saturday at 2PM PDT, the automated sync workflow fetches the latest upstream <a href="https://github.com/ggml-org/llama.cpp" target="_blank" rel="noopener noreferrer">llama.cpp</a> and merges it through a CI gate. No upstream change reaches <code>modelai-main</code> without passing build + test + human review.</p>
 
-    <h3>Automated Pipeline (Saturday 2PM PDT)</h3>
-    <div class="cards" style="grid-template-columns: repeat(2, 1fr);">
+    <div class="cards cards-2">
       <div class="card">
-        <div class="label">Step 1: Fetch + Merge</div>
+        <div class="label">Step 1: Fetch and merge</div>
         <div class="detail">
-          <ol style="margin-top:0.5rem; padding-left:1.5rem;">
+          <ol style="margin-top:0.5rem; padding-left:1.5rem; color:var(--text-muted);">
             <li>Fetch latest <code>upstream/master</code></li>
             <li>Update <code>upstream-master</code> tracking branch</li>
             <li>Reset <code>upstream-sync</code> to <code>modelai-main</code></li>
@@ -120,35 +148,35 @@
         </div>
       </div>
       <div class="card">
-        <div class="label">Step 2: CI Gate</div>
+        <div class="label">Step 2: CI gate</div>
         <div class="detail">
-          <ol style="margin-top:0.5rem; padding-left:1.5rem;">
-            <li>Full cmake build (Metal, tests, examples)</li>
-            <li>Run all main-label tests (49 tests)</li>
-            <li>Benchmark regression check against baseline</li>
-            <li>On success: merge into <code>modelai-main</code></li>
-            <li>On failure: open GitHub Issue with diagnostics</li>
+          <ol style="margin-top:0.5rem; padding-left:1.5rem; color:var(--text-muted);">
+            <li>Full cmake build (Metal + tests + examples)</li>
+            <li>Run all 49 main-label tests</li>
+            <li>Benchmark regression check vs baseline</li>
+            <li>Pass: merge into <code>modelai-main</code></li>
+            <li>Fail: open GitHub Issue with diagnostics</li>
           </ol>
         </div>
       </div>
     </div>
 
-    <h3>Review Gate</h3>
-    <p>When the upstream delta touches compaction-related files (KV cache, graph construction, attention paths), the merge is held for manual review before integration. The reviewer checks:</p>
-    <ol style="color: var(--text-muted); padding-left: 1.5rem; margin: 1rem 0;">
-      <li><strong style="color: var(--text)">API compatibility</strong> &mdash; Do upstream KV cache API changes break our compacted prefix integration?</li>
-      <li><strong style="color: var(--text)">Graph construction</strong> &mdash; Do attention graph changes require updates to our compacted execution path?</li>
-      <li><strong style="color: var(--text)">Architecture support</strong> &mdash; Do new model architectures need compaction support added?</li>
-      <li><strong style="color: var(--text)">Test coverage</strong> &mdash; Do new upstream tests exercise compacted paths?</li>
-      <li><strong style="color: var(--text)">Security patches</strong> &mdash; CVE fixes are fast-tracked for same-day sync</li>
+    <h3>Manual review gate</h3>
+    <p>When the upstream delta touches compaction-related files (KV cache, graph construction, attention paths), the merge is held for manual review. The reviewer checks:</p>
+    <ol style="color:var(--text-muted); padding-left:1.5rem; margin:1rem 0;">
+      <li><strong style="color:var(--text)">API compatibility</strong> &mdash; Do upstream KV cache changes break compacted prefix integration?</li>
+      <li><strong style="color:var(--text)">Graph construction</strong> &mdash; Do attention graph changes require updates to compacted execution?</li>
+      <li><strong style="color:var(--text)">Architecture support</strong> &mdash; Do new model architectures need compaction support?</li>
+      <li><strong style="color:var(--text)">Test coverage</strong> &mdash; Do new upstream tests exercise compacted paths?</li>
+      <li><strong style="color:var(--text)">Security patches</strong> &mdash; CVE fixes are fast-tracked for same-day sync</li>
     </ol>
-    <p>6 upstream KV cache changes have been audited and verified compatible: <code>#10873</code>, <code>#12695</code>, <code>#13194</code>, <code>#17450</code>, <code>#12253</code>, <code>#11213</code>.</p>
+    <p style="font-size:0.85rem;">6 upstream KV cache changes audited and verified compatible: <code>#10873</code>, <code>#12695</code>, <code>#13194</code>, <code>#17450</code>, <code>#12253</code>, <code>#11213</code>. RPC RCE security patch synced within hours of upstream disclosure.</p>
 
-    <h3>3-Branch Model</h3>
-    <div class="cards" style="grid-template-columns: repeat(3, 1fr);">
+    <h3>3-branch model</h3>
+    <div class="cards cards-3">
       <div class="card">
         <div class="label">modelai-main</div>
-        <div class="detail">Working branch. All development happens here. Protected: requires PR review + 2 status checks.</div>
+        <div class="detail">Working branch. All development and releases. Protected: requires PR review + status checks.</div>
       </div>
       <div class="card">
         <div class="label">upstream-master</div>
@@ -156,32 +184,31 @@
       </div>
       <div class="card">
         <div class="label">upstream-sync</div>
-        <div class="detail">Staging branch. Reset to <code>modelai-main</code>, then merged with upstream. CI-gated before integration.</div>
+        <div class="detail">Staging branch. Reset to <code>modelai-main</code>, merged with upstream, then CI-gated before integration.</div>
       </div>
     </div>
 
-    <h3>Emergency Hotfix Process</h3>
-    <p>Security patches (CVEs, RPC vulnerabilities) bypass the weekly schedule. Same-day sync via manual <code>workflow_dispatch</code>, followed by expedited review and merge. The RPC RCE patch was synced within hours of upstream disclosure.</p>
-
-    <h2>Bug Tracking</h2>
-    <div class="cards">
+    <!-- ====== BUGS ====== -->
+    <h2>Bug tracking</h2>
+    <p>Every bug is documented with root cause analysis, fix commit SHA, and regression test. The adversarial review protocol has caught all 18 Critical/Major bugs.</p>
+    <div class="cards cards-3">
       <div class="card">
-        <div class="label">Total Bugs Fixed</div>
+        <div class="label">Total Fixed</div>
         <div class="value">29</div>
-        <div class="detail">All documented with root cause + commit SHA</div>
+        <div class="detail">All with root cause + commit SHA</div>
       </div>
       <div class="card">
-        <div class="label">Critical/Major</div>
-        <div class="value">18</div>
-        <div class="detail">Every one caught by adversarial review</div>
+        <div class="label">Critical / Major</div>
+        <div class="value" style="color:var(--red)">18</div>
+        <div class="detail">Crashes, data loss, quality collapse</div>
       </div>
       <div class="card">
-        <div class="label">Security Patches</div>
+        <div class="label">Security</div>
         <div class="value">1</div>
-        <div class="detail">RPC RCE — synced same day</div>
+        <div class="detail">RPC RCE &mdash; synced same day</div>
       </div>
     </div>
-    <p>Full bug list: <a href="https://github.com/jandhyala-dev/modelai-llama.cpp/blob/modelai-main/docs/BUGS-AND-FIXES.md" target="_blank" rel="noopener noreferrer">BUGS-AND-FIXES.md</a></p>
+    <p><a href="https://github.com/jandhyala-dev/modelai-llama.cpp/blob/modelai-main/docs/BUGS-AND-FIXES.md" target="_blank" rel="noopener noreferrer">Full bug list with root causes and commit SHAs</a></p>
   </div>
 
   <footer>

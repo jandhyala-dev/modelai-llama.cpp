@@ -4,18 +4,19 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Benchmarks — modelai-llama.cpp</title>
-  <meta name="description" content="Benchmark dashboard for modelai-llama.cpp: decode speed, quality heatmap, fork vs upstream comparison, 256K context extension, CI status.">
+  <meta name="description" content="Benchmark data for modelai-llama.cpp: decode speedup after compaction, quality heatmap, fork vs upstream comparison, 256K context extension results.">
   <meta property="og:title" content="Benchmarks — modelai-llama.cpp">
-  <meta property="og:description" content="Decode speedup, quality heatmap, fork vs upstream comparison. Live CI benchmark data.">
+  <meta property="og:description" content="Decode speedup, quality heatmap, fork vs upstream comparison. Benchmark data from CI.">
   <meta property="og:url" content="https://www.model-ai.org/benchmarks.html">
   <meta property="og:type" content="website">
+  <meta name="twitter:card" content="summary">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%230d1117'/><text x='50' y='68' font-size='55' text-anchor='middle' fill='%2358a6ff' font-family='system-ui' font-weight='700'>M</text></svg>">
   <link rel="stylesheet" href="style.css">
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 </head>
 <body>
   <nav>
-    <span class="logo">modelai-llama.cpp</span>
+    <a href="index.html" class="logo">modelai-llama.cpp</a>
     <button class="nav-toggle" aria-label="Toggle navigation">&#9776;</button>
     <div class="links">
       <a href="index.html">Home</a>
@@ -28,143 +29,269 @@
   </nav>
 
   <div class="container">
-    <h1>Benchmark Dashboard</h1>
-    <p>Live benchmark data from CI. Updated after each successful perf run.</p>
+    <h1>Benchmarks</h1>
+    <p>Performance and quality data from CI runs on Apple M2 Pro (32GB, Metal GPU). All measurements use 128-token generation.</p>
 
-    <div class="cards">
+    <div class="cards cards-4">
       <div class="card">
         <div class="label">Models Tested</div>
         <div class="value">17</div>
-        <div class="detail">15 pass quality gate</div>
+        <div class="detail">15 pass the 0.95 quality gate</div>
       </div>
       <div class="card">
-        <div class="label">CI Tests</div>
-        <div class="value">49</div>
-        <div class="detail">Main-label, all passing</div>
+        <div class="label">Best Quality</div>
+        <div class="value">0.999</div>
+        <div class="detail">Qwen3-30B-A3B at 4K/2x</div>
       </div>
       <div class="card">
-        <div class="label">Engine Test Tiers</div>
-        <div class="value">8</div>
-        <div class="detail">Pytests to live dashboard</div>
+        <div class="label">Best Speedup</div>
+        <div class="value">+63%</div>
+        <div class="detail">Qwen3-8B at 8K/8x</div>
       </div>
       <div class="card">
-        <div class="label">CI Workflows</div>
-        <div class="value">7</div>
-        <div class="detail">Active on every push/PR</div>
+        <div class="label">Max Context</div>
+        <div class="value">256K</div>
+        <div class="detail">From 64K physical, 100% recall</div>
       </div>
     </div>
 
-    <h2>Decode Speed After Compaction</h2>
+    <!-- ====== 50X HEADLINE ====== -->
+    <h2>High-compression benchmark</h2>
+    <p>Iterative on-policy refinement enables extreme compression ratios while maintaining near-perfect quality.</p>
+    <div class="headline-result">
+      <div class="headline-stat">
+        <div class="headline-value">50x</div>
+        <div class="headline-label">compression</div>
+      </div>
+      <div class="headline-detail">
+        <p><strong>Qwen3-30B-A3B</strong> compressed at 50x ratio with <strong>0.9967 cosine similarity</strong> and <strong>10/10 fact recall</strong>. Achieved through iterative on-policy refinement with quality-gated convergence. 256K effective context from 64K physical memory through 49-57 compaction cycles &mdash; 100% recall verified at every checkpoint.</p>
+      </div>
+    </div>
+
+    <!-- ====== DECODE SPEED ====== -->
+    <h2>Decode speed after compaction</h2>
+    <p>Compaction shrinks the KV cache, which means attention runs over fewer tokens. The result is faster decoding &mdash; up to 63% faster at 8x compression.</p>
+    <div class="table-wrap">
     <table>
       <thead>
-        <tr><th>Model</th><th>Context</th><th>Ratio</th><th>Cosine</th><th>Compacted (t/s)</th><th>Baseline (t/s)</th><th>Speedup</th></tr>
+        <tr>
+          <th style="text-align:left">Model</th>
+          <th style="text-align:center">Context</th>
+          <th style="text-align:center">Ratio</th>
+          <th style="text-align:center">Quality</th>
+          <th style="text-align:right">After (t/s)</th>
+          <th style="text-align:right">Before (t/s)</th>
+          <th style="text-align:right">Speedup</th>
+        </tr>
       </thead>
       <tbody>
-        <tr><td>Qwen3-8B</td><td>8K</td><td>8x</td><td>0.997</td><td>9.3</td><td>5.7</td><td style="color:var(--green)">+63%</td></tr>
-        <tr><td>Qwen3-30B-A3B</td><td>4K</td><td>8x</td><td>0.999</td><td>20.2</td><td>13.5</td><td style="color:var(--green)">+50%</td></tr>
-        <tr><td>Qwen3-8B</td><td>4K</td><td>8x</td><td>0.997</td><td>13.8</td><td>10.7</td><td style="color:var(--green)">+29%</td></tr>
-        <tr><td>Qwen3-8B</td><td>16K</td><td>8x</td><td>0.999</td><td>5.3</td><td>4.8</td><td style="color:var(--green)">+10%</td></tr>
+        <tr>
+          <td style="text-align:left">Qwen3-8B</td>
+          <td style="text-align:center">8K</td>
+          <td style="text-align:center">8x</td>
+          <td style="text-align:center">0.997</td>
+          <td style="text-align:right">9.3</td>
+          <td style="text-align:right">5.7</td>
+          <td style="text-align:right;color:var(--green)">+63%</td>
+        </tr>
+        <tr>
+          <td style="text-align:left">Qwen3-30B-A3B</td>
+          <td style="text-align:center">4K</td>
+          <td style="text-align:center">8x</td>
+          <td style="text-align:center">0.999</td>
+          <td style="text-align:right">20.2</td>
+          <td style="text-align:right">13.5</td>
+          <td style="text-align:right;color:var(--green)">+50%</td>
+        </tr>
+        <tr>
+          <td style="text-align:left">Qwen3-8B</td>
+          <td style="text-align:center">4K</td>
+          <td style="text-align:center">8x</td>
+          <td style="text-align:center">0.997</td>
+          <td style="text-align:right">13.8</td>
+          <td style="text-align:right">10.7</td>
+          <td style="text-align:right;color:var(--green)">+29%</td>
+        </tr>
+        <tr>
+          <td style="text-align:left">Qwen3-8B</td>
+          <td style="text-align:center">16K</td>
+          <td style="text-align:center">8x</td>
+          <td style="text-align:center">0.999</td>
+          <td style="text-align:right">5.3</td>
+          <td style="text-align:right">4.8</td>
+          <td style="text-align:right;color:var(--green)">+10%</td>
+        </tr>
       </tbody>
     </table>
+    </div>
 
-    <h2>Compaction Quality Heatmap</h2>
-    <p>Logit cosine similarity (select pipeline). Higher is better. Green >= 0.99, yellow >= 0.95.</p>
+    <!-- ====== QUALITY HEATMAP ====== -->
+    <h2>Quality heatmap</h2>
+    <p>Logit cosine similarity across context sizes and compression ratios. The <code>select</code> pipeline (production default) maintains 0.99+ quality at most configurations. <span style="color:var(--green)">Green</span> = 0.99+, <span style="color:var(--yellow)">yellow</span> = 0.95+.</p>
+    <div class="table-wrap">
     <table>
       <thead>
-        <tr><th>Model</th><th>4K/2x</th><th>4K/4x</th><th>4K/8x</th><th>8K/2x</th><th>8K/4x</th><th>8K/8x</th></tr>
+        <tr>
+          <th style="text-align:left">Model</th>
+          <th style="text-align:center">4K / 2x</th>
+          <th style="text-align:center">4K / 4x</th>
+          <th style="text-align:center">4K / 8x</th>
+          <th style="text-align:center">8K / 2x</th>
+          <th style="text-align:center">8K / 4x</th>
+          <th style="text-align:center">8K / 8x</th>
+        </tr>
       </thead>
-      <tbody id="quality-table">
+      <tbody>
         <tr>
-          <td>Qwen3-8B</td>
-          <td style="color:var(--green)">0.999</td>
-          <td style="color:var(--green)">0.999</td>
-          <td style="color:var(--green)">0.997</td>
-          <td style="color:var(--green)">0.999</td>
-          <td style="color:var(--green)">0.998</td>
-          <td style="color:var(--green)">0.997</td>
+          <td style="text-align:left">Qwen3-8B</td>
+          <td style="text-align:center;color:var(--green)">0.999</td>
+          <td style="text-align:center;color:var(--green)">0.999</td>
+          <td style="text-align:center;color:var(--green)">0.997</td>
+          <td style="text-align:center;color:var(--green)">0.999</td>
+          <td style="text-align:center;color:var(--green)">0.998</td>
+          <td style="text-align:center;color:var(--green)">0.997</td>
         </tr>
         <tr>
-          <td>Qwen3-30B-A3B</td>
-          <td style="color:var(--green)">0.999</td>
-          <td style="color:var(--green)">0.999</td>
-          <td style="color:var(--green)">0.999</td>
-          <td>-</td><td>-</td><td>-</td>
+          <td style="text-align:left">Qwen3-30B-A3B</td>
+          <td style="text-align:center;color:var(--green)">0.999</td>
+          <td style="text-align:center;color:var(--green)">0.999</td>
+          <td style="text-align:center;color:var(--green)">0.999</td>
+          <td style="text-align:center;color:var(--text-muted)">&mdash;</td>
+          <td style="text-align:center;color:var(--text-muted)">&mdash;</td>
+          <td style="text-align:center;color:var(--text-muted)">&mdash;</td>
         </tr>
         <tr>
-          <td>Qwen3-14B</td>
-          <td style="color:var(--green)">0.995</td>
-          <td style="color:var(--green)">0.996</td>
-          <td style="color:var(--green)">0.992</td>
-          <td style="color:var(--green)">0.999</td>
-          <td style="color:var(--green)">0.997</td>
-          <td style="color:var(--yellow)">0.973</td>
+          <td style="text-align:left">Qwen3-14B</td>
+          <td style="text-align:center;color:var(--green)">0.995</td>
+          <td style="text-align:center;color:var(--green)">0.996</td>
+          <td style="text-align:center;color:var(--green)">0.992</td>
+          <td style="text-align:center;color:var(--green)">0.999</td>
+          <td style="text-align:center;color:var(--green)">0.997</td>
+          <td style="text-align:center;color:var(--yellow)">0.973</td>
         </tr>
         <tr>
-          <td>DeepSeek-R1-14B</td>
-          <td style="color:var(--green)">0.999</td>
-          <td style="color:var(--green)">0.998</td>
-          <td style="color:var(--green)">0.993</td>
-          <td>-</td><td>-</td><td>-</td>
+          <td style="text-align:left">DeepSeek-R1-14B</td>
+          <td style="text-align:center;color:var(--green)">0.999</td>
+          <td style="text-align:center;color:var(--green)">0.998</td>
+          <td style="text-align:center;color:var(--green)">0.993</td>
+          <td style="text-align:center;color:var(--text-muted)">&mdash;</td>
+          <td style="text-align:center;color:var(--text-muted)">&mdash;</td>
+          <td style="text-align:center;color:var(--text-muted)">&mdash;</td>
         </tr>
       </tbody>
     </table>
+    </div>
 
-    <h2>Fork vs Upstream vs Ollama (Baseline)</h2>
-    <p>No compaction — pure decode speed comparison. Zero regression from compaction code.</p>
+    <!-- ====== BASELINE ====== -->
+    <h2>Fork vs upstream vs Ollama (no compaction)</h2>
+    <p>When compaction is not active, the fork matches upstream llama.cpp within measurement noise. No performance regression from having compaction code in the binary. The MoE model (Qwen3-30B-A3B) runs 13% faster than Ollama at baseline.</p>
     <div class="chart-container">
       <canvas id="baseline-chart" height="200"></canvas>
     </div>
-
-    <h2>256K Iterative Context Extension</h2>
-    <p>64K physical KV cache, 49-57 compaction cycles, 256K effective tokens.</p>
-    <div class="card" style="text-align:center; padding:2rem;">
-      <div class="value" style="color:var(--green)">100%</div>
-      <div class="detail">10-fact recall at every checkpoint through 256K tokens</div>
-    </div>
-
-    <h2>Platform Build Status</h2>
+    <div class="table-wrap">
     <table>
       <thead>
-        <tr><th>Platform</th><th>CI Workflow</th><th>Status</th></tr>
+        <tr>
+          <th style="text-align:left">Model</th>
+          <th style="text-align:right">modelai (t/s)</th>
+          <th style="text-align:right">upstream (t/s)</th>
+          <th style="text-align:right">Ollama (t/s)</th>
+          <th style="text-align:right">Delta</th>
+        </tr>
       </thead>
       <tbody>
-        <tr><td>macOS (Apple Silicon)</td><td>modelai-ci</td><td><span class="badge badge-green">Active</span></td></tr>
-        <tr><td>macOS (Server smoke)</td><td>modelai-server-smoke</td><td><span class="badge badge-green">Active</span></td></tr>
-        <tr><td>Windows (MSVC x64)</td><td>modelai-ci-windows</td><td><span class="badge badge-green">Build-only</span></td></tr>
-        <tr><td>Perf regression</td><td>modelai-perf-smoke</td><td><span class="badge badge-green">Active</span></td></tr>
-        <tr><td>Upstream sync</td><td>modelai-upstream-sync</td><td><span class="badge badge-blue">Weekly</span></td></tr>
+        <tr>
+          <td style="text-align:left">Qwen3-8B</td>
+          <td style="text-align:right">30.4</td>
+          <td style="text-align:right">30.1</td>
+          <td style="text-align:right">29.2</td>
+          <td style="text-align:right;color:var(--green)">+1%</td>
+        </tr>
+        <tr>
+          <td style="text-align:left">Qwen3-14B</td>
+          <td style="text-align:right">17.1</td>
+          <td style="text-align:right">17.4</td>
+          <td style="text-align:right">16.7</td>
+          <td style="text-align:right;color:var(--text-muted)">&minus;2%</td>
+        </tr>
+        <tr>
+          <td style="text-align:left">Qwen3-30B-A3B</td>
+          <td style="text-align:right">52.8</td>
+          <td style="text-align:right">51.8</td>
+          <td style="text-align:right">46.7</td>
+          <td style="text-align:right;color:var(--green)">+2%</td>
+        </tr>
       </tbody>
     </table>
+    </div>
+    <p style="font-size:0.85rem;">Hardware: Apple M2 Pro, 32GB unified memory, Metal GPU, 128-token generation.</p>
 
-    <h2>Upstream Sync Health</h2>
-    <div class="cards" style="grid-template-columns: repeat(3, 1fr);">
-      <div class="card">
-        <div class="label">Sync Schedule</div>
-        <div class="value" style="font-size:1.2rem">Saturday 2PM PDT</div>
-        <div class="detail">Automated CI-gated merge</div>
-      </div>
-      <div class="card">
-        <div class="label">Branches</div>
-        <div class="value" style="font-size:1.2rem">3</div>
-        <div class="detail">modelai-main, upstream-master, upstream-sync</div>
-      </div>
-      <div class="card">
-        <div class="label">Security Patches</div>
-        <div class="value" style="font-size:1.2rem">Same-day</div>
-        <div class="detail">Emergency sync for CVEs</div>
-      </div>
+    <!-- ====== 256K CONTEXT ====== -->
+    <h2>256K iterative context extension</h2>
+    <p>Starting from a 64K physical KV cache, iterative compaction at 4x ratio extends effective context to 256K tokens through 49-57 compaction cycles. At every checkpoint, a 10-fact recall test verifies that no information is lost.</p>
+    <div class="card" style="text-align:center; padding:2rem; max-width:400px; margin:1.5rem auto;">
+      <div class="value" style="color:var(--green);font-size:2.5rem;">100%</div>
+      <div class="label" style="margin-top:0.5rem;">10-Fact Recall</div>
+      <div class="detail">At every checkpoint through 256K tokens</div>
+    </div>
+
+    <!-- ====== CI STATUS ====== -->
+    <h2>CI and build status</h2>
+    <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th style="text-align:left">Platform</th>
+          <th style="text-align:left">Workflow</th>
+          <th style="text-align:left">Trigger</th>
+          <th style="text-align:center">Status</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td style="text-align:left">macOS (Apple Silicon)</td>
+          <td style="text-align:left">modelai-ci</td>
+          <td style="text-align:left">Push, PR</td>
+          <td style="text-align:center"><span class="badge badge-green">Active</span></td>
+        </tr>
+        <tr>
+          <td style="text-align:left">macOS (Server)</td>
+          <td style="text-align:left">modelai-server-smoke</td>
+          <td style="text-align:left">Push, PR</td>
+          <td style="text-align:center"><span class="badge badge-green">Active</span></td>
+        </tr>
+        <tr>
+          <td style="text-align:left">macOS (Performance)</td>
+          <td style="text-align:left">modelai-perf-smoke</td>
+          <td style="text-align:left">Push, PR</td>
+          <td style="text-align:center"><span class="badge badge-green">Active</span></td>
+        </tr>
+        <tr>
+          <td style="text-align:left">Windows (MSVC x64)</td>
+          <td style="text-align:left">modelai-ci-windows</td>
+          <td style="text-align:left">Push, PR</td>
+          <td style="text-align:center"><span class="badge badge-green">Active</span></td>
+        </tr>
+        <tr>
+          <td style="text-align:left">Upstream sync</td>
+          <td style="text-align:left">modelai-upstream-sync</td>
+          <td style="text-align:left">Saturday 2PM PDT</td>
+          <td style="text-align:center"><span class="badge badge-blue">Weekly</span></td>
+        </tr>
+      </tbody>
+    </table>
     </div>
   </div>
 
   <footer>
-    <p>Data from <a href="https://github.com/jandhyala-dev/modelai-llama.cpp/tree/modelai-main/bench-results" target="_blank" rel="noopener noreferrer">bench-results/</a>. Updated after each CI run.</p>
+    <p>Data from CI runs on Apple M2 Pro. <a href="https://github.com/jandhyala-dev/modelai-llama.cpp" target="_blank" rel="noopener noreferrer">View on GitHub</a></p>
   </footer>
+
   <script>
     document.querySelector('.nav-toggle').addEventListener('click', function() {
       document.querySelector('nav .links').classList.toggle('open');
     });
   </script>
-
   <script>
     const ctx = document.getElementById('baseline-chart').getContext('2d');
     new Chart(ctx, {
@@ -174,7 +301,7 @@
         datasets: [
           { label: 'modelai (t/s)', data: [30.4, 17.1, 52.8], backgroundColor: 'rgba(88, 166, 255, 0.7)' },
           { label: 'upstream (t/s)', data: [30.1, 17.4, 51.8], backgroundColor: 'rgba(139, 148, 158, 0.7)' },
-          { label: 'ollama (t/s)', data: [29.2, 16.7, 46.7], backgroundColor: 'rgba(210, 153, 34, 0.5)' }
+          { label: 'Ollama (t/s)', data: [29.2, 16.7, 46.7], backgroundColor: 'rgba(210, 153, 34, 0.5)' }
         ]
       },
       options: {
@@ -182,7 +309,7 @@
         plugins: { legend: { labels: { color: '#8b949e' } } },
         scales: {
           x: { ticks: { color: '#8b949e' }, grid: { color: '#30363d' } },
-          y: { ticks: { color: '#8b949e' }, grid: { color: '#30363d' }, title: { display: true, text: 'Tokens/sec', color: '#8b949e' } }
+          y: { ticks: { color: '#8b949e' }, grid: { color: '#30363d' }, title: { display: true, text: 'Tokens / sec', color: '#8b949e' } }
         }
       }
     });

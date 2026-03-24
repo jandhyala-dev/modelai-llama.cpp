@@ -4,17 +4,18 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Paper — modelai-llama.cpp</title>
-  <meta name="description" content="Implementation of Fast KV Compaction via Attention Matching (arXiv:2602.16284). Pure C++ solver with NEON SIMD, Metal GPU, 7 pipelines, 5 architectures.">
+  <meta name="description" content="Production C++ implementation of Fast KV Compaction via Attention Matching (arXiv:2602.16284). How the algorithm works, what we extended, and what we fixed.">
   <meta property="og:title" content="Paper — modelai-llama.cpp">
   <meta property="og:description" content="Production C++ implementation of Fast KV Compaction via Attention Matching (arXiv:2602.16284).">
   <meta property="og:url" content="https://www.model-ai.org/paper.html">
   <meta property="og:type" content="website">
+  <meta name="twitter:card" content="summary">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%230d1117'/><text x='50' y='68' font-size='55' text-anchor='middle' fill='%2358a6ff' font-family='system-ui' font-weight='700'>M</text></svg>">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
   <nav>
-    <span class="logo">modelai-llama.cpp</span>
+    <a href="index.html" class="logo">modelai-llama.cpp</a>
     <button class="nav-toggle" aria-label="Toggle navigation">&#9776;</button>
     <div class="links">
       <a href="index.html">Home</a>
@@ -27,79 +28,172 @@
   </nav>
 
   <div class="container">
-    <h1>Fast KV Compaction via Attention Matching</h1>
-    <p>This fork implements the algorithm from <a href="https://arxiv.org/abs/2602.16284" target="_blank" rel="noopener noreferrer">arXiv:2602.16284</a> by Zweiger et al. (MIT Han Lab, 2026).</p>
+    <h1>The Paper</h1>
+    <p>This fork implements <a href="https://arxiv.org/abs/2602.16284" target="_blank" rel="noopener noreferrer">"Fast KV Compaction via Attention Matching"</a> by Zweiger et al. (MIT Han Lab, 2026). Here's what the paper proposes, what we implemented, and where we went further.</p>
 
-    <h2>Paper Summary</h2>
-    <p>KV cache compaction replaces traditional context eviction (truncation, sliding window) with a learned compression. Given a full KV cache of N tokens, compaction produces a smaller cache of M tokens (M &lt;&lt; N) such that the model's attention behavior is preserved.</p>
+    <!-- ====== CORE IDEA ====== -->
+    <h2>The core idea</h2>
+    <p>Traditional methods for managing KV cache size &mdash; truncation, eviction, sliding window &mdash; all work by <strong style="color:var(--text)">removing tokens</strong>. The information in those tokens is permanently lost.</p>
+    <p>Attention Matching takes a different approach: given a full KV cache of N tokens, find a <strong style="color:var(--text)">smaller set of M synthetic tokens</strong> (M &lt;&lt; N) such that the model's attention computation produces the same result. The compacted cache isn't a subset of the original &mdash; it's a new, mathematically optimized representation.</p>
+    <p>The key insight: what matters isn't the individual key-value pairs, but the <strong style="color:var(--text)">attention-weighted output</strong> they produce. If a smaller set of KV pairs produces the same weighted output, the model behaves identically.</p>
 
-    <h3>Key Insight</h3>
-    <p>Instead of selecting which tokens to keep and which to discard, Attention Matching finds a small set of <em>synthetic</em> key-value pairs that reproduce the original attention distribution. The compacted cache is not a subset of the original — it is a new, learned representation.</p>
+    <!-- ====== ALGORITHM ====== -->
+    <h2>The algorithm</h2>
+    <p>Compaction runs in four stages. Each stage operates independently per attention head per layer.</p>
 
-    <h3>Algorithm</h3>
-    <ol style="color: var(--text-muted); padding-left: 1.5rem; margin: 1rem 0;">
-      <li><strong style="color: var(--text)">Position Selection</strong> — Choose M positions from the original N using attention-weighted scoring. Each position contributes proportionally to its attention mass.</li>
-      <li><strong style="color: var(--text)">Beta Fitting (NNLS)</strong> — Solve for additive bias terms that correct the attention distribution. Uses Non-Negative Least Squares with projected gradient descent.</li>
-      <li><strong style="color: var(--text)">Value Fitting (Least-Squares)</strong> — Solve for compressed V such that the weighted sum of values matches the original. Uses QR factorization with Cholesky fallback.</li>
-      <li><strong style="color: var(--text)">Execution</strong> — During inference, compacted K/V/beta tensors are prepended to the live KV cache. Beta is injected as an additive attention bias.</li>
-    </ol>
+    <div class="stage-list">
+      <div class="stage">
+        <div class="stage-header">
+          <span class="stage-num">1</span>
+          <span class="stage-title">Position selection</span>
+        </div>
+        <p>Score each of the N original positions by how much total attention it receives across all query tokens. Select the top M positions. These positions form the "skeleton" of the compressed cache. The paper uses attention-weighted scoring; we add Orthogonal Matching Pursuit (OMP) as an alternative for higher quality.</p>
+      </div>
+      <div class="stage">
+        <div class="stage-header">
+          <span class="stage-num">2</span>
+          <span class="stage-title">Beta fitting (NNLS)</span>
+        </div>
+        <p>After selection, the attention distribution over M positions won't perfectly match the original over N positions. Beta terms are additive biases injected before softmax that correct this mismatch. Solved via Non-Negative Least Squares (NNLS) with projected gradient descent and regularized Cholesky decomposition (lambda = 1e-6).</p>
+      </div>
+      <div class="stage">
+        <div class="stage-header">
+          <span class="stage-num">3</span>
+          <span class="stage-title">Value fitting (least-squares)</span>
+        </div>
+        <p>With positions selected and beta fitted, solve for new value vectors V' such that the attention-weighted sum matches the original: <code>softmax(Q K'^T + beta) V' = softmax(Q K^T) V</code>. Uses a 3-tier cascade: LAPACK QR factorization (most stable), Cholesky decomposition (fast), or aggressive Cholesky (last resort).</p>
+      </div>
+      <div class="stage">
+        <div class="stage-header">
+          <span class="stage-num">4</span>
+          <span class="stage-title">Execution</span>
+        </div>
+        <p>During inference, the compacted K', V', and beta tensors are stored as a "compacted prefix" and prepended to the live KV cache. The attention graph injects beta as an additive bias before softmax. Zero-beta layers can use flash attention; non-zero layers use standard attention.</p>
+      </div>
+    </div>
 
-    <h2>Fork vs Paper Reference</h2>
-    <p>This implementation extends the paper in several dimensions:</p>
+    <!-- ====== WHAT WE EXTENDED ====== -->
+    <h2>What we extended beyond the paper</h2>
+    <p>The paper provides a Python reference implementation targeting standard attention models. Shipping this in production C++ required significant extensions:</p>
 
+    <div class="table-wrap">
     <table>
       <thead>
-        <tr><th>Feature</th><th>Paper (MIT)</th><th>This Fork</th></tr>
+        <tr>
+          <th style="text-align:left">Dimension</th>
+          <th style="text-align:left">Paper (MIT)</th>
+          <th style="text-align:left">This fork</th>
+        </tr>
       </thead>
       <tbody>
-        <tr><td>Language</td><td>Python (reference)</td><td>C++ (production)</td></tr>
-        <tr><td>Solver</td><td>NumPy/SciPy</td><td>Pure C++ with NEON SIMD + Metal GPU</td></tr>
-        <tr><td>Selection</td><td>Attention scoring</td><td>+ OMP, progressive schedule</td></tr>
-        <tr><td>Query source</td><td>Captured from training</td><td>Self-study (autoregressive generation)</td></tr>
-        <tr><td>Long context</td><td>Not addressed</td><td>Chunked self-study for >8K</td></tr>
-        <tr><td>Flash attention</td><td>Not addressed</td><td>Per-layer flash hybrid (zero-beta)</td></tr>
-        <tr><td>Iterative refinement</td><td>Not addressed</td><td>Quality-gated convergence loop</td></tr>
-        <tr><td>Architectures</td><td>Standard attention</td><td>+ iSWA, hybrid SSM, IMROPE</td></tr>
-        <tr><td>State persistence</td><td>Not addressed</td><td>Save/restore (version 2 serialization)</td></tr>
-        <tr><td>Quantized cache</td><td>Not addressed</td><td>Q8_0, Q4_K extraction</td></tr>
+        <tr>
+          <td style="text-align:left">Language</td>
+          <td style="text-align:left">Python reference</td>
+          <td style="text-align:left">Production C++ (no external dependencies)</td>
+        </tr>
+        <tr>
+          <td style="text-align:left">Solver</td>
+          <td style="text-align:left">NumPy / SciPy</td>
+          <td style="text-align:left">Pure C++ with NEON SIMD + Metal GPU</td>
+        </tr>
+        <tr>
+          <td style="text-align:left">Architectures</td>
+          <td style="text-align:left">Standard attention only</td>
+          <td style="text-align:left">+ iSWA, hybrid SSM, hybrid-iSWA, IMROPE</td>
+        </tr>
+        <tr>
+          <td style="text-align:left">Flash attention</td>
+          <td style="text-align:left">Not addressed</td>
+          <td style="text-align:left">Per-layer flash hybrid (zero-beta layers)</td>
+        </tr>
+        <tr>
+          <td style="text-align:left">Long context</td>
+          <td style="text-align:left">Not addressed</td>
+          <td style="text-align:left">Chunked compaction for >8K contexts</td>
+        </tr>
+        <tr>
+          <td style="text-align:left">Iterative refinement</td>
+          <td style="text-align:left">Not addressed</td>
+          <td style="text-align:left">Quality-gated on-policy convergence loop</td>
+        </tr>
+        <tr>
+          <td style="text-align:left">State persistence</td>
+          <td style="text-align:left">Not addressed</td>
+          <td style="text-align:left">Save/restore with version 2 serialization</td>
+        </tr>
+        <tr>
+          <td style="text-align:left">Quantized cache</td>
+          <td style="text-align:left">Not addressed</td>
+          <td style="text-align:left">Q8_0, Q4_K extraction with dequantization</td>
+        </tr>
+        <tr>
+          <td style="text-align:left">Query source</td>
+          <td style="text-align:left">Captured from training</td>
+          <td style="text-align:left">Self-study (autoregressive Q generation)</td>
+        </tr>
+        <tr>
+          <td style="text-align:left">Selection methods</td>
+          <td style="text-align:left">Attention scoring</td>
+          <td style="text-align:left">+ OMP, progressive schedule, nonuniform</td>
+        </tr>
       </tbody>
     </table>
-
-    <h2>Implementation Scale</h2>
-    <div class="cards">
-      <div class="card">
-        <div class="label">Compaction Pipelines</div>
-        <div class="value">7</div>
-        <div class="detail">select, solver, OMP, self-study, chunked, on-policy, sequential</div>
-      </div>
-      <div class="card">
-        <div class="label">Fix Commits</div>
-        <div class="value">29</div>
-        <div class="detail">18 Critical/Major bugs found and fixed</div>
-      </div>
-      <div class="card">
-        <div class="label">Models Validated</div>
-        <div class="value">17</div>
-        <div class="detail">15 pass the 0.95 cosine quality gate</div>
-      </div>
     </div>
 
+    <!-- ====== BUGS FOUND ====== -->
+    <h2>Bugs found during implementation</h2>
+    <p>Translating from Python to C++ and testing across 17 models and 5 architectures exposed bugs that the reference implementation never hit. Three were in the paper's own algorithm:</p>
+    <ul style="color:var(--text-muted); padding-left:1.5rem; margin:1rem 0;">
+      <li><strong style="color:var(--text)">Max-shift inconsistency</strong> &mdash; Different per-query shifts for target vs design matrix. Fixed with unified shift computation.</li>
+      <li><strong style="color:var(--text)">Beta lower bound too low</strong> &mdash; Paper uses 1e-12 as floor; should be 0.05 per e^{-3} constraint. Raised the floor.</li>
+      <li><strong style="color:var(--text)">NNLS iterations</strong> &mdash; Paper's reference uses 64 iterations; convergence happens in 2. Reduced to match.</li>
+    </ul>
+    <p>Plus 15 additional Critical/Major bugs found in the production C++ implementation through <a href="qa.html">adversarial review</a>. <a href="https://github.com/jandhyala-dev/modelai-llama.cpp/blob/modelai-main/docs/BUGS-AND-FIXES.md" target="_blank" rel="noopener noreferrer">Full bug list</a>.</p>
+
+    <!-- ====== DESIGN DECISIONS ====== -->
+    <h2>Key design decisions</h2>
+    <p>13 architecture decisions are documented with rationale. Here are the most significant:</p>
+    <div class="stage-list">
+      <div class="stage">
+        <div class="stage-header">
+          <span class="stage-num">1</span>
+          <span class="stage-title"><code>select</code> is the production default, not <code>solver</code></span>
+        </div>
+        <p>The solver pipeline (full beta + V fitting) achieves higher theoretical quality on non-GQA models, but on GQA models (most modern LLMs), it produces cosine as low as -0.174. The select pipeline achieves 0.946-0.999 across all tested models and is flash-attention compatible.</p>
+      </div>
+      <div class="stage">
+        <div class="stage-header">
+          <span class="stage-num">2</span>
+          <span class="stage-title">All solver math in fp32</span>
+        </div>
+        <p>Matrix sizes are small (32-256 positions). Mixed-precision artifacts in iterative NNLS are hard to debug. fp32 is fast enough for these dimensions and eliminates a class of numerical bugs.</p>
+      </div>
+      <div class="stage">
+        <div class="stage-header">
+          <span class="stage-num">3</span>
+          <span class="stage-title">No external dependencies</span>
+        </div>
+        <p>The solver is pure C++ with optional LAPACK on macOS. Cholesky fallback works everywhere. This matches llama.cpp's philosophy and simplifies the build on embedded / cross-compiled targets.</p>
+      </div>
+    </div>
+    <p><a href="https://github.com/jandhyala-dev/modelai-llama.cpp/blob/modelai-main/docs/DESIGN-DECISIONS.md" target="_blank" rel="noopener noreferrer">All 13 design decisions with rationale</a></p>
+
+    <!-- ====== CITATION ====== -->
     <h2>Citation</h2>
-    <div class="code-block">
-@article{zweiger2026fast,
-  title={Fast KV Compaction via Attention Matching},
-  author={Zweiger, Adam and others},
-  journal={arXiv preprint arXiv:2602.16284},
-  year={2026}
-}
-    </div>
+    <div class="code-block">@article{zweiger2026fast,
+  title   = {Fast KV Compaction via Attention Matching},
+  author  = {Zweiger, Adam and others},
+  journal = {arXiv preprint arXiv:2602.16284},
+  year    = {2026}
+}</div>
 
+    <!-- ====== LINKS ====== -->
     <h2>Links</h2>
-    <ul style="color: var(--text-muted); padding-left: 1.5rem;">
-      <li><a href="https://arxiv.org/abs/2602.16284" target="_blank" rel="noopener noreferrer">arXiv:2602.16284</a> — Full paper</li>
-      <li><a href="https://github.com/jandhyala-dev/modelai-llama.cpp/blob/modelai-main/docs/paper-comparison-2602.16284.md" target="_blank" rel="noopener noreferrer">Detailed comparison</a> — Fork vs reference implementation</li>
-      <li><a href="https://github.com/jandhyala-dev/modelai-llama.cpp/blob/modelai-main/docs/kv-compaction-algorithm.md" target="_blank" rel="noopener noreferrer">Algorithm docs</a> — Selection, fitting, execution stages</li>
-      <li><a href="https://github.com/ggml-org/llama.cpp/issues/20037" target="_blank" rel="noopener noreferrer">Upstream RFC</a> — ggml-org/llama.cpp#20037</li>
+    <ul style="color:var(--text-muted); padding-left:1.5rem;">
+      <li><a href="https://arxiv.org/abs/2602.16284" target="_blank" rel="noopener noreferrer">arXiv:2602.16284</a> &mdash; Full paper</li>
+      <li><a href="https://github.com/jandhyala-dev/modelai-llama.cpp/blob/modelai-main/docs/paper-comparison-2602.16284.md" target="_blank" rel="noopener noreferrer">Detailed comparison</a> &mdash; Fork vs reference implementation</li>
+      <li><a href="https://github.com/jandhyala-dev/modelai-llama.cpp/blob/modelai-main/docs/kv-compaction-algorithm.md" target="_blank" rel="noopener noreferrer">Algorithm docs</a> &mdash; Selection, fitting, execution stages</li>
+      <li><a href="https://github.com/ggml-org/llama.cpp/issues/20037" target="_blank" rel="noopener noreferrer">Upstream RFC</a> &mdash; ggml-org/llama.cpp#20037</li>
     </ul>
   </div>
 
