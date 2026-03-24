@@ -58,6 +58,7 @@ jobs:
       - name: Configure
         run: |
           cmake -B build -G "Visual Studio 17 2022" -A x64 `
+            -DBUILD_SHARED_LIBS=OFF `
             -DLLAMA_BUILD_TESTS=OFF `
             -DLLAMA_BUILD_EXAMPLES=ON `
             -DLLAMA_FATAL_WARNINGS=OFF
@@ -66,8 +67,7 @@ jobs:
         run: |
           cmake --build build --config Release -j $env:NUMBER_OF_PROCESSORS
 
-      # Tests disabled: our KV compaction test executables have linker
-      # errors on MSVC (unresolved symbols from llama_kv_cache).
+      # Tests disabled: KV compaction tests require models not available in CI.
       # Windows CI validates build-only. Full tests run on macOS/Linux.
       # - name: Test
       #   run: |
