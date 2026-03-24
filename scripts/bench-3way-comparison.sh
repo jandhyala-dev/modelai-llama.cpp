@@ -20,15 +20,15 @@
 set -euo pipefail
 
 # --- Configuration ---
-MODELAI_DIR="/Users/ajayjandhyala/dev/whippet/modelai-llama.cpp"
-UPSTREAM_DIR="/Users/ajayjandhyala/dev/whippet/llama.cpp"
+MODELAI_DIR="${MODELAI_DIR:?Set MODELAI_DIR to your modelai-llama.cpp directory}"
+UPSTREAM_DIR="${UPSTREAM_DIR:?Set UPSTREAM_DIR to your upstream llama.cpp directory}"
 TIMESTAMP=$(date +%Y%m%d-%H%M%S)
 COMMIT_SHA=$(cd "$MODELAI_DIR" && git rev-parse --short HEAD)
 OUT_DIR="$MODELAI_DIR/bench-results/3way-comparison-${TIMESTAMP}"
 mkdir -p "$OUT_DIR"
 
 # Models directory
-MODEL_DIR="${MODELAI_MODELS_DIR:-/Users/ajayjandhyala/dev/whippet/models}"
+MODEL_DIR="${MODELAI_MODELS_DIR:?Set MODELAI_MODELS_DIR to your models directory}"
 
 declare -A MODELS
 MODELS[qwen3-14b]="${MODEL_DIR}/Qwen3-14B-Q4_K_M.gguf"

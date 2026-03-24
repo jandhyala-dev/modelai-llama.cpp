@@ -1,0 +1,61 @@
+name: Compaction Bug
+description: Report a bug in KV cache compaction
+labels: ["bug", "compaction"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Report bugs in the KV cache compaction feature (select, solver, pipelines, auto-compact, state persistence).
+        For bugs in upstream llama.cpp code, please report at https://github.com/ggml-org/llama.cpp/issues
+  - type: textarea
+    id: description
+    attributes:
+      label: Bug Description
+      description: What happened? What did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to Reproduce
+      description: How can we reproduce the issue?
+      placeholder: |
+        1. Start server with: ./llama-server -m model.gguf --endpoint-compact -c 8192
+        2. Send /compact request with ratio=2.0
+        3. Observe...
+    validations:
+      required: true
+  - type: input
+    id: model
+    attributes:
+      label: Model
+      description: Which model and quantization? (e.g., Qwen3-14B Q4_K_M)
+    validations:
+      required: true
+  - type: dropdown
+    id: pipeline
+    attributes:
+      label: Compaction Pipeline
+      options:
+        - select (default)
+        - solver
+        - on_policy
+        - self_study
+        - chunked
+        - auto-compact
+        - other
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Platform
+      description: OS, hardware, backend (e.g., macOS M2 Ultra, Metal)
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / Output
+      description: Paste relevant server logs or error output
+      render: shell

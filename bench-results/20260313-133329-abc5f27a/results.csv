@@ -1,0 +1,9 @@
+schema_version,run_id,workload_id,workload_name,dataset_id,model_name,model_params_b,architecture,quantization,backend,flash_mode,pipeline,n_ctx,prefix_tokens,compactable_tokens,live_suffix_tokens,compression_ratio,compacted_tokens,continuation_tokens,prefill_ms,prefill_tok_s,compaction_time_ms,query_generation_time_ms,solver_time_ms,first_token_ms,baseline_decode_tok_s,compacted_decode_tok_s,in_run_throughput_delta_pct,active_n_kv,allocated_kv_bytes,reclaimed_kv_bytes,logit_cosine,task_metric_name,task_metric_value,quality_correct,quality_total,quality_accuracy,quality_baseline_accuracy,longhealth_correct,longhealth_total,longhealth_accuracy,longhealth_baseline_accuracy,threshold_name,threshold_value,pass,fallback_used,fallback_reason,crash,error_text,artifact_path,support_level,support_reason,throughput_pass
+2,20260313-133329-abc5f27a-build-host
+2,20260313-133329-abc5f27a-build-host
+2,20260313-133329-abc5f27a-build-host
+2,20260313-133329-abc5f27a-build-host
+2,20260313-133329-abc5f27a-build-host
+2,20260313-133329-abc5f27a-build-host
+2,20260313-133329-abc5f27a-build-host
+2,20260313-133329-abc5f27a-build-host

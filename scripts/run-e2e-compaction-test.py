@@ -22,7 +22,7 @@ import argparse
 from datetime import datetime, timezone
 from pathlib import Path
 
-MODELAI_DIR = Path("/Users/ajayjandhyala/dev/whippet/modelai-llama.cpp")
+MODELAI_DIR = Path(os.environ.get("MODELAI_DIR", "."))
 SERVER_BIN = MODELAI_DIR / "build-release" / "bin" / "llama-server"
 if not SERVER_BIN.exists():
     SERVER_BIN = MODELAI_DIR / "build" / "bin" / "llama-server"

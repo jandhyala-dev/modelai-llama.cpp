@@ -20,7 +20,7 @@ import argparse
 from datetime import datetime, timezone
 from pathlib import Path
 
-MODELAI_DIR = Path("/Users/ajayjandhyala/dev/whippet/modelai-llama.cpp")
+MODELAI_DIR = Path(os.environ.get("MODELAI_DIR", "."))
 SERVER_BIN = MODELAI_DIR / "build" / "bin" / "llama-server"
 SERVER_PORT = 8080
 SERVER_URL = f"http://127.0.0.1:{SERVER_PORT}"

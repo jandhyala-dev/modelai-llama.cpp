@@ -34,7 +34,7 @@ if [ ! -f "$BENCH_SCRIPT" ]; then
 fi
 
 # Models directory
-MODEL_DIR="${MODELAI_MODELS_DIR:-/Users/ajayjandhyala/dev/whippet/models}"
+MODEL_DIR="${MODELAI_MODELS_DIR:?Set MODELAI_MODELS_DIR to your models directory}"
 
 # All 6 production models.
 ALL_MODELS=(

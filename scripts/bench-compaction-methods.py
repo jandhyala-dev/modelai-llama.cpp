@@ -428,7 +428,7 @@ def main():
         "results": all_results,
     }
 
-    outdir = "/Users/ajayjandhyala/dev/whippet/modelai-llama.cpp/bench-results"
+    outdir = os.path.join(os.environ.get("MODELAI_DIR", "."), "bench-results")
     os.makedirs(outdir, exist_ok=True)
     outpath = os.path.join(outdir, "compaction-all-methods-benchmark.json")
     with open(outpath, "w") as f:

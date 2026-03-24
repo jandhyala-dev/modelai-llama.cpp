@@ -21,9 +21,9 @@ SERVER_PORT = 8090
 SERVER = f"http://localhost:{SERVER_PORT}"
 SLOT = 0
 
-MODELS_DIR = os.environ.get("MODELAI_MODELS_DIR", "/Users/ajayjandhyala/dev/whippet/models")
+MODELS_DIR = os.environ["MODELAI_MODELS_DIR"]
 MODEL_PATH = os.path.join(MODELS_DIR, "Qwen3-Coder-30B-A3B-Instruct-1M-UD-Q4_K_XL.gguf")
-SERVER_BIN = "/Users/ajayjandhyala/dev/whippet/modelai-llama.cpp/build/bin/llama-server"
+SERVER_BIN = os.path.join(os.environ.get("MODELAI_DIR", "."), "build/bin/llama-server")
 
 COMPACT_RATIO = 50
 COMPACT_METHOD = "select"
@@ -45,7 +45,7 @@ FACTS = [
 ]
 
 # Source files for realistic content
-SRC_DIR = "/Users/ajayjandhyala/dev/whippet/modelai-llama.cpp/src"
+SRC_DIR = os.path.join(os.environ.get("MODELAI_DIR", "."), "src")
 
 
 def api(method, path, data=None, timeout=600):
@@ -482,7 +482,7 @@ def main():
         "results": all_results,
     }
 
-    outdir = "/Users/ajayjandhyala/dev/whippet/modelai-llama.cpp/bench-results"
+    outdir = os.path.join(os.environ.get("MODELAI_DIR", "."), "bench-results")
     os.makedirs(outdir, exist_ok=True)
     outpath = os.path.join(outdir, "iterative-1m-50x-benchmark.json")
     with open(outpath, "w") as f:

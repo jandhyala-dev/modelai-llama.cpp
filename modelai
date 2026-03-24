@@ -4,7 +4,7 @@
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 CLI="$SCRIPT_DIR/build/bin/llama-cli"
-MODEL_DIR="${MODELAI_MODELS_DIR:-/Users/ajayjandhyala/dev/whippet/models}"
+MODEL_DIR="${MODELAI_MODELS_DIR:?Set MODELAI_MODELS_DIR to your models directory}"
 
 # Default settings
 CTX=4096

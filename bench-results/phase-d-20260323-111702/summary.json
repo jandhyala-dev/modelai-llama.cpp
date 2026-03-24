@@ -1,0 +1,27 @@
+{
+  "run_dir": "phase-d-20260323-111702",
+  "total_models": 1,
+  "passed": 1,
+  "failed": 0,
+  "models": [
+    {
+      "model": "Qwen3-8B",
+      "context_k": 32,
+      "use_cases": 4,
+      "errors": 0,
+      "avg_quality": 4.0,
+      "recall_score": 5,
+      "recall_words": 691,
+      "avg_tok_s": 29.6,
+      "compact_time_ms": 356,
+      "compact_ratio": 2.0,
+      "compact_recall": 5,
+      "compact_recall_words": 674,
+      "compact_error": null,
+      "baseline_pass": true,
+      "compact_pass": true,
+      "recall_pass": true,
+      "skipped_compaction": false
+    }
+  ]
+}

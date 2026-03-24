@@ -263,7 +263,7 @@ def run_iterative_test():
 
     # Load source files for real content
     import glob
-    src_dir = "/Users/ajayjandhyala/dev/whippet/modelai-llama.cpp/src"
+    src_dir = os.path.join(os.environ.get("MODELAI_DIR", "."), "src")
     files = []
     for ext in ["*.cpp", "*.h"]:
         for f in glob.glob(os.path.join(src_dir, "**", ext), recursive=True):
@@ -411,7 +411,7 @@ def main():
         "phase2_iterative": iterative,
     }
 
-    outpath = "/Users/ajayjandhyala/dev/whippet/modelai-llama.cpp/bench-results/compaction-quality-benchmark.json"
+    outpath = os.path.join(os.environ.get("MODELAI_DIR", "."), "bench-results/compaction-quality-benchmark.json")
     os.makedirs(os.path.dirname(outpath), exist_ok=True)
     with open(outpath, "w") as f:
         json.dump(output, f, indent=2)

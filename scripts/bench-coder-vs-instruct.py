@@ -15,7 +15,7 @@ import urllib.error
 import urllib.request
 
 SERVER_BIN = os.path.join(os.path.dirname(__file__), "..", "build", "bin", "llama-server")
-MODEL_DIR = os.environ.get("MODELAI_MODELS_DIR", "/Users/ajayjandhyala/dev/whippet/models")
+MODEL_DIR = os.environ["MODELAI_MODELS_DIR"]
 PORT = 8090
 SERVER = f"http://localhost:{PORT}"
 CTX = 65536
@@ -84,7 +84,7 @@ EXCEL_TASKS = [
                 "   c. 'Trends': Month-over-month growth rates with red/green color coding\n"
                 "3. Apply professional formatting: headers bold, currency format, alternating row colors\n"
                 "4. Add data validation dropdowns for Region filter on Summary sheet\n"
-                "5. Protect sheets with password 'report2026' but allow filtering"
+                "5. Protect sheets with a password but allow filtering"
             )},
         ],
         "max_tokens": 2000,

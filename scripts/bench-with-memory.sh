@@ -4,7 +4,7 @@
 
 MODELAI_BENCH="./build/bin/llama-bench"
 UPSTREAM_BENCH="/tmp/llama-upstream-bench/build/bin/llama-bench"
-MODEL_DIR="${MODELAI_MODELS_DIR:-/Users/ajayjandhyala/dev/whippet/models}"
+MODEL_DIR="${MODELAI_MODELS_DIR:?Set MODELAI_MODELS_DIR to your models directory}"
 RESULTS_DIR="bench-results/comparison-$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$RESULTS_DIR"
 

@@ -20,10 +20,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 # --- Configuration ---
-MODELAI_DIR = Path("/Users/ajayjandhyala/dev/whippet/modelai-llama.cpp")
-UPSTREAM_DIR = Path("/Users/ajayjandhyala/dev/whippet/llama.cpp")
+MODELAI_DIR = Path(os.environ.get("MODELAI_DIR", "."))
+UPSTREAM_DIR = Path(os.environ["UPSTREAM_DIR"])
 
-MODELS_DIR = os.environ.get("MODELAI_MODELS_DIR", "/Users/ajayjandhyala/dev/whippet/models")
+MODELS_DIR = os.environ["MODELAI_MODELS_DIR"]
 
 MODELS = {
     "qwen3-14b": {

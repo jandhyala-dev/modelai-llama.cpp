@@ -22,17 +22,23 @@
 *.tmp
 *.DS_Store
 
-# IDE / OS
+# IDE / OS / AI Tools
 
 /.cache/
 /.ccls-cache/
+/.claude/
 /.direnv/
 /.envrc
+/.gemini/
 /.idea/
 /.swiftpm
 /.vs/
 /.vscode/
 /nppBackup
+
+# Fork-specific
+/benches/
+__pycache__/
 
 
 # Coverage

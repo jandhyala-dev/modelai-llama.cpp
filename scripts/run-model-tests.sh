@@ -8,7 +8,7 @@ TEST_BIN="./build/bin/test-kv-compact-pipeline-integration"
 RESULTS_DIR="bench-results/model-tests-$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$RESULTS_DIR"
 
-MODEL_DIR="${MODELAI_MODELS_DIR:-/Users/ajayjandhyala/dev/whippet/models}"
+MODEL_DIR="${MODELAI_MODELS_DIR:?Set MODELAI_MODELS_DIR to your models directory}"
 
 if [ $# -eq 0 ]; then
     # Default: test all models (skip stories15M which is CI fixture)
