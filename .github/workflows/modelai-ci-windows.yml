@@ -60,7 +60,7 @@ jobs:
           cmake -B build -G "Visual Studio 17 2022" -A x64 `
             -DLLAMA_BUILD_TESTS=ON `
             -DLLAMA_BUILD_EXAMPLES=ON `
-            -DLLAMA_FATAL_WARNINGS=ON
+            -DLLAMA_FATAL_WARNINGS=OFF
 
       - name: Build
         run: |

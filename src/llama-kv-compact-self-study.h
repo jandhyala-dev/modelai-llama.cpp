@@ -7,6 +7,7 @@
 
 #include <cstdint>
 #include <cstring>
+#include <string>
 #include <vector>
 
 // Maximum number of generation rounds for diversity.
