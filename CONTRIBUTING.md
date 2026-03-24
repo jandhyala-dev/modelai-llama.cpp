@@ -232,6 +232,54 @@ See [AGENTS.md](AGENTS.md) for the full 13-section review protocol. Key points:
 - The **disprove-it pass** is mandatory: the reviewer assumes one bug exists and tries to find it before issuing PASS
 - Critical/Major findings block merge; Minor findings are noted for follow-up
 
+## Code Health and Governance
+
+### Goal
+
+Every change to this repository is evaluated across 8 dimensions before merge:
+
+1. **Correctness** — Does the code produce the right results?
+2. **Performance** — No regression to baseline decode speed
+3. **Quality** — Compaction cosine similarity meets the 0.95 gate
+4. **Safety** — Crash protection, NaN guards, memory bounds
+5. **Security** — No PII, no leaked credentials, no injection vectors
+6. **Documentation** — Changes reflected in the relevant `docs/` file
+7. **Test coverage** — New behavior has tests; existing tests still pass
+8. **OSS standards** — Compared against top open-source projects (vLLM, PyTorch, Transformers, llama.cpp upstream)
+
+The goal is to fix ALL findings before OSS release. No finding is deferred if it is fixable in the current cycle.
+
+### PR Review Standard
+
+Every pull request — whether it adds KV cache compaction features, upstream sync tooling, governance workflows, or documentation — is held to the same standard:
+
+- **Adversarial review** using the 13-section protocol in [AGENTS.md](AGENTS.md)
+- **All findings assessed for fixability** with effort estimates. If fixable, fix it before merge.
+- **Accepted risks documented explicitly** — if a finding cannot be fixed (e.g., upstream bug, platform limitation), it is logged with rationale in the PR description
+- **Open PRs and issues assessed** — before merging, check for interactions with other open PRs or known issues
+
+### Weekly Code Health Check (Saturdays)
+
+Run these checks weekly to maintain repository hygiene:
+
+1. **PII scan** — `grep -r "/Users/" docs/ src/ tools/ AGENTS.md CONTRIBUTING.md` and `grep -ri "model-ai\.app\|c-o-t\.ai\|COT Labs" docs/` — zero hits expected
+2. **Dead test check** — `ctest --test-dir build -N -L main | tail -1` — verify test count matches expectations
+3. **Duplication check** — review any repeated code patterns introduced in the past week
+4. **PR triage** — review all open PRs: merge, request changes, or close stale ones
+5. **Upstream watch** — review the `upstream-watch` GitHub Issue (auto-created by `modelai-upstream-watch.yml` if KV cache activity detected)
+
+### Quarterly Deep Review
+
+Every 3 months, conduct a full adversarial review of the entire compaction codebase:
+
+1. Re-run all benchmarks (decode speed, compaction quality, 256K context extension)
+2. Re-verify all 29 bug fixes are still valid (no regressions)
+3. Audit the full `src/llama-kv-compact-*` surface against the latest upstream KV cache API
+4. Compare documentation against current code — flag any drift
+5. Review OSS governance against top projects — update practices if the ecosystem has moved
+
+Results are logged as a GitHub Issue tagged `quarterly-review`.
+
 ## Fork Documentation
 
 - `docs/kv-compaction-algorithm.md` — Algorithm overview
