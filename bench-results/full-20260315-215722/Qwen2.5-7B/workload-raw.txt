@@ -21,7 +21,7 @@ llama_params_fit_impl: will leave 20862 >= 1024 MiB of free device memory, no ch
 llama_params_fit: successfully fit params to free device memory
 llama_params_fit: fitting params to free memory took 0.14 seconds
 llama_model_load_from_file_impl: using device MTL0 (Apple M2 Pro) (unknown id) - 25558 MiB free
-llama_model_loader: loaded meta data with 34 key-value pairs and 339 tensors from /home/user/dev (version GGUF V3 (latest))
+llama_model_loader: loaded meta data with 34 key-value pairs and 339 tensors from /home/user/.ollama/models/blobs/sha256-2bada8a7450677000f678be90653b85d364de7db25eb5ea54136ada5f3933730 (version GGUF V3 (latest))
 llama_model_loader: Dumping metadata keys/values. Note: KV overrides do not apply in this output.
 llama_model_loader: - kv   0:                       general.architecture str              = qwen2
 llama_model_loader: - kv   1:                               general.type str              = model

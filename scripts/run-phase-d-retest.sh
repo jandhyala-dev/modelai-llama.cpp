@@ -4,15 +4,15 @@ set -euo pipefail
 # Phase D Retest — rebuilt from HEAD (be2491cb7) with all 5 compaction fixes
 # Date: 2026-03-23
 
-MODELS_DIR="$HOME/dev/whippet/models"
-SCRIPTS_DIR="$(cd "$(dirname "$0")" && pwd)"
+MODELS_DIR="${MODELAI_MODELS_DIR:?Set MODELAI_MODELS_DIR to your models directory}"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 TIMESTAMP=$(date +%Y%m%d-%H%M%S)
-OUT_DIR="$HOME/dev/whippet/modelai-llama.cpp/bench-results/phase-d-retest-${TIMESTAMP}"
+OUT_DIR="${SCRIPT_DIR}/../bench-results/phase-d-retest-${TIMESTAMP}"
 
 mkdir -p "$OUT_DIR/results"
 
 # Copy use-cases from previous run
-cp "$HOME/dev/whippet/modelai-llama.cpp/bench-results/phase-d-20260316-112022/use-cases.json" "$OUT_DIR/"
+cp "${SCRIPT_DIR}/../bench-results/phase-d-20260316-112022/use-cases.json" "$OUT_DIR/"
 
 # Use cases: 4 representative ones (one per major category)
 USE_CASES="D-1-1,D-2-1,D-3-1,D-5-1"
@@ -60,7 +60,7 @@ run_model() {
 
   echo ""
   echo ">>> [$order] $name @ ${ctx} ctx"
-  python3 "$SCRIPTS_DIR/run-phase-d-test.py" \
+  python3 "$SCRIPT_DIR/run-phase-d-test.py" \
     --model-path "$path" \
     --model-name "$name" \
     --model-order "$order" \

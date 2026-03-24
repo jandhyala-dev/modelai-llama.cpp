@@ -6,7 +6,7 @@ up to the model's compact_cap. Validates recall quality after each cycle.
 
 Usage:
     python3 scripts/run-e2e-compaction-test.py \
-        --model-path ~/dev/whippet/models/Qwen3-Coder-30B-A3B-Instruct-1M-UD-Q4_K_XL.gguf \
+        --model-path $MODELAI_MODELS_DIR/your-model.gguf \
         --model-name "Qwen3-Coder-30B-A3B" \
         --kv-alloc 65536 --compact-cap 262144 --compact-ratio 4 \
         --out-dir bench-results/e2e-TIMESTAMP

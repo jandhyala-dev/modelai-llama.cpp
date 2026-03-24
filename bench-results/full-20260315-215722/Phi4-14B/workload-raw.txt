@@ -21,7 +21,7 @@ llama_params_fit_impl: will leave 16050 >= 1024 MiB of free device memory, no ch
 llama_params_fit: successfully fit params to free device memory
 llama_params_fit: fitting params to free memory took 0.09 seconds
 llama_model_load_from_file_impl: using device MTL0 (Apple M2 Pro) (unknown id) - 25558 MiB free
-llama_model_loader: loaded meta data with 33 key-value pairs and 243 tensors from /home/user/dev (version GGUF V3 (latest))
+llama_model_loader: loaded meta data with 33 key-value pairs and 243 tensors from /home/user/.ollama/models/blobs/sha256-fd7b6731c33c57f61767612f56517460ec2d1e2e5a3f0163e0eb3d8d8cb5df20 (version GGUF V3 (latest))
 llama_model_loader: Dumping metadata keys/values. Note: KV overrides do not apply in this output.
 llama_model_loader: - kv   0:                       general.architecture str              = phi3
 llama_model_loader: - kv   1:                               general.type str              = model
@@ -177,7 +177,7 @@ prefilling 3276 tokens...
 prefill: 19505.2ms (168.0 tok/s)
 baseline decode: 14.7 tok/s (16 tokens in 1087.9ms)
 
-/home/user/dev GGML_ASSERT((int)sched->hash_set.size >= graph->n_nodes + graph->n_leafs) failed
+/home/user/dev/whippet/modelai-llama.cpp/ggml/src/ggml-backend.cpp:1774: GGML_ASSERT((int)sched->hash_set.size >= graph->n_nodes + graph->n_leafs) failed
 WARNING: Using native backtrace. Set GGML_BACKTRACE_LLDB for more info.
 WARNING: GGML_BACKTRACE_LLDB may cause native MacOS Terminal.app to crash.
 See: https://github.com/ggml-org/llama.cpp/pull/17869

@@ -1,18 +1,34 @@
 {
   "schema_version": 1,
-  "run_id": "20260312-155532-a0c7224b-build-host
+  "run_id": "20260312-155532-a0c7224b-build-host",
   "repo": "modelai-llama.cpp",
   "branch": "modelai-main",
   "commit_sha": "a0c7224b9640f28c1c44d726664ec43e184b7d8b",
   "upstream_base_sha": "unknown",
-  "hardware": "build-host
+  "hardware": "build-host",
   "os": "Darwin",
   "backend_build": "metal-release",
-  "models": ["Qwen3-8B-Q4_K_M"],
-  "pipelines": ["baseline", "select"],
-  "contexts": [65536],
-  "ratios": [2, 4, 8, 16],
-  "workloads": ["W1", "W2", "W3"],
+  "models": [
+    "Qwen3-8B-Q4_K_M"
+  ],
+  "pipelines": [
+    "baseline",
+    "select"
+  ],
+  "contexts": [
+    65536
+  ],
+  "ratios": [
+    2,
+    4,
+    8,
+    16
+  ],
+  "workloads": [
+    "W1",
+    "W2",
+    "W3"
+  ],
   "artifact_files": {
     "results_csv": "results.csv",
     "stdout_log": "stdout.log",

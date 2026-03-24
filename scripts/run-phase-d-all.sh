@@ -13,7 +13,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 REPO_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-MODELS_DIR="${HOME}/dev/whippet/models"
+MODELS_DIR="${MODELAI_MODELS_DIR:?Set MODELAI_MODELS_DIR to your models directory}"
 REGISTRY="${REPO_DIR}/bench-results/models.json"
 TIMESTAMP=$(date +%Y%m%d-%H%M%S)
 OUT_DIR="${REPO_DIR}/bench-results/phase-d-${TIMESTAMP}"

@@ -5,7 +5,7 @@
     "cpu_info": "Accelerate, Apple M2 Pro",
     "gpu_info": "Apple M2 Pro",
     "backends": "MTL,BLAS",
-    "model_filename": "/home/user/dev",
+    "model_filename": "/home/user/.ollama/models/blobs/sha256-a8cc1361f3145dc01f6d77c6c82c9116b9ffe3c97b34716fe20418455876c40e",
     "model_type": "qwen3 14B Q4_K - Medium",
     "model_size": 9270225920,
     "model_n_params": 14768307200,
@@ -39,8 +39,16 @@
     "stddev_ns": 6517702,
     "avg_ts": 161.611136,
     "stddev_ts": 0.332179,
-    "samples_ns": [ 3162937708, 3175428958, 3165955666 ],
-    "samples_ts": [ 161.875, 161.238, 161.721 ]
+    "samples_ns": [
+      3162937708,
+      3175428958,
+      3165955666
+    ],
+    "samples_ts": [
+      161.875,
+      161.238,
+      161.721
+    ]
   },
   {
     "build_commit": "0cd4f472",
@@ -48,7 +56,7 @@
     "cpu_info": "Accelerate, Apple M2 Pro",
     "gpu_info": "Apple M2 Pro",
     "backends": "MTL,BLAS",
-    "model_filename": "/home/user/dev",
+    "model_filename": "/home/user/.ollama/models/blobs/sha256-a8cc1361f3145dc01f6d77c6c82c9116b9ffe3c97b34716fe20418455876c40e",
     "model_type": "qwen3 14B Q4_K - Medium",
     "model_size": 9270225920,
     "model_n_params": 14768307200,
@@ -82,8 +90,16 @@
     "stddev_ns": 20668647,
     "avg_ts": 157.165003,
     "stddev_ts": 0.249067,
-    "samples_ns": [ 13016818375, 13054639375, 13021280416 ],
-    "samples_ts": [ 157.335, 156.879, 157.281 ]
+    "samples_ns": [
+      13016818375,
+      13054639375,
+      13021280416
+    ],
+    "samples_ts": [
+      157.335,
+      156.879,
+      157.281
+    ]
   },
   {
     "build_commit": "0cd4f472",
@@ -91,7 +107,7 @@
     "cpu_info": "Accelerate, Apple M2 Pro",
     "gpu_info": "Apple M2 Pro",
     "backends": "MTL,BLAS",
-    "model_filename": "/home/user/dev",
+    "model_filename": "/home/user/.ollama/models/blobs/sha256-a8cc1361f3145dc01f6d77c6c82c9116b9ffe3c97b34716fe20418455876c40e",
     "model_type": "qwen3 14B Q4_K - Medium",
     "model_size": 9270225920,
     "model_n_params": 14768307200,
@@ -124,9 +140,17 @@
     "avg_ns": 27293430500,
     "stddev_ns": 40965649,
     "avg_ts": 150.072969,
-    "stddev_ts": 0.225060,
-    "samples_ns": [ 27340549834, 27273474083, 27266267584 ],
-    "samples_ts": [ 149.814, 150.183, 150.222 ]
+    "stddev_ts": 0.22506,
+    "samples_ns": [
+      27340549834,
+      27273474083,
+      27266267584
+    ],
+    "samples_ts": [
+      149.814,
+      150.183,
+      150.222
+    ]
   },
   {
     "build_commit": "0cd4f472",
@@ -134,7 +158,7 @@
     "cpu_info": "Accelerate, Apple M2 Pro",
     "gpu_info": "Apple M2 Pro",
     "backends": "MTL,BLAS",
-    "model_filename": "/home/user/dev",
+    "model_filename": "/home/user/.ollama/models/blobs/sha256-a8cc1361f3145dc01f6d77c6c82c9116b9ffe3c97b34716fe20418455876c40e",
     "model_type": "qwen3 14B Q4_K - Medium",
     "model_size": 9270225920,
     "model_n_params": 14768307200,
@@ -168,7 +192,15 @@
     "stddev_ns": 25621730,
     "avg_ts": 16.464206,
     "stddev_ts": 0.054341,
-    "samples_ns": [ 7745639625, 7783280417, 7794572708 ],
-    "samples_ts": [ 16.5254, 16.4455, 16.4217 ]
+    "samples_ns": [
+      7745639625,
+      7783280417,
+      7794572708
+    ],
+    "samples_ts": [
+      16.5254,
+      16.4455,
+      16.4217
+    ]
   }
 ]

@@ -6,7 +6,7 @@
   "commit_sha": "294a03b6",
   "branch": "modelai-main",
   "machine": {
-    "hostname": "build-host
+    "hostname": "build-host",
     "os": "Darwin 25.3.0",
     "arch": "arm64",
     "cpu": "Apple M2 Pro",
