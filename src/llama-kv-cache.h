@@ -395,14 +395,23 @@ private:
             }
             clear();
             if (n > 0) {
+#ifdef _WIN32
+                ptr = _aligned_malloc(n, 64);
+                GGML_ASSERT(ptr && "aligned_byte_buffer: allocation failed");
+#else
                 int ret = posix_memalign(&ptr, 64, n);
                 GGML_ASSERT(ret == 0 && ptr && "aligned_byte_buffer: allocation failed");
+#endif
                 len = n;
             }
         }
         void clear() {
             if (ptr) {
+#ifdef _WIN32
+                _aligned_free(ptr);
+#else
                 free(ptr);
+#endif
                 ptr = nullptr;
             }
             len = 0;

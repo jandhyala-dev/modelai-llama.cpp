@@ -613,6 +613,7 @@ struct common_params {
     bool endpoint_slots   = true;
     bool endpoint_props   = false; // only control POST requests, not GET
     bool endpoint_metrics = false;
+    bool endpoint_compact = false; // F-C-20: /compact endpoint gated behind --endpoint-compact
 
     // router server configs
     std::string models_dir    = ""; // directory containing models for the router server

@@ -1,5 +1,6 @@
 #include "llama-kv-compact-select.h"
 #include "llama-kv-compact-math.h"
+#include "llama-impl.h"  // F-M-28: LLAMA_LOG_WARN
 
 #include <algorithm>
 #include <chrono>
@@ -156,12 +157,12 @@ bool omp_solve_nnls(
     }
 
     // Symmetrize + regularize
+    // F-C-15: Upper triangle is uninitialized (MtM only fills lower triangle).
+    // Copy lower→upper instead of averaging with uninitialized values.
     const float lambda = 1e-6f;
     for (uint32_t i = 0; i < t; ++i) {
         for (uint32_t j = 0; j < i; ++j) {
-            const float avg = 0.5f * (mtm[size_t(i) * t + j] + mtm[size_t(j) * t + i]);
-            mtm[size_t(i) * t + j] = avg;
-            mtm[size_t(j) * t + i] = avg;
+            mtm[size_t(j) * t + i] = mtm[size_t(i) * t + j];
         }
         mtm[size_t(i) * t + i] += lambda;
     }
@@ -374,6 +375,11 @@ std::vector<uint32_t> llama_kv_compact_select_omp(
             uint32_t k_select = std::min(k_choice, t - i);
 
             // Select top k_select keys by correlation.
+            // F-M-28: Guard against excessive candidate count — fallback to top-k
+            if (T > 100000) {
+                LLAMA_LOG_WARN("%s: OMP candidate count %u exceeds 100k, falling back to top-k\n", __func__, T);
+                break;
+            }
             // Use partial sort to find the top candidates efficiently.
             std::vector<uint32_t> candidates(T);
             std::iota(candidates.begin(), candidates.end(), 0);

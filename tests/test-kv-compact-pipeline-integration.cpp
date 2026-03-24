@@ -35,8 +35,9 @@
 
 namespace {
 
-int n_passed = 0;
-int n_failed = 0;
+int n_passed  = 0;
+int n_failed  = 0;
+int n_skipped = 0;  // F-C-11: track skipped paths separately from passes
 
 bool check(bool cond, const std::string & msg) {
     if (!cond) {
@@ -294,10 +295,9 @@ int main(int argc, char ** argv) {
                 // Second reclaim on same seq: should handle gracefully
                 // (either succeed as no-op or fail if state is inconsistent).
                 const bool reclaim2 = kv->compacted_prefix_reclaim_live_kv(0);
-                // Either result is acceptable — no crash is the key check.
-                std::printf("  second reclaim returned: %s (no crash = PASS)\n",
-                           reclaim2 ? "true" : "false");
-                n_passed++;
+                // F-C-11: use check() so pass is properly gated on execution
+                check(true, "second reclaim did not crash (returned "
+                      + std::string(reclaim2 ? "true" : "false") + ")");
             }
         }
 
@@ -368,8 +368,9 @@ int main(int argc, char ** argv) {
                     if (cos >= 0.85f) {
                         check(true, "solver 2x cosine >= 0.85");
                     } else {
-                        std::printf("  INFO: solver cosine %.3f < 0.85 (expected on GQA models with surrogate queries)\n", cos);
-                        n_passed++;  // Informational — not a V1 production failure
+                        // F-C-11: skipped path must not inflate pass count
+                        std::printf("  SKIP: solver cosine %.3f < 0.85 (expected on GQA models with surrogate queries)\n", cos);
+                        n_skipped++;
                     }
                 }
             }
@@ -562,12 +563,14 @@ int main(int argc, char ** argv) {
                     if (std::isfinite(cos)) {
                         check(cos >= 0.85f, "nonuniform 2x cosine >= 0.85");
                     } else {
-                        std::printf("  INFO: nonuniform cosine is NaN on tiny model (expected for small head count)\n");
-                        n_passed++;  // Not a failure — tiny model limitation
+                        // F-C-11: skipped path must not inflate pass count
+                        std::printf("  SKIP: nonuniform cosine is NaN on tiny model (expected for small head count)\n");
+                        n_skipped++;
                     }
                 } catch (const std::runtime_error &) {
-                    std::printf("  INFO: nonuniform decode failed on tiny model (expected)\n");
-                    n_passed++;  // Not a failure
+                    // F-C-11: skipped path must not inflate pass count
+                    std::printf("  SKIP: nonuniform decode failed on tiny model (expected)\n");
+                    n_skipped++;
                 }
             }
         }
@@ -712,6 +715,6 @@ int main(int argc, char ** argv) {
     // SUMMARY
     // =========================================================================
     std::printf("\n=== SUMMARY ===\n");
-    std::printf("  %d passed, %d failed\n", n_passed, n_failed);
+    std::printf("  %d passed, %d failed, %d skipped\n", n_passed, n_failed, n_skipped);
     return n_failed > 0 ? 1 : 0;
 }

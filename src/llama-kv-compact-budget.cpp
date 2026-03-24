@@ -304,7 +304,7 @@ std::vector<uint32_t> llama_kv_compact_swap_budget_solver(
     // Start with uniform allocation.
     const uint32_t per_head = total_budget / n_heads;
     std::vector<uint32_t> budgets(n_heads, std::max(per_head, min_per_head));
-    uint32_t allocated = per_head * n_heads;
+    uint32_t allocated = std::accumulate(budgets.begin(), budgets.end(), 0u);
 
     // Distribute remainder to most sensitive heads (highest error at uniform ratio).
     const float inv_T = 1.0f / float(n_prefix_tokens);
@@ -425,25 +425,31 @@ bool llama_kv_compact_load_budget_json(
         // Parse layer and head from "LxHy".
         // Require at least one digit each for layer and head, and the entire
         // key must be consumed (reject "L0H0foo" or "LH0").
+        // F-M-06: overflow guard — reject if digits would overflow uint32_t.
         uint32_t layer = 0;
         uint32_t head = 0;
+        bool overflow = false;
         const char * kp = quote1 + 2; // after "L"
         const char * layer_start = kp;
         while (kp < quote2 && *kp >= '0' && *kp <= '9') {
-            layer = layer * 10 + (*kp - '0');
+            uint32_t digit = (uint32_t)(*kp - '0');
+            if (layer > (UINT32_MAX - digit) / 10) { overflow = true; break; }
+            layer = layer * 10 + digit;
             kp++;
         }
-        if (kp == layer_start || kp >= quote2 || *kp != 'H') {
+        if (overflow || kp == layer_start || kp >= quote2 || *kp != 'H') {
             p = quote2 + 1;
             continue;
         }
         kp++; // skip 'H'
         const char * head_start = kp;
         while (kp < quote2 && *kp >= '0' && *kp <= '9') {
-            head = head * 10 + (*kp - '0');
+            uint32_t digit = (uint32_t)(*kp - '0');
+            if (head > (UINT32_MAX - digit) / 10) { overflow = true; break; }
+            head = head * 10 + digit;
             kp++;
         }
-        if (kp == head_start || kp != quote2) {
+        if (overflow || kp == head_start || kp != quote2) {
             p = quote2 + 1;
             continue;
         }

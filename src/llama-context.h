@@ -237,12 +237,11 @@ public:
     bool set_sampler(llama_seq_id seq_id, llama_sampler * sampler);
 
     // V4-F: auto-compaction state (set via llama_kv_cache_set_auto_compact).
-    // Stores a deep copy of the method string to avoid dangling pointer.
+    // F-M-13: private + accessors.
     struct {
         bool                       enabled = false;
         float                      ratio   = 0.0f;
         struct llama_compact_params params  = llama_compact_default_params();
-        std::string                method_owned; // owns the method string
     } auto_compact;
 
 private:

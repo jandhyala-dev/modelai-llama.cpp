@@ -193,8 +193,12 @@ bool llama_kv_compact_self_study_generate(
         uint32_t seed) {
 
     // llama_batch_get_one() hardcodes sequence 0 (llama.h).
-    // Until we build batches manually, enforce this precondition.
-    GGML_ASSERT(seq_id == 0 && "self-study generation requires seq_id == 0 (llama_batch_get_one limitation)");
+    // F-M-07: Graceful return instead of abort for invalid seq_id.
+    if (seq_id != 0) {
+        LLAMA_LOG_ERROR("%s: self-study generation requires seq_id == 0 (llama_batch_get_one limitation), got %d\n",
+                        __func__, seq_id);
+        return false;
+    }
 
     const llama_model * model = llama_get_model(ctx);
     const llama_vocab * vocab = llama_model_get_vocab(model);
@@ -510,6 +514,12 @@ bool llama_kv_compact_self_study_from_live_kv(
     const uint32_t n_embd_head = model_hparams.n_embd_head_k(0);
     const uint32_t n_head_q    = model_hparams.n_head(0);
 
+    // F-M-29: compute max n_embd_head_k across all layers for conservative budget.
+    uint32_t n_embd_head_max = n_embd_head;
+    for (uint32_t il = 1; il < n_layer; ++il) {
+        n_embd_head_max = std::max(n_embd_head_max, model_hparams.n_embd_head_k(il));
+    }
+
     uint32_t eff_n_rounds = std::max(1u, std::min(config.n_rounds, (uint32_t) LLAMA_KV_COMPACT_MAX_ROUNDS));
     uint32_t eff_n_generate = config.n_generate;
 
@@ -519,7 +529,8 @@ bool llama_kv_compact_self_study_from_live_kv(
     // For Qwen3-14B with defaults (6000 tokens): 40*6000*40*128*4 = 4.9 GB.
     // Auto-reduce n_generate/n_rounds to stay within budget.
     if (config.max_q_capture_mb > 0) {
-        const size_t bytes_per_token = (size_t)n_layer * n_head_q * n_embd_head * sizeof(float);
+        // F-M-29: use max per-layer n_embd_head_k for conservative budget estimate.
+        const size_t bytes_per_token = (size_t)n_layer * n_head_q * n_embd_head_max * sizeof(float);
         const size_t budget_bytes = (size_t)config.max_q_capture_mb * 1024 * 1024;
         const size_t requested_bytes = bytes_per_token * eff_n_generate * eff_n_rounds;
 
@@ -949,12 +960,19 @@ bool llama_kv_compact_chunked_self_study_from_live_kv(
     const uint32_t n_embd_head = model_hparams.n_embd_head_k(0);
     const uint32_t n_head_q    = model_hparams.n_head(0);
 
+    // F-M-29: compute max n_embd_head_k across all layers for conservative budget.
+    uint32_t n_embd_head_max = n_embd_head;
+    for (uint32_t il = 1; il < n_layer; ++il) {
+        n_embd_head_max = std::max(n_embd_head_max, model_hparams.n_embd_head_k(il));
+    }
+
     uint32_t eff_n_rounds   = std::max(1u, std::min(config.n_rounds, (uint32_t)LLAMA_KV_COMPACT_MAX_ROUNDS));
     uint32_t eff_n_generate = config.n_generate;
 
     // Memory budget guard (M-01 fix).
     if (config.max_q_capture_mb > 0) {
-        const size_t bytes_per_token = (size_t)n_layer * n_head_q * n_embd_head * sizeof(float);
+        // F-M-29: use max per-layer n_embd_head_k for conservative budget estimate.
+        const size_t bytes_per_token = (size_t)n_layer * n_head_q * n_embd_head_max * sizeof(float);
         const size_t budget_bytes    = (size_t)config.max_q_capture_mb * 1024 * 1024;
         const size_t requested_bytes = bytes_per_token * eff_n_generate * eff_n_rounds;
 

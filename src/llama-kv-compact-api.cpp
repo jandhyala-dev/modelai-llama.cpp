@@ -28,22 +28,22 @@ static llama_kv_cache * get_kv_cache(llama_context * ctx) {
     }
     auto * kv_iswa = dynamic_cast<llama_kv_cache_iswa *>(mem);
     if (kv_iswa) {
-        return const_cast<llama_kv_cache *>(kv_iswa->get_base());
+        return kv_iswa->get_base();  // m-12: removed unnecessary const_cast
     }
     auto * hybrid = dynamic_cast<llama_memory_hybrid *>(mem);
     if (hybrid) {
-        return const_cast<llama_kv_cache *>(hybrid->get_mem_attn());
+        return hybrid->get_mem_attn();  // m-12: removed unnecessary const_cast
     }
     auto * hybrid_iswa = dynamic_cast<llama_memory_hybrid_iswa *>(mem);
     if (hybrid_iswa) {
-        return const_cast<llama_kv_cache *>(hybrid_iswa->get_mem_attn()->get_base());
+        return hybrid_iswa->get_mem_attn()->get_base();  // m-12: removed unnecessary const_cast
     }
     return nullptr;
 }
 
 struct llama_compact_params llama_compact_default_params(void) {
     struct llama_compact_params params;
-    params.method           = "select";
+    params.method           = LLAMA_COMPACT_METHOD_SELECT;
     params.target_tokens    = -1;
     params.ratio            = 2.0f;
     params.live_suffix_tokens = 0;
@@ -77,7 +77,7 @@ int32_t llama_kv_cache_compact(
     }
 
     // Determine method.
-    const std::string method = params.method ? params.method : "select";
+    const enum llama_compact_method method = params.method;
 
     // Determine compactable range.
     const llama_pos pos_max = kv->seq_pos_max(seq_id);
@@ -86,6 +86,11 @@ int32_t llama_kv_cache_compact(
         return -1;
     }
     const llama_pos live_suffix_pos0 = pos_max + 1 - params.live_suffix_tokens;
+    if (live_suffix_pos0 < 0) {
+        LLAMA_LOG_ERROR("%s: live_suffix_tokens (%d) exceeds sequence length (%d)\n",
+                        __func__, params.live_suffix_tokens, pos_max + 1);
+        return -1;
+    }
     if (live_suffix_pos0 <= params.p0) {
         LLAMA_LOG_ERROR("%s: no compactable tokens (pos_max=%d, live_suffix=%d, p0=%d)\n",
                         __func__, pos_max, params.live_suffix_tokens, params.p0);
@@ -121,34 +126,43 @@ int32_t llama_kv_cache_compact(
     llama_kv_compact_pipeline_stats stats = {};
     bool ok = false;
 
-    if (method == "select") {
-        ok = kv->compacted_prefix_select_from_live_kv(
-            seq_id, target_tokens, live_suffix_pos0, &stats, params.p0);
-    } else if (method == "solver") {
-        ok = kv->compacted_prefix_fit_from_live_kv(
-            seq_id, target_tokens, live_suffix_pos0, &stats, params.p0,
-            max_queries, nnls_iters, lambda);
-    } else if (method == "omp") {
-        ok = kv->compacted_prefix_omp_from_live_kv(
-            seq_id, target_tokens, live_suffix_pos0, &stats, params.p0,
-            max_queries, nnls_iters, lambda);
-    } else if (method == "nonuniform") {
-        ok = kv->compacted_prefix_nonuniform_from_live_kv(
-            seq_id, target_tokens, live_suffix_pos0, &stats, params.p0,
-            max_queries, nnls_iters, lambda);
-    } else if (method == "chunked") {
-        ok = kv->compacted_prefix_chunked_from_live_kv(
-            seq_id, target_tokens, live_suffix_pos0, &stats, params.p0,
-            max_queries, nnls_iters, lambda);
-    } else {
-        LLAMA_LOG_ERROR("%s: unknown method '%s' (supported: select, solver, omp, nonuniform, chunked)\n",
-                        __func__, method.c_str());
-        return -1;
+    static const char * method_names[] = { "select", "solver", "omp", "nonuniform", "chunked" };
+    const char * method_name = (method >= 0 && method <= LLAMA_COMPACT_METHOD_CHUNKED) ? method_names[method] : "unknown";
+
+    switch (method) {
+        case LLAMA_COMPACT_METHOD_SELECT:
+            ok = kv->compacted_prefix_select_from_live_kv(
+                seq_id, target_tokens, live_suffix_pos0, &stats, params.p0);
+            break;
+        case LLAMA_COMPACT_METHOD_SOLVER:
+            ok = kv->compacted_prefix_fit_from_live_kv(
+                seq_id, target_tokens, live_suffix_pos0, &stats, params.p0,
+                max_queries, nnls_iters, lambda);
+            break;
+        case LLAMA_COMPACT_METHOD_OMP:
+            ok = kv->compacted_prefix_omp_from_live_kv(
+                seq_id, target_tokens, live_suffix_pos0, &stats, params.p0,
+                max_queries, nnls_iters, lambda);
+            break;
+        case LLAMA_COMPACT_METHOD_NONUNIFORM:
+            ok = kv->compacted_prefix_nonuniform_from_live_kv(
+                seq_id, target_tokens, live_suffix_pos0, &stats, params.p0,
+                max_queries, nnls_iters, lambda);
+            break;
+        case LLAMA_COMPACT_METHOD_CHUNKED:
+            ok = kv->compacted_prefix_chunked_from_live_kv(
+                seq_id, target_tokens, live_suffix_pos0, &stats, params.p0,
+                max_queries, nnls_iters, lambda);
+            break;
+        default:
+            LLAMA_LOG_ERROR("%s: unknown method %d (supported: select=0, solver=1, omp=2, nonuniform=3, chunked=4)\n",
+                            __func__, (int)method);
+            return -1;
     }
 
     if (!ok) {
         LLAMA_LOG_ERROR("%s: compaction failed (method=%s, target=%u)\n",
-                        __func__, method.c_str(), target_tokens);
+                        __func__, method_name, target_tokens);
         return -1;
     }
 
@@ -164,7 +178,7 @@ int32_t llama_kv_cache_compact(
     }
 
     LLAMA_LOG_INFO("%s: compacted seq %d: %u -> %u tokens (method=%s, prefix_ratio=%.1fx)\n",
-                   __func__, seq_id, compactable, target_tokens, method.c_str(),
+                   __func__, seq_id, compactable, target_tokens, method_name,
                    (float)compactable / target_tokens);
 
     return (int32_t)target_tokens;
@@ -186,9 +200,6 @@ void llama_kv_cache_set_auto_compact(
     ctx->auto_compact.enabled = true;
     ctx->auto_compact.ratio   = ratio;
     ctx->auto_compact.params  = params;
-    // Deep-copy the method string to avoid dangling pointer.
-    ctx->auto_compact.method_owned = params.method ? params.method : "select";
-    ctx->auto_compact.params.method = ctx->auto_compact.method_owned.c_str();
-    LLAMA_LOG_INFO("%s: auto-compaction enabled (ratio=%.1f, method=%s)\n",
-                   __func__, ratio, ctx->auto_compact.params.method);
+    LLAMA_LOG_INFO("%s: auto-compaction enabled (ratio=%.1f, method=%d)\n",
+                   __func__, ratio, (int)params.method);
 }

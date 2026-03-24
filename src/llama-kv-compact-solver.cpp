@@ -13,12 +13,13 @@
 
 #include "llama-kv-compact-solver.h"
 #include "llama-kv-compact-math.h"
+#include "llama-impl.h"  // F-M-23: LLAMA_LOG_WARN / LLAMA_LOG_DEBUG
 
 #include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <limits>
-#include <stdexcept>
+// m-01: removed dead #include <stdexcept>
 
 #ifdef __APPLE__
 #define ACCELERATE_NEW_LAPACK
@@ -42,6 +43,16 @@ bool solve_spd_cholesky(
         uint32_t n,
         std::vector<float> & b,
         uint32_t nrhs) {
+    // F-M-27: Pre-check diagonal minimum — reject near-singular matrices early
+    {
+        float min_diag = std::numeric_limits<float>::max();
+        for (uint32_t i = 0; i < n; ++i) {
+            min_diag = std::min(min_diag, a[size_t(i) * n + i]);
+        }
+        if (min_diag <= 1e-30f) {
+            return false;  // near-singular — fall to next solver tier
+        }
+    }
     for (uint32_t i = 0; i < n; ++i) {
         for (uint32_t j = 0; j <= i; ++j) {
             float sum = a[size_t(i) * n + j];
@@ -726,6 +737,8 @@ bool solve_values_v2(
     const uint32_t n = x.rows;
     const uint32_t t = x.cols;
 
+    // F-M-23: tier transition logging for solver cascade debugging.
+
     // Tier 1: LAPACK sgels (QR-based)
 #if LLAMA_KV_COMPACT_HAS_LAPACK
     {
@@ -743,6 +756,7 @@ bool solve_values_v2(
                 return true;
             }
         }
+        LLAMA_LOG_DEBUG("solve_values_v2: Tier 1 (LAPACK sgels) failed — falling back to Tier 2 (n=%u, t=%u)\n", n, t);
     }
 #endif
 
@@ -766,20 +780,25 @@ bool solve_values_v2(
         }
     }
 
+    LLAMA_LOG_DEBUG("solve_values_v2: Tier 2 (Cholesky+sym) failed — falling back to Tier 3 (n=%u, t=%u, lam=%.2e)\n", n, t, lam);
+
     // Tier 3: Aggressive Cholesky — escalate lambda
     for (int attempt = 0; attempt < 5; ++attempt) {
         lam = std::max(lam * 10.0f, 1e-4f);
         if (n < t) {
             if (solve_least_squares_underdetermined(x, y, lam, out) && !matrix_has_nonfinite(out)) {
+                LLAMA_LOG_DEBUG("solve_values_v2: Tier 3 succeeded at attempt %d (lam=%.2e)\n", attempt, lam);
                 return true;
             }
         } else {
             if (solve_least_squares_cholesky_sym(x, y, lam, out) && !matrix_has_nonfinite(out)) {
+                LLAMA_LOG_DEBUG("solve_values_v2: Tier 3 succeeded at attempt %d (lam=%.2e)\n", attempt, lam);
                 return true;
             }
         }
     }
 
+    LLAMA_LOG_DEBUG("solve_values_v2: all 3 tiers exhausted (n=%u, t=%u)\n", n, t);
     return false;
 }
 
@@ -797,6 +816,9 @@ bool llama_kv_compact_fit_beta(
         std::vector<float> & beta_out,
         float * partition_sum_relative_error) {
     if (queries.cols == 0 || full_keys.cols != queries.cols || compacted_keys.cols != queries.cols) {
+        // F-M-23: warn on dimension mismatch in public API
+        LLAMA_LOG_WARN("fit_beta: dimension mismatch — q.cols=%u fk.cols=%u ck.cols=%u\n",
+                       queries.cols, full_keys.cols, compacted_keys.cols);
         return false;
     }
 
@@ -811,7 +833,8 @@ bool llama_kv_compact_fit_beta(
 
     // Max-shift rescaling (KEEP from V1 — correct for C++ fp32)
     for (uint32_t qi = 0; qi < queries.rows; ++qi) {
-        const float scale = std::exp(max_compact[qi] - max_full[qi]);
+        const float shift = std::clamp(max_compact[qi] - max_full[qi], -80.0f, 80.0f);  // F-M-26: prevent exp overflow/underflow
+        const float scale = std::exp(shift);
         for (uint32_t ki = 0; ki < compacted_keys.rows; ++ki) {
             exp_compact(qi, ki) *= scale;
         }
@@ -820,6 +843,9 @@ bool llama_kv_compact_fit_beta(
     // Solve NNLS
     std::vector<float> weights;
     if (!solve_nnls_v2(exp_compact, target, opts, weights)) {
+        // F-M-23: warn when NNLS solver fails
+        LLAMA_LOG_WARN("fit_beta: NNLS solver failed (n=%u, t=%u)\n",
+                       exp_compact.rows, exp_compact.cols);
         return false;
     }
 
@@ -859,6 +885,10 @@ bool llama_kv_compact_fit_values(
         llama_kv_compact_matrix & compacted_values_out) {
     if (queries.cols == 0 || full_keys.cols != queries.cols || compacted_keys.cols != queries.cols ||
         full_values.rows != full_keys.rows || beta.size() != compacted_keys.rows) {
+        // F-M-23: warn on dimension mismatch in public API
+        LLAMA_LOG_WARN("fit_values: dimension mismatch — q.cols=%u fk.cols=%u ck.cols=%u fv.rows=%u fk.rows=%u beta.size=%zu ck.rows=%u\n",
+                       queries.cols, full_keys.cols, compacted_keys.cols,
+                       full_values.rows, full_keys.rows, beta.size(), compacted_keys.rows);
         return false;
     }
 
@@ -892,7 +922,13 @@ bool llama_kv_compact_fit_values(
     float effective_lambda = compute_effective_lambda(x, opts.lambda, opts.ridge_scale);
 
     // Solve via 3-tier cascade
-    return solve_values_v2(x, y, effective_lambda, compacted_values_out);
+    if (!solve_values_v2(x, y, effective_lambda, compacted_values_out)) {
+        // F-M-23: warn when 3-tier cascade fails
+        LLAMA_LOG_WARN("fit_values: 3-tier cascade failed (n=%u, t=%u, lambda=%.2e)\n",
+                       x.rows, x.cols, effective_lambda);
+        return false;
+    }
+    return true;
 }
 
 // -----------------------------------------------------------------------
@@ -906,6 +942,20 @@ void llama_kv_compact_attention_output(
         const std::vector<float> * beta,
         llama_kv_compact_matrix & output,
         std::vector<float> * partition_sums) {
+    // F-C-23: Guard against empty inputs and dimension mismatches.
+    if (keys.rows == 0 || queries.rows == 0) {
+        output.resize(queries.rows, values.cols);
+        if (partition_sums) {
+            partition_sums->assign(queries.rows, 0.0f);
+        }
+        return;
+    }
+    GGML_ASSERT(queries.cols == keys.cols && "Q/K dimension mismatch");
+    GGML_ASSERT(keys.rows == values.rows && "K/V row count mismatch");
+    if (beta) {
+        GGML_ASSERT(beta->size() == keys.rows && "beta size must match key count");
+    }
+
     output.resize(queries.rows, values.cols);
     if (partition_sums) {
         partition_sums->assign(queries.rows, 0.0f);

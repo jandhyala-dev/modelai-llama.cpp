@@ -200,8 +200,10 @@ int main(int argc, char ** argv) {
     // LoRA adapters hotswap
     ctx_http.get ("/lora-adapters",       ex_wrapper(routes.get_lora_adapters));
     ctx_http.post("/lora-adapters",       ex_wrapper(routes.post_lora_adapters));
-    // KV cache compaction
-    ctx_http.post("/compact",             ex_wrapper(routes.post_compact));
+    // KV cache compaction — F-C-20: gated behind --endpoint-compact (default: disabled)
+    if (params.endpoint_compact) {
+        ctx_http.post("/compact",             ex_wrapper(routes.post_compact));
+    }
     // Save & load slots
     ctx_http.get ("/slots",               ex_wrapper(routes.get_slots));
     ctx_http.post("/slots/:id_slot",      ex_wrapper(routes.post_slots));

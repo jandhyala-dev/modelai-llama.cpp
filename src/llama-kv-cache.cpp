@@ -535,14 +535,28 @@ llama_pos llama_kv_cache::seq_pos_min(llama_seq_id seq_id) const {
     GGML_ASSERT(seq_id >= 0 && (size_t) seq_id < seq_to_stream.size());
 
     const auto & cells = v_cells[seq_to_stream[seq_id]];
-    return cells.seq_pos_min(seq_id);
+    llama_pos live_min = cells.seq_pos_min(seq_id);
+
+    // F-M-01: include compacted prefix bounds when active.
+    const llama_pos prefix_min = compacted_prefix.seq_pos_min(seq_id);
+    if (prefix_min >= 0) {
+        return (live_min >= 0) ? std::min(live_min, prefix_min) : prefix_min;
+    }
+    return live_min;
 }
 
 llama_pos llama_kv_cache::seq_pos_max(llama_seq_id seq_id) const {
     GGML_ASSERT(seq_id >= 0 && (size_t) seq_id < seq_to_stream.size());
 
     const auto & cells = v_cells[seq_to_stream[seq_id]];
-    return cells.seq_pos_max(seq_id);
+    llama_pos live_max = cells.seq_pos_max(seq_id);
+
+    // F-M-01: include compacted prefix bounds when active.
+    const llama_pos prefix_max = compacted_prefix.seq_pos_max(seq_id);
+    if (prefix_max >= 0) {
+        return (live_max >= 0) ? std::max(live_max, prefix_max) : prefix_max;
+    }
+    return live_max;
 }
 
 std::map<ggml_backend_buffer_type_t, size_t> llama_kv_cache::memory_breakdown() const {
@@ -698,6 +712,8 @@ void llama_kv_cache::compacted_prefix_pack_stream_tensors(
         }
 
         const uint32_t n_embd_v_gqa = hparams.n_embd_v_gqa(layer.il);
+        // F-M-33: Guard that V type is not a block-quantized type (element-wise access assumes blck_size==1).
+        GGML_ASSERT(ggml_blck_size(v->type) == 1 && "compacted V copy assumes non-block-quantized type");
         const size_t v_size_el = ggml_type_size(v->type);
         std::vector<uint8_t> packed(size_t(n_live) * v_size_el);
 
@@ -1171,10 +1187,12 @@ bool llama_kv_cache::compacted_prefix_forces_non_flash() const {
     if (!has_compacted_prefix()) {
         return false;
     }
-    // Compaction currently enforces seq_id == 0.
-    const auto * state = compacted_prefix.get_seq(0);
-    if (state && state->is_execution_enabled() && !state->is_zero_beta()) {
-        return true;
+    // F-M-03: iterate all sequences, not just seq_id == 0.
+    for (llama_seq_id sid = 0; sid < (llama_seq_id) seq_to_stream.size(); ++sid) {
+        const auto * state = compacted_prefix.get_seq(sid);
+        if (state && state->is_execution_enabled() && !state->is_zero_beta()) {
+            return true;
+        }
     }
     return false;
 }

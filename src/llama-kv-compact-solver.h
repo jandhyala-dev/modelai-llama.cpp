@@ -1,5 +1,7 @@
 #pragma once
 
+#include "ggml.h"
+
 #include <cstdint>
 #include <vector>
 
@@ -17,11 +19,11 @@ struct llama_kv_compact_matrix {
         data.assign(size_t(rows_) * cols_, 0.0f);
     }
 
-    float * row(uint32_t r) { return data.data() + size_t(r) * cols; }
-    const float * row(uint32_t r) const { return data.data() + size_t(r) * cols; }
+    float * row(uint32_t r) { GGML_ASSERT(r < rows); return data.data() + size_t(r) * cols; }
+    const float * row(uint32_t r) const { GGML_ASSERT(r < rows); return data.data() + size_t(r) * cols; }
 
-    float & operator()(uint32_t r, uint32_t c) { return data[size_t(r) * cols + c]; }
-    float   operator()(uint32_t r, uint32_t c) const { return data[size_t(r) * cols + c]; }
+    float & operator()(uint32_t r, uint32_t c) { GGML_ASSERT(r < rows && c < cols); return data[size_t(r) * cols + c]; }
+    float   operator()(uint32_t r, uint32_t c) const { GGML_ASSERT(r < rows && c < cols); return data[size_t(r) * cols + c]; }
 };
 
 // Ridge scaling modes matching MIT reference (algorithms/base.py:146-161)

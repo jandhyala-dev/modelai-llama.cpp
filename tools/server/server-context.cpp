@@ -65,6 +65,19 @@ static double tokens_per_second(uint64_t n_tokens, uint64_t t_ms) {
         : 0.0;
 }
 
+// F-M-20: Compaction timeout in milliseconds — configurable via LLAMA_COMPACT_TIMEOUT_MS env var.
+// Default: 30000 ms (30 seconds). Set to 0 to disable timeout.
+static int64_t get_compact_timeout_ms() {
+    static const int64_t timeout = [] {
+        const char * env = std::getenv("LLAMA_COMPACT_TIMEOUT_MS");
+        if (env && env[0] != '\0') {
+            return (int64_t) std::atol(env);
+        }
+        return (int64_t) 30000;
+    }();
+    return timeout;
+}
+
 // V1 beta pipeline allowlist — configurable via LLAMA_COMPACT_ALLOWED_METHODS env var.
 // Default: "select" only.  Comma-separated list (e.g. "select,solver").
 static const std::set<std::string> & get_compact_allowed_methods() {
@@ -103,9 +116,10 @@ static bool is_context_q_capture_enabled() {
     return enabled;
 }
 
-// Get the base llama_kv_cache from a context (handles plain, iSWA, and hybrid layouts).
+// F-M-16: Get the base llama_kv_cache from a context (handles plain, iSWA, and hybrid layouts).
 // Returns nullptr if the context has no KV cache or uses an unsupported memory type.
-static const llama_kv_cache * get_kv_cache_base(llama_context * ctx) {
+// Non-const overload avoids const_cast at call sites.
+static llama_kv_cache * get_kv_cache_base_mut(llama_context * ctx) {
     if (!ctx) {
         return nullptr;
     }
@@ -119,21 +133,25 @@ static const llama_kv_cache * get_kv_cache_base(llama_context * ctx) {
     }
     auto * kv_iswa = dynamic_cast<llama_kv_cache_iswa *>(mem);
     if (kv_iswa) {
-        return kv_iswa->get_base();
+        return const_cast<llama_kv_cache *>(kv_iswa->get_base());
     }
     // Hybrid models (attention + recurrent/SSM layers, e.g. Qwen3.5-35B-A3B):
     // extract the attention KV cache, compaction applies only to attention layers.
-    // llama_memory_hybrid: non-SWA hybrid — mem_attn is llama_kv_cache directly
     auto * hybrid = dynamic_cast<llama_memory_hybrid *>(mem);
     if (hybrid) {
-        return hybrid->get_mem_attn();
+        return const_cast<llama_kv_cache *>(hybrid->get_mem_attn());
     }
-    // llama_memory_hybrid_iswa: SWA hybrid — mem_attn is llama_kv_cache_iswa
     auto * hybrid_iswa = dynamic_cast<llama_memory_hybrid_iswa *>(mem);
     if (hybrid_iswa) {
-        return hybrid_iswa->get_mem_attn()->get_base();
+        return const_cast<llama_kv_cache *>(hybrid_iswa->get_mem_attn()->get_base());
     }
+    // F-M-17: Log diagnostic for unrecognized memory types.
+    LLAMA_LOG_WARN("%s: unrecognized memory type — compaction unavailable\n", __func__);
     return nullptr;
+}
+
+static const llama_kv_cache * get_kv_cache_base(llama_context * ctx) {
+    return get_kv_cache_base_mut(ctx);
 }
 
 static json build_modelai_server_capabilities(const common_params & params, const server_context_meta & meta, bool is_router_server, bool compaction_enabled = false, bool compaction_flash_overridden = false) {
@@ -386,6 +404,9 @@ struct server_slot {
     // V4-F: One-shot guard for auto-compaction. Set true after first auto-compact
     // attempt per request. Reset on new request (launch_slot_with_task).
     bool auto_compact_attempted = false;
+
+    // F-M-18: Guard against overlapping /compact requests on the same slot.
+    bool compaction_pending = false;
 
     void reset() {
         SLT_DBG(*this, "%s", "\n");
@@ -2249,15 +2270,25 @@ private:
                         queue_tasks.defer(std::move(task));
                         break;
                     }
+                    // F-M-18: Reject if another compaction is already in-flight for this slot.
+                    if (slot->compaction_pending) {
+                        send_error(task, "Compaction already in progress for this slot", ERROR_TYPE_INVALID_REQUEST);
+                        break;
+                    }
+                    slot->compaction_pending = true;
+                    // Ensure compaction_pending is cleared on all exit paths.
+                    auto clear_pending = [&]() { slot->compaction_pending = false; };
 
                     // Get KV cache
-                    auto * kv = const_cast<llama_kv_cache *>(get_kv_cache_base(ctx));
+                    auto * kv = get_kv_cache_base_mut(ctx);
                     if (kv == nullptr) {
+                        clear_pending();
                         send_error(task, "No KV cache available", ERROR_TYPE_SERVER);
                         break;
                     }
                     if (!kv->supports_compaction()) {
                         const auto reason = kv->compaction_unsupported_reason();
+                        clear_pending();
                         send_error(task, "Compaction not supported: " + (reason.empty() ? "unknown" : reason), ERROR_TYPE_NOT_SUPPORTED);
                         break;
                     }
@@ -2276,6 +2307,7 @@ private:
                     const auto & v1_allowlist = get_compact_allowed_methods();
 
                     if (valid_methods.find(method) == valid_methods.end()) {
+                        clear_pending();
                         send_error(task, "Invalid compaction method. Supported: select, solver, omp, self_study, chunked_self_study, nonuniform, chunked, on_policy, sequential_on_policy, context_prefill", ERROR_TYPE_INVALID_REQUEST);
                         break;
                     }
@@ -2286,6 +2318,7 @@ private:
                             allowed_str += m;
                         }
                         SRV_WRN("compaction method '%s' rejected by V1 beta allowlist (caller tried a valid but gated method)\n", method.c_str());
+                        clear_pending();
                         send_error(task, "Method '" + method + "' is not in the V1 beta allowlist. Allowed: " + allowed_str, ERROR_TYPE_INVALID_REQUEST);
                         break;
                     }
@@ -2304,6 +2337,7 @@ private:
                                 "(throughput may regress) — proceeding at caller's risk\n", prompt_tokens);
                     }
                     if (prompt_tokens == 0) {
+                        clear_pending();
                         send_error(task, "Slot has no prompt tokens to compact", ERROR_TYPE_INVALID_REQUEST);
                         break;
                     }
@@ -2319,12 +2353,14 @@ private:
                         target_tokens = (uint32_t) cp.target_tokens;
                     } else {
                         if (cp.ratio < 1.0f) {
+                            clear_pending();
                             send_error(task, "Compression ratio must be >= 1.0", ERROR_TYPE_INVALID_REQUEST);
                             break;
                         }
                         target_tokens = std::max(1u, (uint32_t)(compactable / cp.ratio));
                     }
                     if (target_tokens >= compactable) {
+                        clear_pending();
                         send_error(task, "Target tokens must be less than compactable tokens", ERROR_TYPE_INVALID_REQUEST);
                         break;
                     }
@@ -2417,6 +2453,7 @@ private:
                             // Fallback: repeat-prefill to capture Q (doubles prefill cost).
                             // Note: repeat-prefill requires p0=0 (llama_batch_get_one limitation).
                             if (cp.p0 != 0) {
+                                clear_pending();
                                 send_error(task, "context_prefill repeat-prefill fallback requires p0=0", ERROR_TYPE_INVALID_REQUEST);
                                 break;
                             }
@@ -2430,12 +2467,14 @@ private:
                     }
 
                     if (!ok) {
+                        clear_pending();
                         send_error(task, "Compaction failed — check server logs for details", ERROR_TYPE_SERVER);
                         break;
                     }
 
                     // Enable execution and optionally reclaim live KV
                     if (!kv->compacted_prefix_set_execution(seq_id, true)) {
+                        clear_pending();
                         send_error(task, "Failed to enable compacted prefix execution", ERROR_TYPE_SERVER);
                         break;
                     }
@@ -2460,6 +2499,12 @@ private:
 
                     const int64_t t_end = ggml_time_us();
                     const double t_compact_ms = (t_end - t_start) / 1000.0;
+                    // F-M-20: Warn if compaction exceeded timeout threshold.
+                    const int64_t timeout_ms = get_compact_timeout_ms();
+                    if (timeout_ms > 0 && t_compact_ms > timeout_ms) {
+                        SRV_WRN("compaction took %.0f ms (exceeds timeout %lld ms) — consider reducing compression ratio or using a faster method\n",
+                                t_compact_ms, (long long)timeout_ms);
+                    }
                     const llama_pos pos_max_after = mem ? llama_memory_seq_pos_max(mem, seq_id) : -1;
                     uint32_t n_kv_after = pos_max_after >= 0 ? (uint32_t)(pos_max_after + 1) : 0;
 
@@ -2479,6 +2524,7 @@ private:
                     res->active_n_kv_before = n_kv_before;
                     res->active_n_kv_after  = n_kv_after;
                     res->reclaimed          = reclaimed;
+                    clear_pending();
                     queue_results.send(std::move(res));
                 } break;
         }
@@ -2859,7 +2905,7 @@ private:
                                     // while the compacted prefix holds the data. The prompt has
                                     // diverged (partial match), so the compacted prefix is no
                                     // longer valid — clear it and restart from scratch.
-                                    auto * kv_mem = const_cast<llama_kv_cache *>(get_kv_cache_base(ctx));
+                                    auto * kv_mem = get_kv_cache_base_mut(ctx);
                                     if (kv_mem && kv_mem->has_compacted_prefix()) {
                                         SLT_WRN(slot, "prompt diverged after compaction (n_past = %d) — clearing compacted prefix and restarting\n", n_past);
                                         kv_mem->compacted_prefix_clear(slot.id, true);

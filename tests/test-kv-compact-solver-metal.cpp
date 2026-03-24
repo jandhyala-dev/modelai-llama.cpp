@@ -75,7 +75,8 @@ static void cpu_xtx(const float * X, uint32_t n, uint32_t t, float * out) {
 int main() {
     auto * ctx = llama_kv_compact_metal_create();
     if (!ctx) {
-        std::printf("test-kv-compact-solver-metal: Metal unavailable — SKIP\n");
+        // m-26: explicit SKIP message when Metal is unavailable (return 0 = success)
+        std::printf("SKIP: Metal not available\n");
         return 0;
     }
 

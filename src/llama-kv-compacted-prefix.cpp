@@ -169,8 +169,10 @@ void io_write_bytes(llama_io_write_i & io, const std::vector<uint8_t> & data) {
 void io_read_bytes(llama_io_read_i & io, std::vector<uint8_t> & data) {
     uint64_t n_bytes = 0;
     io_read_pod(io, n_bytes);
-    if (n_bytes > std::numeric_limits<size_t>::max()) {
-        throw std::runtime_error("compacted-prefix byte payload too large");
+    // F-C-06: Practical max payload guard (2 GB) — the size_t::max check is tautological on 64-bit.
+    constexpr uint64_t max_payload = uint64_t(2) * 1024 * 1024 * 1024;
+    if (n_bytes > max_payload) {
+        throw std::runtime_error("compacted-prefix byte payload too large (" + std::to_string(n_bytes) + " bytes)");
     }
     data.resize((size_t) n_bytes);
     if (n_bytes > 0) {
@@ -261,7 +263,8 @@ void llama_compacted_prefix_store::sequence_state::clear(bool data) {
 }
 
 uint32_t llama_compacted_prefix_store::sequence_state::compacted_token_count() const {
-    return logical_positions.size();
+    return static_cast<uint32_t>(std::min(logical_positions.size(),
+                                          size_t(std::numeric_limits<uint32_t>::max())));  // m-09: fix narrowing warning
 }
 
 llama_pos llama_compacted_prefix_store::sequence_state::pos_min() const {
@@ -558,11 +561,23 @@ void llama_compacted_prefix_store::seq_div(llama_seq_id seq_id, llama_pos p0, ll
         new_suffix_pos0 /= d;
     }
 
-    // Validate the proposed state before committing.
-    sequence_state proposed = state;
-    proposed.logical_positions = new_positions;
-    proposed.live_suffix_pos0 = new_suffix_pos0;
-    validate_positions(proposed);
+    // F-M-30: lightweight position-only validation — avoid copying full state
+    // (which includes per-layer data).  validate_positions only reads
+    // logical_positions and live_suffix_pos0, so validate in-place on temps.
+    {
+        if (new_suffix_pos0 < -1) {
+            throw std::runtime_error("compacted-prefix live_suffix_pos0 must remain >= -1");
+        }
+        std::set<llama_pos> seen;
+        for (llama_pos pos : new_positions) {
+            if (pos < 0) {
+                throw std::runtime_error("compacted-prefix positions must remain non-negative");
+            }
+            if (!seen.insert(pos).second) {
+                throw std::runtime_error("compacted-prefix positions must remain unique");
+            }
+        }
+    }
 
     state.logical_positions = std::move(new_positions);
     state.live_suffix_pos0 = new_suffix_pos0;
@@ -670,6 +685,11 @@ void llama_compacted_prefix_store::state_write(llama_io_write_i & io, llama_seq_
 }
 
 bool llama_compacted_prefix_store::state_read(llama_io_read_i & io, llama_seq_id seq_id) {
+    // F-C-21: Clear existing state for full restore (seq_id == -1) to avoid stale data.
+    if (seq_id < 0) {
+        clear(false);
+    }
+
     uint32_t version = 0;
     io_read_pod(io, version);
     if (version != LLAMA_COMPACTED_PREFIX_STATE_VERSION) {
@@ -757,13 +777,18 @@ bool llama_compacted_prefix_store::state_read(llama_io_read_i & io, llama_seq_id
                 throw std::runtime_error("compacted-prefix token count mismatch during restore");
             }
 
+            // F-C-07: Validate expected sizes BEFORE reading payloads to avoid allocating garbage sizes.
+            const size_t expected_k_size = compacted_tensor_bytes(layer.layout.type_k, layer.layout.n_embd_head_k * n_compacted_tokens, layer.layout.n_head_kv);
+            const size_t expected_beta_size = size_t(layer.layout.n_head_kv) * n_compacted_tokens;
+            const size_t expected_v_size = compacted_tensor_bytes(layer.layout.type_v, layer.layout.n_embd_head_v * n_compacted_tokens, layer.layout.n_head_kv);
+
             io_read_bytes(io, layer.k_data);
             io_read_floats(io, layer.beta_data);
             io_read_bytes(io, layer.v_data);
 
-            if (layer.k_data.size() != compacted_tensor_bytes(layer.layout.type_k, layer.layout.n_embd_head_k * n_compacted_tokens, layer.layout.n_head_kv) ||
-                layer.beta_data.size() != size_t(layer.layout.n_head_kv) * n_compacted_tokens ||
-                layer.v_data.size() != compacted_tensor_bytes(layer.layout.type_v, layer.layout.n_embd_head_v * n_compacted_tokens, layer.layout.n_head_kv)) {
+            if (layer.k_data.size() != expected_k_size ||
+                layer.beta_data.size() != expected_beta_size ||
+                layer.v_data.size() != expected_v_size) {
                 throw std::runtime_error("compacted-prefix payload size mismatch during restore");
             }
         }

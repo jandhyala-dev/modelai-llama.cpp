@@ -205,6 +205,8 @@ bool llama_kv_compact_fit_from_live_kv(
 
     auto * seq = kv.get_compacted_prefix()->get_seq(seq_id);
     if (seq == nullptr || !seq->enabled || seq->layers.size() != layouts.size()) {
+        // F-C-16: Clean up configured state on validation failure.
+        kv.compacted_prefix_clear(seq_id, true);
         return false;
     }
 
@@ -440,6 +442,8 @@ bool llama_kv_compact_omp_from_live_kv(
 
     auto * seq = kv.get_compacted_prefix()->get_seq(seq_id);
     if (seq == nullptr || !seq->enabled || seq->layers.size() != layouts.size()) {
+        // F-C-16: Clean up configured state on validation failure.
+        kv.compacted_prefix_clear(seq_id, true);
         return false;
     }
 
@@ -750,9 +754,7 @@ bool llama_kv_compact_nonuniform_from_live_kv(
     double t_selection_ms  = 0.0;
     double t_v_extract_ms  = 0.0;
     double t_kv_write_ms   = 0.0;
-    GGML_UNUSED(t_k_extract_ms); GGML_UNUSED(t_attn_score_ms);
-    GGML_UNUSED(t_selection_ms); GGML_UNUSED(t_v_extract_ms);
-    GGML_UNUSED(t_kv_write_ms);
+    // F-M-10: removed misleading GGML_UNUSED — these variables are assigned and read below.
 
     const auto t_query_start = std::chrono::steady_clock::now();
     for (size_t li = 0; li < layouts.size(); ++li) {
@@ -1188,9 +1190,7 @@ bool llama_kv_compact_chunked_from_live_kv(
     double t_selection_ms  = 0.0;
     double t_v_extract_ms  = 0.0;
     double t_kv_write_ms   = 0.0;
-    GGML_UNUSED(t_k_extract_ms); GGML_UNUSED(t_attn_score_ms);
-    GGML_UNUSED(t_selection_ms); GGML_UNUSED(t_v_extract_ms);
-    GGML_UNUSED(t_kv_write_ms);
+    // F-M-10: removed misleading GGML_UNUSED — these variables are assigned and read below.
 
     // Collect selected positions from all chunks.
     std::vector<uint32_t> all_selected_local;
@@ -1289,6 +1289,8 @@ bool llama_kv_compact_chunked_from_live_kv(
 
     auto * seq_state = kv.get_compacted_prefix()->get_seq(seq_id);
     if (seq_state == nullptr || !seq_state->enabled || seq_state->layers.size() != layouts.size()) {
+        // F-C-16: Clean up configured state on validation failure.
+        kv.compacted_prefix_clear(seq_id, true);
         return false;
     }
 

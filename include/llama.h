@@ -349,7 +349,7 @@ extern "C" {
         uint32_t yarn_orig_ctx;    // YaRN original context size
         float    defrag_thold;     // [DEPRECATED] defragment the KV cache if holes/size > thold, <= 0 disabled (default)
 
-        ggml_backend_sched_eval_callback cb_eval;
+        ggml_backend_sched_eval_callback cb_eval; // F-M-12: alias: llama_eval_callback
         void * cb_eval_user_data;
 
         enum ggml_type type_k; // data type for K cache [EXPERIMENTAL]
@@ -416,23 +416,28 @@ extern "C" {
     // lora adapter
     struct llama_adapter_lora;
 
+    // F-M-12: Fork-owned eval callback type alias (insulates public API from ggml internals).
+    typedef ggml_backend_sched_eval_callback llama_eval_callback;
+
+    // F-C-19: Compaction method enum (replaces const char * method).
+    enum llama_compact_method {
+        LLAMA_COMPACT_METHOD_SELECT     = 0, // positional truncation, keep first N, zero beta (fast, default)
+        LLAMA_COMPACT_METHOD_SOLVER     = 1, // score-based selection + beta/C_v fitting (higher quality)
+        LLAMA_COMPACT_METHOD_OMP        = 2, // orthogonal matching pursuit selection + solver fitting
+        LLAMA_COMPACT_METHOD_NONUNIFORM = 3, // per-head budget allocation + solver fitting
+        LLAMA_COMPACT_METHOD_CHUNKED    = 4, // chunked solver for long contexts
+    };
+
     // KV cache compaction parameters (arXiv:2602.16284 Attention Matching)
-    //
-    // Methods:
-    //   "select"     — positional truncation, keep first N, zero beta (fast, default)
-    //   "solver"     — score-based selection + beta/C_v fitting (higher quality)
-    //   "omp"        — orthogonal matching pursuit selection + solver fitting
-    //   "nonuniform" — per-head budget allocation + solver fitting
-    //   "chunked"    — chunked solver for long contexts
     //
     // Usage:
     //   struct llama_compact_params params = llama_compact_default_params();
-    //   params.method = "solver";
+    //   params.method = LLAMA_COMPACT_METHOD_SOLVER;
     //   params.ratio  = 4.0f;
     //   int32_t n = llama_kv_cache_compact(ctx, seq_id, params);
     //
     typedef struct llama_compact_params {
-        const char * method;          // compaction method (default: "select")
+        enum llama_compact_method method; // compaction method (default: LLAMA_COMPACT_METHOD_SELECT)
         int32_t      target_tokens;   // explicit target, or -1 to use ratio
         float        ratio;           // compression ratio (used if target_tokens < 0)
         int32_t      live_suffix_tokens; // recent tokens to keep live (0 = compact all)

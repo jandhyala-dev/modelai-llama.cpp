@@ -317,7 +317,9 @@ bool llama_kv_compact_metal_attention_scores(
             [enc setBuffer:ctx->buf_scores offset:0 atIndex:0];
             [enc setBytes:&n length:sizeof(n) atIndex:1];
             [enc setBytes:&T length:sizeof(T) atIndex:2];
-            uint32_t tg_size = 256;
+            // F-C-18: Threadgroup size must be power-of-2 for the parallel reduction tree in the softmax kernel.
+            constexpr uint32_t tg_size = 256;
+            static_assert((tg_size & (tg_size - 1)) == 0, "tg_size must be power of 2");
             [enc setThreadgroupMemoryLength:tg_size * sizeof(float) atIndex:0];
             [enc dispatchThreadgroups:MTLSizeMake(n, 1, 1)
                 threadsPerThreadgroup:MTLSizeMake(tg_size, 1, 1)];
@@ -332,7 +334,9 @@ bool llama_kv_compact_metal_attention_scores(
             [enc setBuffer:ctx->buf_output offset:0 atIndex:1];
             [enc setBytes:&n length:sizeof(n) atIndex:2];
             [enc setBytes:&T length:sizeof(T) atIndex:3];
-            uint32_t tg_size = 256;
+            // F-C-18: Threadgroup size must be power-of-2 for the parallel reduction tree.
+            constexpr uint32_t tg_size = 256;
+            static_assert((tg_size & (tg_size - 1)) == 0, "tg_size must be power of 2");
             [enc setThreadgroupMemoryLength:tg_size * sizeof(float) atIndex:0];
             [enc dispatchThreadgroups:MTLSizeMake(T, 1, 1)
                 threadsPerThreadgroup:MTLSizeMake(tg_size, 1, 1)];

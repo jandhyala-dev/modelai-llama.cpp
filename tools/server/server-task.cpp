@@ -792,12 +792,12 @@ json server_task_result_cmpl_final::to_json_oaicompat() {
         {"object",             "text_completion"},
         {"usage",              usage_json_oaicompat()},
         {"id", oaicompat_cmpl_id},
-        {"id_slot", id_slot},
     };
 
-    // extra fields for debugging purposes
+    // m-18: id_slot is internal — only include in verbose/debug output.
     if (verbose) {
         res["__verbose"] = to_json_non_oaicompat();
+        res["id_slot"] = id_slot;
     }
     if (timings.prompt_n >= 0) {
         res.push_back({"timings", timings.to_json()});
@@ -841,12 +841,12 @@ json server_task_result_cmpl_final::to_json_oaicompat_chat() {
         {"object",             "chat.completion"},
         {"usage",              usage_json_oaicompat()},
         {"id", oaicompat_cmpl_id},
-        {"id_slot", id_slot},
     };
 
-    // extra fields for debugging purposes
+    // m-18: id_slot is internal — only include in verbose/debug output.
     if (verbose) {
         res["__verbose"] = to_json_non_oaicompat();
+        res["id_slot"] = id_slot;
     }
     if (timings.prompt_n >= 0) {
         res.push_back({"timings", timings.to_json()});
@@ -980,7 +980,6 @@ json server_task_result_cmpl_final::to_json_oaicompat_resp() {
         {"object",       "response"},
         {"output",       output},
         {"status",       "completed"},
-        {"id_slot",      id_slot},
         {"usage",        json {
             {"input_tokens",  n_prompt_tokens},
             {"output_tokens", n_decoded},
@@ -1160,7 +1159,6 @@ json server_task_result_cmpl_final::to_json_anthropic() {
         {"model", oaicompat_model},
         {"stop_reason", stop_reason},
         {"stop_sequence", stopping_word.empty() ? nullptr : json(stopping_word)},
-        {"id_slot", id_slot},
         {"usage", {
             {"cache_read_input_tokens", n_prompt_tokens_cache},
             {"input_tokens", n_prompt_tokens - n_prompt_tokens_cache},

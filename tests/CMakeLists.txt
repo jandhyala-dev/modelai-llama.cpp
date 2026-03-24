@@ -276,14 +276,18 @@ llama_build_and_test(test-kv-compact-pipeline-integration.cpp LABEL "model" ARGS
 target_include_directories(test-kv-compact-pipeline-integration PRIVATE ${PROJECT_SOURCE_DIR})
 set_tests_properties(test-kv-compact-pipeline-integration PROPERTIES FIXTURES_REQUIRED test-download-model)
 
-llama_build(test-kv-compact-workload.cpp)
+# F-C-12: register model-dependent tests (previously built but never registered)
+llama_build_and_test(test-kv-compact-workload.cpp LABEL "model" ARGS -m "${MODEL_DEST}")
 target_include_directories(test-kv-compact-workload PRIVATE ${PROJECT_SOURCE_DIR})
+set_tests_properties(test-kv-compact-workload PROPERTIES FIXTURES_REQUIRED test-download-model)
 
-llama_build(test-kv-compact-longctx.cpp)
+llama_build_and_test(test-kv-compact-longctx.cpp LABEL "model" ARGS -m "${MODEL_DEST}")
 target_include_directories(test-kv-compact-longctx PRIVATE ${PROJECT_SOURCE_DIR})
+set_tests_properties(test-kv-compact-longctx PROPERTIES FIXTURES_REQUIRED test-download-model)
 
-llama_build(test-kv-compacted-prefix-perf.cpp get-model.cpp)
+llama_build_and_test(test-kv-compacted-prefix-perf.cpp get-model.cpp LABEL "model" ARGS -m "${MODEL_DEST}")
 target_include_directories(test-kv-compacted-prefix-perf PRIVATE ${PROJECT_SOURCE_DIR})
+set_tests_properties(test-kv-compacted-prefix-perf PROPERTIES FIXTURES_REQUIRED test-download-model)
 
 if (NOT GGML_BACKEND_DL)
     # these tests use the backends directly and cannot be built with dynamic loading
