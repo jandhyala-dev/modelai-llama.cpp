@@ -1,0 +1,31 @@
+{
+  "test_type": "compacted_2.0x",
+  "compaction_ratio": 2.0,
+  "compaction_time_ms": 677.9,
+  "cosine_similarity": null,
+  "tokens_before": null,
+  "tokens_after": null,
+  "memory_delta": {
+    "rss_before_mb": 13840.3,
+    "rss_after_mb": 14658.0,
+    "rss_freed_mb": -817.7,
+    "kv_before": 10319,
+    "kv_after": 5159
+  },
+  "idempotency": {
+    "second_call_time_ms": 0.4,
+    "second_call_error": "HTTP 500: {\"error\":{\"code\":500,\"message\":\"Compaction failed \u2014 check server logs for details\",\"type\":\"server_error\"}}",
+    "is_noop": true
+  },
+  "recall": {
+    "generation_tok_s": 0,
+    "time_to_first_token_ms": 0,
+    "total_time_s": 0.097,
+    "recall_quality_score": 1,
+    "response_word_count": 0
+  },
+  "recall_response": "",
+  "model": "Qwen3-14B",
+  "context_size": 32768,
+  "timestamp": "2026-03-24T11:08:54.686200+00:00"
+}

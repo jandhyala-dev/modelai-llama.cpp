@@ -146,8 +146,8 @@ def write_summary_json(models, run_dir):
     summary = {
         "run_dir": run_dir.name,
         "total_models": len(models),
-        "passed": sum(1 for m in models if m["baseline_pass"]),
-        "failed": sum(1 for m in models if not m["baseline_pass"]),
+        "passed": sum(1 for m in models if m["baseline_pass"] and (m.get("compact_pass") is True or m.get("compact_pass") is None)),
+        "failed": sum(1 for m in models if not (m["baseline_pass"] and (m.get("compact_pass") is True or m.get("compact_pass") is None))),
         "models": models,
     }
     out_path = run_dir / "summary.json"

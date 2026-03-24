@@ -11,6 +11,7 @@ Usage:
 """
 
 import json
+import re
 import subprocess
 import sys
 import os
@@ -120,6 +121,26 @@ def get_memory_snapshot(proc):
     return snapshot
 
 
+def score_recall(recall_content, use_case_ids, all_use_cases):
+    """Score recall quality using word-boundary matching against use-case titles.
+    Returns 1-5 score. Used for both baseline and post-compact recall (F1+F2 fix)."""
+    if not recall_content or not recall_content.strip():
+        return 1
+    text_lower = recall_content.lower()
+    topics_recalled = 0
+    for uc_id in use_case_ids:
+        title = all_use_cases.get(uc_id, {}).get("title", "")
+        words = [w for w in title.lower().split() if len(w) >= 4][:3]
+        if len(words) >= 2:
+            matches = sum(1 for w in words if re.search(r'\b' + re.escape(w) + r'\b', text_lower))
+            if matches >= 2:
+                topics_recalled += 1
+        elif words:
+            if re.search(r'\b' + re.escape(words[0]) + r'\b', text_lower):
+                topics_recalled += 1
+    return min(1 + topics_recalled, 5)
+
+
 # Load use cases
 def load_use_cases(out_dir):
     with open(out_dir / "use-cases.json") as f:
@@ -132,7 +153,8 @@ def start_server(model_path, context_size):
     print(f"  Starting llama-server (ctx={context_size})...", flush=True)
     proc = subprocess.Popen(
         [str(SERVER_BIN), "-m", str(model_path), "-c", str(context_size),
-         "-ngl", "99", "-np", "1", "--port", str(SERVER_PORT), "--host", "127.0.0.1"],
+         "-ngl", "99", "-np", "1", "--port", str(SERVER_PORT), "--host", "127.0.0.1",
+         "--endpoint-compact"],
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
         preexec_fn=os.setsid
     )
@@ -192,9 +214,15 @@ def kill_server(proc):
                 os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
             except Exception:
                 pass
-    # Extra cleanup
-    subprocess.run(["pkill", "-f", "llama-server"], capture_output=True)
-    time.sleep(3)
+    # Scoped cleanup — only kill on our managed port, not other llama-server instances (F4 fix)
+    try:
+        result = subprocess.run(["lsof", f"-ti:{SERVER_PORT}"], capture_output=True, text=True, timeout=5)
+        for pid_str in result.stdout.strip().split('\n'):
+            if pid_str.strip():
+                os.kill(int(pid_str.strip()), signal.SIGKILL)
+    except Exception:
+        pass
+    time.sleep(2)
 
 
 def completion(prompt, max_tokens=2048, temperature=0.7):
@@ -424,13 +452,7 @@ def run_baseline_test(use_case_ids, all_use_cases, model_name, context_size, pro
     recall_resp = completion(recall_prompt, max_tokens=1024)
 
     recall_content = recall_resp.get("content", "")
-    recall_score = 3
-    if recall_content:
-        # Check how many use case topics are referenced in recall
-        topics_recalled = sum(1 for uc_id in use_case_ids
-                            if any(word in recall_content.lower()
-                                  for word in all_use_cases.get(uc_id, {}).get("title", "").lower().split()[:3]))
-        recall_score = min(1 + topics_recalled, 5)
+    recall_score = score_recall(recall_content, use_case_ids, all_use_cases)
 
     # Final memory snapshot after recall
     if proc:
@@ -494,7 +516,7 @@ def log_error(model_dir, endpoint, status, body, use_case=""):
         pass
 
 
-def run_compaction_test(conversation_prompt, recall_response_baseline, ratio=2.0, proc=None):
+def run_compaction_test(conversation_prompt, ratio=2.0, proc=None, use_case_ids=None, all_use_cases=None, model_dir=None):
     """Run compaction test on existing conversation."""
     # Memory delta: capture RSS before compaction (F5 + F6: note that RSS is
     # unreliable on Apple Silicon unified memory — /props KV stats are the
@@ -506,6 +528,7 @@ def run_compaction_test(conversation_prompt, recall_response_baseline, ratio=2.0
 
     if "error" in compact_result:
         print(f"    [COMPACT] ERROR: {compact_result['error']}", flush=True)
+        log_error(model_dir, "/compact", "error", compact_result["error"], f"compact_{ratio}x")
         return {"test_type": f"compacted_{ratio}x", "error": compact_result["error"]}
 
     print(f"    [COMPACT] Done in {compact_result.get('compaction_time_ms', 0)}ms", flush=True)
@@ -570,7 +593,7 @@ def run_compaction_test(conversation_prompt, recall_response_baseline, ratio=2.0
             "generation_tok_s": recall_resp.get("generation_tok_s", 0),
             "time_to_first_token_ms": recall_resp.get("time_to_first_token_ms", 0),
             "total_time_s": recall_resp.get("total_time_s", 0),
-            "recall_quality_score": min(max(len(recall_content.split()) // 50, 1), 5),
+            "recall_quality_score": score_recall(recall_content, use_case_ids or [], all_use_cases or {}),
             "response_word_count": len(recall_content.split()),
         },
         "recall_response": recall_content,
@@ -613,7 +636,7 @@ def main():
     responses_dir.mkdir(exist_ok=True)
 
     use_case_ids = [x.strip() for x in args.use_cases.split(",")]
-    compaction_ratios = [float(x.strip()) for x in args.compaction_ratios.split(",")]
+    compaction_ratios = [float(x.strip()) for x in args.compaction_ratios.split(",") if x.strip()]
     all_use_cases = load_use_cases(out_dir)
 
     ctx_k = args.context_size // 1024
@@ -684,7 +707,7 @@ def main():
             conversation = baseline.get("conversation_for_compaction", "")
             for ratio in compaction_ratios:
                 print(f"\n  --- Compaction Test ({ratio}x @ {ctx_k}K) ---", flush=True)
-                compact_result = run_compaction_test(conversation, baseline.get("recall_response", ""), ratio, proc=proc)
+                compact_result = run_compaction_test(conversation, ratio, proc=proc, use_case_ids=use_case_ids, all_use_cases=all_use_cases, model_dir=str(model_dir))
                 compact_result["model"] = args.model_name
                 compact_result["context_size"] = args.context_size
                 compact_result["timestamp"] = datetime.now(timezone.utc).isoformat()
