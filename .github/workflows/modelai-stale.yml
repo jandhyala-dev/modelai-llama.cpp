@@ -1,0 +1,40 @@
+name: modelai-stale
+
+on:
+  schedule:
+    # Run every Saturday at 3 PM MT (9 PM UTC) — one hour after upstream watch
+    - cron: '0 21 * * 6'
+  workflow_dispatch:
+
+permissions:
+  issues: write
+  pull-requests: write
+
+jobs:
+  stale:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/stale@v9
+        with:
+          # Issues
+          stale-issue-message: >
+            This issue has been inactive for 60 days. It will be closed in 30 days
+            unless there is new activity. If this issue is still relevant, please
+            comment to keep it open.
+          close-issue-message: >
+            Closed due to 90 days of inactivity. Feel free to reopen if still relevant.
+          days-before-issue-stale: 60
+          days-before-issue-close: 30
+          stale-issue-label: 'stale'
+          exempt-issue-labels: 'keep-open,bug,security'
+
+          # Pull Requests
+          stale-pr-message: >
+            This PR has been inactive for 30 days. It will be closed in 14 days
+            unless updated. Please rebase and push if this work is still in progress.
+          close-pr-message: >
+            Closed due to 44 days of inactivity. Feel free to reopen with a fresh branch.
+          days-before-pr-stale: 30
+          days-before-pr-close: 14
+          stale-pr-label: 'stale'
+          exempt-pr-labels: 'keep-open,work-in-progress'
