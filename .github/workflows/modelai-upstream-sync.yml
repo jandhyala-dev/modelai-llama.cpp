@@ -23,7 +23,9 @@ jobs:
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
-          token: ${{ secrets.GITHUB_TOKEN }}
+          # MODELAI_PAT (admin PAT) bypasses branch protection for the
+          # auto-merge step.  Falls back to GITHUB_TOKEN if not set.
+          token: ${{ secrets.MODELAI_PAT || secrets.GITHUB_TOKEN }}
 
       - name: Configure git
         run: |
@@ -107,7 +109,7 @@ jobs:
       - name: Open issue on failure
         if: failure() || steps.merge.outputs.conflict == 'true'
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.MODELAI_PAT || secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
 
@@ -118,7 +120,7 @@ jobs:
           if [ "${{ steps.merge.outputs.conflict }}" = "true" ]; then
             TITLE="Upstream Sync: merge conflict ($(date +%Y-%m-%d))"
             read -r -d '' BODY <<EOF || true
-          Daily upstream sync failed due to merge conflicts.
+          Weekly upstream sync failed due to merge conflicts.
 
           **Upstream:** \`upstream/master\` at \`${UPSTREAM_SHA}\`
           **Base:** \`modelai-main\` at \`${BASE_SHA}\`
@@ -137,7 +139,7 @@ jobs:
           elif [ "${{ steps.build.outcome }}" = "failure" ]; then
             TITLE="Upstream Sync: build failure ($(date +%Y-%m-%d))"
             read -r -d '' BODY <<EOF || true
-          Daily upstream sync merged cleanly but build failed.
+          Weekly upstream sync merged cleanly but build failed.
 
           Check the [workflow run](${RUN_URL}) for details.
 
@@ -147,7 +149,7 @@ jobs:
           else
             TITLE="Upstream Sync: test failure ($(date +%Y-%m-%d))"
             read -r -d '' BODY <<EOF || true
-          Daily upstream sync merged and built but tests failed.
+          Weekly upstream sync merged and built but tests failed.
 
           Check the [workflow run](${RUN_URL}) for details.
 
