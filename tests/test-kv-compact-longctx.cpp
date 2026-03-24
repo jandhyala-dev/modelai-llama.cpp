@@ -12,20 +12,20 @@
 //   PIPELINE=select RATIO=8 ./test-kv-compact-longctx -m model.gguf -c 16384
 //
 //   # QuALITY MC evaluation (full 2,086 questions):
-//   PIPELINE=select RATIO=4 QUALITY_EVAL=1 \
-//       ./test-kv-compact-longctx -m model.gguf -c 8192
+//   PIPELINE=select RATIO=4 QUALITY_EVAL=1
+//     ./test-kv-compact-longctx -m model.gguf -c 8192
 //
 //   # LongHealth MC evaluation (400 questions, 5-option):
-//   PIPELINE=select RATIO=4 LONGHEALTH_EVAL=1 \
-//       ./test-kv-compact-longctx -m model.gguf -c 65536
+//   PIPELINE=select RATIO=4 LONGHEALTH_EVAL=1
+//     ./test-kv-compact-longctx -m model.gguf -c 65536
 //
 //   # Real SEC filing prefill:
-//   SEC_TEXT_DIR=tests/data/sec-10k-benchmark PIPELINE=select RATIO=4 \
-//       ./test-kv-compact-longctx -m model.gguf -c 32768
+//   SEC_TEXT_DIR=tests/data/sec-10k-benchmark PIPELINE=select RATIO=4
+//     ./test-kv-compact-longctx -m model.gguf -c 32768
 //
 //   # Write CSV artifact:
-//   ARTIFACT=results.csv PIPELINE=baseline \
-//       ./test-kv-compact-longctx -m model.gguf -c 4096
+//   ARTIFACT=results.csv PIPELINE=baseline
+//     ./test-kv-compact-longctx -m model.gguf -c 4096
 
 #include "arg.h"
 #include "common.h"
@@ -655,7 +655,7 @@ static std::string load_text_file(const std::string & path) {
     const long sz = std::ftell(f);
     std::fseek(f, 0, SEEK_SET);
     std::string text(sz, '\0');
-    std::fread(&text[0], 1, sz, f);
+    (void)std::fread(&text[0], 1, sz, f);
     std::fclose(f);
     return text;
 }
