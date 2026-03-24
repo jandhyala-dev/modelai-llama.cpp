@@ -4,14 +4,14 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>modelai-llama.cpp — KV Cache Compaction for llama.cpp</title>
-  <meta name="description" content="Production fork of llama.cpp with KV cache compaction. 4x longer context, 63% faster decoding, 0.997 output quality. 15 models validated, 18 critical bugs fixed. MIT licensed.">
+  <meta name="description" content="Production fork of llama.cpp with KV cache compaction. 50x compression, 0.9967 quality, +63% faster decoding, 256K context. 15 models validated. MIT licensed.">
   <meta property="og:title" content="modelai-llama.cpp — KV Cache Compaction for llama.cpp">
-  <meta property="og:description" content="Compress your KV cache instead of throwing it away. 4x longer context, 63% faster decoding, near-identical output quality. Drop-in replacement for llama.cpp.">
+  <meta property="og:description" content="LLMs forget long conversations. We fixed that. 50x memory compression with near-identical output quality. Drop-in replacement for llama.cpp.">
   <meta property="og:url" content="https://www.model-ai.org/">
   <meta property="og:type" content="website">
   <meta name="twitter:card" content="summary">
   <meta name="twitter:title" content="modelai-llama.cpp — KV Cache Compaction for llama.cpp">
-  <meta name="twitter:description" content="Compress your KV cache instead of throwing it away. 4x longer context, 63% faster decoding.">
+  <meta name="twitter:description" content="LLMs forget long conversations. We fixed that. 50x compression, near-identical quality.">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%230d1117'/><text x='50' y='68' font-size='55' text-anchor='middle' fill='%2358a6ff' font-family='system-ui' font-weight='700'>M</text></svg>">
   <link rel="stylesheet" href="style.css">
 </head>
@@ -31,24 +31,25 @@
 
   <!-- ====== HERO ====== -->
   <div class="hero">
-    <h1>Compress your KV cache.<br>Don't throw it away.</h1>
-    <p class="hero-sub">modelai-llama.cpp is a production fork of <a href="https://github.com/ggml-org/llama.cpp" target="_blank" rel="noopener noreferrer">llama.cpp</a> that implements <strong>KV cache compaction</strong> &mdash; a technique from MIT that compresses context instead of discarding it. The result: longer conversations, faster inference, and near-identical output quality.</p>
+    <h1>LLMs forget long conversations.<br>We fixed that.</h1>
+    <p class="hero-sub">When an AI model runs out of memory mid-conversation, it throws away the oldest context and forgets what you said. <strong>modelai-llama.cpp</strong> compresses that memory instead of discarding it &mdash; so the model keeps the full conversation, runs faster, and produces nearly identical output. Built on research from MIT, implemented in production C++, and validated across 15 models.</p>
     <div class="hero-badges">
       <span class="badge badge-green">MIT License</span>
-      <span class="badge badge-blue">Drop-in Replacement</span>
+      <span class="badge badge-blue">Drop-in llama.cpp Replacement</span>
       <span class="badge badge-green">15 Models Validated</span>
     </div>
   </div>
 
-  <!-- ====== HEADLINE RESULT ====== -->
   <div class="container">
+
+    <!-- ====== HEADLINE RESULT ====== -->
     <div class="headline-result">
       <div class="headline-stat">
         <div class="headline-value">50x</div>
         <div class="headline-label">compression</div>
       </div>
       <div class="headline-detail">
-        <p>Qwen3-30B-A3B compressed at <strong>50x ratio</strong> with <strong>0.9967 cosine similarity</strong> and <strong>10/10 fact recall</strong>. 256K effective context from 64K physical memory through 49-57 compaction cycles &mdash; with 100% recall verified at every checkpoint.</p>
+        <p>Qwen3-30B-A3B compressed at <strong>50x ratio</strong> with <strong>0.9967 cosine similarity</strong> and <strong>10/10 fact recall</strong>. 256K effective context from 64K physical memory through iterative compaction &mdash; 100% recall verified at every checkpoint.</p>
       </div>
     </div>
 
@@ -57,49 +58,40 @@
       <div class="card">
         <div class="label">Output Quality</div>
         <div class="value">0.997</div>
-        <div class="detail">Logit cosine similarity &mdash; nearly identical to uncompressed</div>
+        <div class="detail">Cosine similarity to uncompressed output</div>
       </div>
       <div class="card">
         <div class="label">Decode Speedup</div>
         <div class="value">+63%</div>
-        <div class="detail">Smaller cache = faster attention = faster tokens</div>
+        <div class="detail">Smaller memory = faster inference</div>
       </div>
       <div class="card">
         <div class="label">Effective Context</div>
         <div class="value">256K</div>
-        <div class="detail">From 64K physical KV cache via iterative compaction</div>
+        <div class="detail">From 64K physical memory</div>
       </div>
       <div class="card">
         <div class="label">Baseline Overhead</div>
         <div class="value">0%</div>
-        <div class="detail">When compaction isn't active, performance matches upstream</div>
+        <div class="detail">Zero cost when compaction is off</div>
       </div>
     </div>
 
     <!-- ====== THE PROBLEM ====== -->
-    <h2>The problem: LLMs forget</h2>
-    <p>Every LLM stores conversation history in a <strong style="color:var(--text)">KV cache</strong> (key-value cache). As conversations grow, this cache fills up. When it's full, the model has two options &mdash; both bad:</p>
-    <div class="cards cards-2">
-      <div class="card card-problem">
-        <div class="label">Truncation</div>
-        <div class="detail">Cut off the oldest tokens. The model literally forgets the beginning of the conversation. Ask it about something from 10 minutes ago &mdash; it's gone.</div>
-      </div>
-      <div class="card card-problem">
-        <div class="label">Sliding Window</div>
-        <div class="detail">Keep only the most recent N tokens. Same problem: old context is permanently lost. Long documents, multi-turn conversations, and complex reasoning all suffer.</div>
-      </div>
-    </div>
-    <p>There's a third problem: the bigger the KV cache, the <strong style="color:var(--text)">slower inference gets</strong>. Attention computation scales with cache size, so long conversations degrade performance even when context fits.</p>
+    <h2>The problem</h2>
+    <p>Every AI model stores conversation history in a memory buffer called the <strong style="color:var(--text)">KV cache</strong>. As conversations grow, this buffer fills up. Today's solutions &mdash; truncation and sliding windows &mdash; deal with this by <em>deleting</em> the oldest context. The model literally forgets what you said earlier.</p>
+    <p>There's a second problem: the larger this memory buffer, the <strong style="color:var(--text)">slower the model runs</strong>. Attention computation scales with buffer size, so long conversations degrade performance even when everything still fits.</p>
 
     <!-- ====== THE SOLUTION ====== -->
-    <h2>The solution: compress, don't discard</h2>
-    <p>KV cache compaction, based on <a href="https://arxiv.org/abs/2602.16284" target="_blank" rel="noopener noreferrer">"Fast KV Compaction via Attention Matching"</a> (Zweiger et al., MIT Han Lab, 2026), takes a different approach. Instead of throwing away old tokens, it <strong style="color:var(--text)">compresses them into a smaller learned representation</strong> that preserves the model's attention behavior.</p>
+    <h2>The solution</h2>
+    <p>Instead of deleting old context, <strong style="color:var(--text)">compress it</strong>. KV cache compaction, based on <a href="https://arxiv.org/abs/2602.16284" target="_blank" rel="noopener noreferrer">Attention Matching</a> from MIT (Zweiger et al., 2026), replaces the full memory buffer with a smaller, mathematically optimized representation that preserves the model's behavior. The compressed version isn't a subset of the original &mdash; it's a new set of <strong style="color:var(--text)">synthetic key-value pairs</strong> that reproduce the same attention pattern.</p>
+
     <div class="flow-diagram">
       <div class="flow-step">
         <div class="flow-num">1</div>
         <div class="flow-content">
           <strong>Fill</strong>
-          <span>KV cache fills to capacity (e.g., 64K tokens)</span>
+          <span>Memory fills to capacity (e.g. 64K tokens)</span>
         </div>
       </div>
       <div class="flow-arrow"></div>
@@ -107,7 +99,7 @@
         <div class="flow-num">2</div>
         <div class="flow-content">
           <strong>Compact</strong>
-          <span>Compress at 4x ratio: 64K tokens become 16K compressed tokens</span>
+          <span>Compress 64K tokens into 16K (4x ratio)</span>
         </div>
       </div>
       <div class="flow-arrow"></div>
@@ -115,7 +107,7 @@
         <div class="flow-num">3</div>
         <div class="flow-content">
           <strong>Continue</strong>
-          <span>48K slots freed for new tokens. Old context preserved, not lost.</span>
+          <span>48K slots freed. Context preserved.</span>
         </div>
       </div>
       <div class="flow-arrow"></div>
@@ -123,110 +115,107 @@
         <div class="flow-num">4</div>
         <div class="flow-content">
           <strong>Repeat</strong>
-          <span>Cycle continues &mdash; 256K effective context from 64K physical memory</span>
+          <span>256K effective context from 64K physical</span>
         </div>
       </div>
     </div>
-    <p>The compressed representation isn't just a subset of the original tokens. It's a set of <strong style="color:var(--text)">synthetic key-value pairs</strong> mathematically optimized to reproduce the same attention pattern as the full cache. The model behaves as if it still has the full context.</p>
 
     <!-- ====== HOW IT WORKS ====== -->
     <h2>How compaction works</h2>
-    <p>The algorithm runs in four stages, all in pure C++ with no external dependencies:</p>
+    <p>The algorithm runs in four stages, all in pure C++ with zero external dependencies:</p>
     <div class="stage-list">
       <div class="stage">
         <div class="stage-header">
           <span class="stage-num">1</span>
-          <span class="stage-title">Select positions</span>
+          <span class="stage-title">Select the most important positions</span>
         </div>
-        <p>Score each position in the KV cache by how much attention it receives. Keep the most important M positions (out of N total). This is the production-default <code>select</code> pipeline &mdash; fast (62-185ms) and flash-attention compatible.</p>
+        <p>Score each position by how much attention it receives. Keep the top M out of N total. The production-default <code>select</code> pipeline runs in 62&ndash;185ms and is flash-attention compatible.</p>
       </div>
       <div class="stage">
         <div class="stage-header">
           <span class="stage-num">2</span>
-          <span class="stage-title">Fit correction terms (optional)</span>
+          <span class="stage-title">Fit correction terms</span>
         </div>
-        <p>For higher-quality compression, solve for additive bias terms (beta) that correct the attention distribution after selection. Uses Non-Negative Least Squares (NNLS) with regularized Cholesky decomposition.</p>
+        <p>Solve for additive bias terms (beta) that correct the attention distribution after selection. Uses Non-Negative Least Squares with regularized Cholesky decomposition.</p>
       </div>
       <div class="stage">
         <div class="stage-header">
           <span class="stage-num">3</span>
           <span class="stage-title">Fit compressed values</span>
         </div>
-        <p>Solve for new V (value) tensors such that the weighted sum of values matches the original. Uses a 3-tier cascade: LAPACK QR factorization, Cholesky, or aggressive Cholesky fallback.</p>
+        <p>Solve for new value tensors so the attention-weighted output matches the original. Uses a 3-tier cascade: LAPACK QR, Cholesky, or aggressive Cholesky fallback.</p>
       </div>
       <div class="stage">
         <div class="stage-header">
           <span class="stage-num">4</span>
           <span class="stage-title">Prepend and continue</span>
         </div>
-        <p>The compacted K, V, and beta tensors are prepended to the live KV cache during attention computation. Freed KV slots accept new tokens. The model continues generating with the full context preserved.</p>
+        <p>Compacted tensors are prepended to the live KV cache during attention. Freed slots accept new tokens. The model continues with full context preserved.</p>
       </div>
     </div>
 
     <!-- ====== WHY A FORK ====== -->
     <h2>Why a fork?</h2>
-    <p>The upstream <a href="https://github.com/ggml-org/llama.cpp" target="_blank" rel="noopener noreferrer">llama.cpp</a> doesn't have KV compaction. The MIT paper provides a Python reference implementation, but shipping this in production requires a complete C++ rewrite integrated into llama.cpp's KV cache, graph construction, and server infrastructure. This fork does that.</p>
-
+    <p>The upstream <a href="https://github.com/ggml-org/llama.cpp" target="_blank" rel="noopener noreferrer">llama.cpp</a> doesn't have KV compaction. The MIT paper provides a Python reference, but production use requires a complete C++ implementation integrated into llama.cpp's KV cache, graph construction, and server infrastructure. This fork is that implementation.</p>
     <div class="cards cards-3">
       <div class="card">
         <div class="label">Pure C++</div>
-        <div class="detail">Complete solver engine with zero external dependencies. Optional LAPACK on macOS, Cholesky fallback everywhere else. NEON SIMD + Metal GPU acceleration on Apple Silicon.</div>
+        <div class="detail">Complete solver with zero external dependencies. Optional LAPACK on macOS, Cholesky fallback everywhere else. NEON SIMD + Metal GPU on Apple Silicon.</div>
       </div>
       <div class="card">
         <div class="label">Drop-in compatible</div>
-        <div class="detail">Same build system, same CLI flags, same API. Add <code>--endpoint-compact</code> to enable compaction. Without it, the fork behaves identically to upstream.</div>
+        <div class="detail">Same build system, same flags, same API. Add <code>--endpoint-compact</code> to enable. Without it, the fork behaves identically to upstream.</div>
       </div>
       <div class="card">
         <div class="label">Weekly upstream sync</div>
-        <div class="detail">Automated Saturday sync from upstream. CI-gated: build + tests + benchmarks must pass. Security patches synced same-day.</div>
+        <div class="detail">Automated Saturday sync, CI-gated. Security patches synced same-day. 6 upstream KV cache changes audited and verified compatible.</div>
       </div>
     </div>
 
     <!-- ====== WHAT WE FIXED ====== -->
     <h2>18 critical bugs found and fixed</h2>
-    <p>Implementing a research paper in production C++ exposed bugs that the reference Python code never hit. Every bug was found through <a href="qa.html">adversarial review</a> &mdash; a 13-section protocol where the reviewer systematically tries to break the code.</p>
-
+    <p>Implementing a research paper in production C++ exposed bugs the reference Python code never hit. Every bug was found through <a href="qa.html">adversarial review</a> &mdash; a 13-section protocol where the reviewer systematically tries to break the code.</p>
     <div class="bug-highlights">
       <div class="bug-item">
         <span class="bug-severity bug-critical">Critical</span>
         <div>
           <strong>Post-compaction crash</strong>
-          <span class="bug-desc">Server crashed when reusing compacted slots because the prompt cache held stale position IDs. Fixed by clearing the token record after reclaim.</span>
+          <span class="bug-desc">Server crashed on slot reuse because the prompt cache held stale position IDs after reclaim.</span>
         </div>
       </div>
       <div class="bug-item">
         <span class="bug-severity bug-critical">Critical</span>
         <div>
           <strong>NaN propagation</strong>
-          <span class="bug-desc">When all attention heads were masked, -infinity flowed into value fitting and produced NaN outputs. Fixed with zero-V fallback for masked heads.</span>
+          <span class="bug-desc">Masked attention heads produced -infinity beta, which flowed into value fitting and corrupted outputs.</span>
         </div>
       </div>
       <div class="bug-item">
         <span class="bug-severity bug-critical">Critical</span>
         <div>
-          <strong>Quality collapse at 8K context</strong>
-          <span class="bug-desc">The nonuniform pipeline lost >50% of attention heads during union truncation, dropping quality from 0.99 to 0.21. Fixed with automatic fallback.</span>
+          <strong>Quality collapse at 8K</strong>
+          <span class="bug-desc">Union truncation masked >50% of heads, dropping cosine from 0.99 to 0.21. Fixed with automatic pipeline fallback.</span>
         </div>
       </div>
       <div class="bug-item">
         <span class="bug-severity bug-major">Major</span>
         <div>
           <strong>3.4x decode slowdown</strong>
-          <span class="bug-desc">Host pointer swap caused 80+ Metal GPU-to-CPU sync stalls per decode batch at 32K context. Fixed with backend-agnostic tensor upload.</span>
+          <span class="bug-desc">Host pointer swap caused 80+ Metal GPU-to-CPU sync stalls per decode batch at 32K context.</span>
         </div>
       </div>
       <div class="bug-item">
         <span class="bug-severity bug-major">Major</span>
         <div>
           <strong>16GB memory spike</strong>
-          <span class="bug-desc">All transformer layers captured query tensors simultaneously during self-study, projecting 16.4GB total. Fixed with a 1GB per-layer capture budget.</span>
+          <span class="bug-desc">All layers captured query tensors simultaneously during self-study, projecting 16.4GB total system memory.</span>
         </div>
       </div>
       <div class="bug-item">
         <span class="bug-severity bug-major">Major</span>
         <div>
           <strong>Post-compaction amnesia</strong>
-          <span class="bug-desc">Server forgot the entire conversation after compaction because the token record was cleared. Fixed by preserving history across the compaction cycle.</span>
+          <span class="bug-desc">Server forgot the entire conversation after compaction because the token record was incorrectly cleared.</span>
         </div>
       </div>
     </div>
@@ -234,48 +223,54 @@
 
     <!-- ====== MODELS AND ARCHITECTURES ====== -->
     <h2>Tested across 15 models and 5 architectures</h2>
-    <p>Compaction works across standard attention, interleaved sliding window (iSWA), hybrid SSM+attention, and multi-resolution RoPE architectures. Every model must pass a 0.95 logit cosine similarity quality gate.</p>
-
+    <p>Every model must pass a 0.95 cosine similarity quality gate. Compaction works across standard attention, interleaved sliding window (iSWA), hybrid SSM+attention, and multi-resolution RoPE.</p>
     <div class="table-wrap">
-    <table>
-      <thead>
-        <tr><th style="text-align:left">Model</th><th style="text-align:left">Architecture</th><th style="text-align:right">Quality</th></tr>
-      </thead>
-      <tbody>
-        <tr><td style="text-align:left">Qwen3-8B</td><td style="text-align:left">iSWA</td><td style="text-align:right;color:var(--green)">0.997</td></tr>
-        <tr><td style="text-align:left">Qwen3-14B</td><td style="text-align:left">iSWA</td><td style="text-align:right;color:var(--green)">0.992&ndash;0.999</td></tr>
-        <tr><td style="text-align:left">Qwen3-30B-A3B (MoE)</td><td style="text-align:left">iSWA</td><td style="text-align:right;color:var(--green)">0.999</td></tr>
-        <tr><td style="text-align:left">Qwen2.5-7B / 14B</td><td style="text-align:left">Standard</td><td style="text-align:right;color:var(--green)">Pass</td></tr>
-        <tr><td style="text-align:left">DeepSeek-R1-14B / 1.5B</td><td style="text-align:left">Standard</td><td style="text-align:right;color:var(--green)">0.993&ndash;0.999</td></tr>
-        <tr><td style="text-align:left">Granite3.1-Dense-8B</td><td style="text-align:left">Hybrid SSM</td><td style="text-align:right;color:var(--green)">Pass</td></tr>
-        <tr><td style="text-align:left">Llama-3.2-3B</td><td style="text-align:left">Standard</td><td style="text-align:right;color:var(--green)">Pass</td></tr>
-        <tr><td style="text-align:left">Aya-Expanse-8B</td><td style="text-align:left">Standard</td><td style="text-align:right;color:var(--green)">Pass</td></tr>
-        <tr><td style="text-align:left">Yi-1.5-6B</td><td style="text-align:left">Standard</td><td style="text-align:right;color:var(--green)">Pass</td></tr>
-        <tr><td style="text-align:left">Phi-3-mini-4k</td><td style="text-align:left">Standard</td><td style="text-align:right;color:var(--green)">Pass</td></tr>
-        <tr><td style="text-align:left">SmolLM2-1.7B</td><td style="text-align:left">Standard</td><td style="text-align:right;color:var(--green)">Pass</td></tr>
-      </tbody>
-    </table>
+      <table>
+        <thead>
+          <tr>
+            <th style="text-align:left">Model</th>
+            <th style="text-align:left">Architecture</th>
+            <th style="text-align:right">Cosine</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td style="text-align:left">Qwen3-30B-A3B (MoE)</td><td style="text-align:left">iSWA</td><td style="text-align:right;color:var(--green)">0.999</td></tr>
+          <tr><td style="text-align:left">Qwen3-8B</td><td style="text-align:left">iSWA</td><td style="text-align:right;color:var(--green)">0.997</td></tr>
+          <tr><td style="text-align:left">Qwen3-14B</td><td style="text-align:left">iSWA</td><td style="text-align:right;color:var(--green)">0.992&ndash;0.999</td></tr>
+          <tr><td style="text-align:left">DeepSeek-R1-14B / 1.5B</td><td style="text-align:left">Standard</td><td style="text-align:right;color:var(--green)">0.993&ndash;0.999</td></tr>
+          <tr><td style="text-align:left">Qwen2.5-7B / 14B</td><td style="text-align:left">Standard</td><td style="text-align:right;color:var(--green)">Pass</td></tr>
+          <tr><td style="text-align:left">Granite3.1-Dense-8B</td><td style="text-align:left">Hybrid SSM</td><td style="text-align:right;color:var(--green)">Pass</td></tr>
+          <tr><td style="text-align:left">Llama-3.2-3B</td><td style="text-align:left">Standard</td><td style="text-align:right;color:var(--green)">Pass</td></tr>
+          <tr><td style="text-align:left">Aya-Expanse-8B</td><td style="text-align:left">Standard</td><td style="text-align:right;color:var(--green)">Pass</td></tr>
+          <tr><td style="text-align:left">Yi-1.5-6B / Phi-3-mini / SmolLM2</td><td style="text-align:left">Standard</td><td style="text-align:right;color:var(--green)">Pass</td></tr>
+        </tbody>
+      </table>
     </div>
     <p style="font-size:0.85rem;">Unsupported: M-RoPE spatial models (Qwen2-VL, GLM4) and pure recurrent architectures (Mamba, RWKV) which have no KV cache.</p>
 
     <!-- ====== COMPACTION PIPELINES ====== -->
     <h2>7 compaction pipelines</h2>
-    <p>Different use cases need different trade-offs between speed and quality. The <code>select</code> pipeline is the production default &mdash; fast, flash-attention compatible, and 0.997 quality.</p>
+    <p>The <code>select</code> pipeline is the production default &mdash; fast, flash-compatible, and 0.997 quality. Other pipelines trade speed for higher quality at extreme compression ratios.</p>
     <div class="table-wrap">
-    <table>
-      <thead>
-        <tr><th style="text-align:left">Pipeline</th><th style="text-align:left">Speed</th><th style="text-align:left">Quality</th><th style="text-align:left">Best for</th></tr>
-      </thead>
-      <tbody>
-        <tr><td><code>select</code></td><td>62&ndash;185ms</td><td>0.946&ndash;0.999</td><td>Production &mdash; flash compatible, zero beta</td></tr>
-        <tr><td><code>omp</code></td><td>Slow</td><td>Highest</td><td>Research &mdash; Orthogonal Matching Pursuit</td></tr>
-        <tr><td><code>self_study</code></td><td>Slow</td><td>High</td><td>On-policy query generation via autoregressive continuation</td></tr>
-        <tr><td><code>chunked</code></td><td>Medium</td><td>High</td><td>Long context (>8K prefix)</td></tr>
-        <tr><td><code>on_policy</code></td><td>Slow</td><td>Highest</td><td>Iterative refinement with quality-gated convergence</td></tr>
-        <tr><td><code>sequential</code></td><td>Very slow</td><td>Highest</td><td>Per-layer sequential on-policy</td></tr>
-        <tr><td><code>nonuniform</code></td><td>Medium</td><td>High</td><td>Per-head budget allocation</td></tr>
-      </tbody>
-    </table>
+      <table>
+        <thead>
+          <tr>
+            <th style="text-align:left">Pipeline</th>
+            <th style="text-align:center">Speed</th>
+            <th style="text-align:center">Quality</th>
+            <th style="text-align:left">Use case</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td style="text-align:left"><code>select</code></td><td style="text-align:center">62&ndash;185ms</td><td style="text-align:center">0.946&ndash;0.999</td><td style="text-align:left">Production default, flash compatible</td></tr>
+          <tr><td style="text-align:left"><code>omp</code></td><td style="text-align:center">Slow</td><td style="text-align:center">Highest</td><td style="text-align:left">Orthogonal Matching Pursuit</td></tr>
+          <tr><td style="text-align:left"><code>self_study</code></td><td style="text-align:center">Slow</td><td style="text-align:center">High</td><td style="text-align:left">Autoregressive query generation</td></tr>
+          <tr><td style="text-align:left"><code>chunked</code></td><td style="text-align:center">Medium</td><td style="text-align:center">High</td><td style="text-align:left">Long context (&gt;8K prefix)</td></tr>
+          <tr><td style="text-align:left"><code>on_policy</code></td><td style="text-align:center">Slow</td><td style="text-align:center">Highest</td><td style="text-align:left">Quality-gated iterative refinement</td></tr>
+          <tr><td style="text-align:left"><code>sequential</code></td><td style="text-align:center">Very slow</td><td style="text-align:center">Highest</td><td style="text-align:left">Per-layer sequential on-policy</td></tr>
+          <tr><td style="text-align:left"><code>nonuniform</code></td><td style="text-align:center">Medium</td><td style="text-align:center">High</td><td style="text-align:left">Per-head budget allocation</td></tr>
+        </tbody>
+      </table>
     </div>
 
     <!-- ====== GETTING STARTED ====== -->
@@ -287,22 +282,15 @@ cmake -B build -DGGML_METAL=ON
 cmake --build build --config Release -j$(nproc)
 
 <span class="code-comment"># Run with compaction enabled</span>
-./build/bin/llama-server \
-    -m model.gguf \
-    --endpoint-compact \
-    -c 8192
+./build/bin/llama-server -m model.gguf --endpoint-compact -c 8192
 
 <span class="code-comment"># Trigger compaction via REST API</span>
 curl -X POST http://localhost:8080/compact \
   -H "Content-Type: application/json" \
   -d '{"id_slot": 0, "method": "select", "ratio": 4.0}'
 
-<span class="code-comment"># Or use auto-compaction (triggers when KV fills to threshold)</span>
-./build/bin/llama-server \
-    -m model.gguf \
-    --endpoint-compact \
-    --compact-threshold 0.9 \
-    -c 8192</div>
+<span class="code-comment"># Or use auto-compaction (fires when memory reaches threshold)</span>
+./build/bin/llama-server -m model.gguf --endpoint-compact --compact-threshold 0.9 -c 8192</div>
 
     <h3>Public C API</h3>
     <div class="code-block"><span class="code-comment">// Trigger compaction programmatically</span>
@@ -318,46 +306,33 @@ llama_kv_cache_set_auto_compact(ctx, 0.9f);</div>
     <h2>CI and testing</h2>
     <p>7 CI workflows, 53 tests, 8 test tiers. Every push and PR runs the full suite. <a href="qa.html">Full QA process</a>.</p>
     <div class="cards cards-4">
-      <div class="card">
-        <div class="label">CI Workflows</div>
-        <div class="value">7</div>
-        <div class="detail">macOS, Windows, server, perf, upstream sync</div>
-      </div>
-      <div class="card">
-        <div class="label">C++ Tests</div>
-        <div class="value">53</div>
-        <div class="detail">CI-gated, all passing</div>
-      </div>
-      <div class="card">
-        <div class="label">Test Tiers</div>
-        <div class="value">8</div>
-        <div class="detail">Unit tests to live performance dashboard</div>
-      </div>
-      <div class="card">
-        <div class="label">Review Protocol</div>
-        <div class="value">13</div>
-        <div class="detail">Sections per adversarial review</div>
-      </div>
+      <div class="card"><div class="label">CI Workflows</div><div class="value">7</div><div class="detail">macOS, Windows, server, perf, sync</div></div>
+      <div class="card"><div class="label">C++ Tests</div><div class="value">53</div><div class="detail">CI-gated, all passing</div></div>
+      <div class="card"><div class="label">Test Tiers</div><div class="value">8</div><div class="detail">Unit tests to live dashboard</div></div>
+      <div class="card"><div class="label">Review Sections</div><div class="value">13</div><div class="detail">Per adversarial review</div></div>
     </div>
 
     <!-- ====== DOCS ====== -->
     <h2>Documentation</h2>
     <div class="table-wrap">
-    <table>
-      <thead>
-        <tr><th style="text-align:left">Document</th><th style="text-align:left">Description</th></tr>
-      </thead>
-      <tbody>
-        <tr><td><a href="https://github.com/jandhyala-dev/modelai-llama.cpp/blob/modelai-main/docs/CHANGELOG.md" target="_blank" rel="noopener noreferrer">Changelog</a></td><td>Full implementation history: V0 foundation through production hardening</td></tr>
-        <tr><td><a href="https://github.com/jandhyala-dev/modelai-llama.cpp/blob/modelai-main/docs/DESIGN-DECISIONS.md" target="_blank" rel="noopener noreferrer">DESIGN-DECISIONS</a></td><td>13 architecture decisions with rationale</td></tr>
-        <tr><td><a href="https://github.com/jandhyala-dev/modelai-llama.cpp/blob/modelai-main/docs/BUGS-AND-FIXES.md" target="_blank" rel="noopener noreferrer">BUGS-AND-FIXES</a></td><td>All 29 bugs: root cause, fix, commit SHA</td></tr>
-        <tr><td><a href="https://github.com/jandhyala-dev/modelai-llama.cpp/blob/modelai-main/docs/kv-compaction-algorithm.md" target="_blank" rel="noopener noreferrer">Algorithm</a></td><td>Selection, fitting, and execution stages in detail</td></tr>
-        <tr><td><a href="https://github.com/jandhyala-dev/modelai-llama.cpp/blob/modelai-main/docs/kv-compaction-integration.md" target="_blank" rel="noopener noreferrer">Integration Map</a></td><td>File map and architecture support matrix</td></tr>
-        <tr><td><a href="https://github.com/jandhyala-dev/modelai-llama.cpp/blob/modelai-main/docs/paper-comparison-2602.16284.md" target="_blank" rel="noopener noreferrer">Paper Comparison</a></td><td>Fork vs arXiv:2602.16284 reference implementation</td></tr>
-        <tr><td><a href="https://github.com/jandhyala-dev/modelai-llama.cpp/blob/modelai-main/docs/UPSTREAM-SYNC.md" target="_blank" rel="noopener noreferrer">Upstream Sync</a></td><td>Weekly sync process, 3-branch model, CI gate</td></tr>
-        <tr><td><a href="https://github.com/jandhyala-dev/modelai-llama.cpp/blob/modelai-main/docs/benchmark-fork-vs-upstream.md" target="_blank" rel="noopener noreferrer">Benchmarks</a></td><td>3-way fork vs upstream vs Ollama comparison</td></tr>
-      </tbody>
-    </table>
+      <table>
+        <thead>
+          <tr>
+            <th style="text-align:left">Document</th>
+            <th style="text-align:left">Description</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td style="text-align:left"><a href="https://github.com/jandhyala-dev/modelai-llama.cpp/blob/modelai-main/docs/CHANGELOG.md" target="_blank" rel="noopener noreferrer">CHANGELOG</a></td><td style="text-align:left">Full implementation history: V0 through production hardening</td></tr>
+          <tr><td style="text-align:left"><a href="https://github.com/jandhyala-dev/modelai-llama.cpp/blob/modelai-main/docs/DESIGN-DECISIONS.md" target="_blank" rel="noopener noreferrer">DESIGN-DECISIONS</a></td><td style="text-align:left">13 architecture decisions with rationale</td></tr>
+          <tr><td style="text-align:left"><a href="https://github.com/jandhyala-dev/modelai-llama.cpp/blob/modelai-main/docs/BUGS-AND-FIXES.md" target="_blank" rel="noopener noreferrer">BUGS-AND-FIXES</a></td><td style="text-align:left">All 29 bugs: root cause, fix, commit SHA</td></tr>
+          <tr><td style="text-align:left"><a href="https://github.com/jandhyala-dev/modelai-llama.cpp/blob/modelai-main/docs/kv-compaction-algorithm.md" target="_blank" rel="noopener noreferrer">Algorithm</a></td><td style="text-align:left">Selection, fitting, and execution stages</td></tr>
+          <tr><td style="text-align:left"><a href="https://github.com/jandhyala-dev/modelai-llama.cpp/blob/modelai-main/docs/kv-compaction-integration.md" target="_blank" rel="noopener noreferrer">Integration Map</a></td><td style="text-align:left">File map and architecture support matrix</td></tr>
+          <tr><td style="text-align:left"><a href="https://github.com/jandhyala-dev/modelai-llama.cpp/blob/modelai-main/docs/paper-comparison-2602.16284.md" target="_blank" rel="noopener noreferrer">Paper Comparison</a></td><td style="text-align:left">Fork vs arXiv:2602.16284 reference</td></tr>
+          <tr><td style="text-align:left"><a href="https://github.com/jandhyala-dev/modelai-llama.cpp/blob/modelai-main/docs/UPSTREAM-SYNC.md" target="_blank" rel="noopener noreferrer">Upstream Sync</a></td><td style="text-align:left">Weekly sync process, 3-branch model</td></tr>
+          <tr><td style="text-align:left"><a href="https://github.com/jandhyala-dev/modelai-llama.cpp/blob/modelai-main/docs/benchmark-fork-vs-upstream.md" target="_blank" rel="noopener noreferrer">Benchmarks</a></td><td style="text-align:left">Fork vs upstream vs Ollama comparison</td></tr>
+        </tbody>
+      </table>
     </div>
   </div>
 

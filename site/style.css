@@ -103,8 +103,9 @@ strong { color: var(--text); }
 .table-wrap table { margin: 0; }
 
 table { width: 100%; border-collapse: collapse; margin: 1rem 0; font-size: 0.9rem; }
-th, td { padding: 0.5rem 0.75rem; text-align: left; border-bottom: 1px solid var(--border); }
-th { color: var(--text-muted); font-weight: 600; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.05em; }
+th, td { padding: 0.6rem 1rem; border-bottom: 1px solid var(--border); }
+th { color: var(--text-muted); font-weight: 600; font-size: 0.75rem; text-transform: uppercase; letter-spacing: 0.06em; background: rgba(22,27,34,0.6); }
+tbody tr:hover { background: rgba(88,166,255,0.04); }
 
 /* ====== CODE ====== */
 .code-block {
