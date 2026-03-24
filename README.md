@@ -3,12 +3,22 @@
 > Production fork of [llama.cpp](https://github.com/ggml-org/llama.cpp) adding **KV cache compaction** via Attention Matching.
 
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://opensource.org/licenses/MIT)
+[![CI](https://github.com/jandhyala-dev/modelai-llama.cpp/actions/workflows/modelai-ci.yml/badge.svg?branch=modelai-main)](https://github.com/jandhyala-dev/modelai-llama.cpp/actions/workflows/modelai-ci.yml)
 
 ## What This Fork Adds
 
 Instead of truncating or evicting old context, KV cache compaction compresses the KV cache into a smaller learned representation that preserves attention behavior. The model produces near-identical outputs after compaction.
 
 Based on ["Fast KV Compaction via Attention Matching"](https://arxiv.org/abs/2602.16284) (Zweiger et al., MIT Han Lab).
+
+## Key Features
+
+- **Attention Matching compaction** — lossless-quality KV cache compression (0.946-0.999 cosine similarity)
+- **9 compaction methods** — select, solver, omp, self_study, chunked, on_policy, nonuniform, sequential_on_policy, context_prefill
+- **Architecture support** — standard, iSWA, hybrid SSM+attention, IMROPE
+- **Metal GPU acceleration** — solver runs on Apple Silicon GPU
+- **Zero baseline overhead** — matches upstream decode speed within 2%
+- **REST API** — `/compact` endpoint with configurable method and ratio
 
 ## Key Numbers
 
@@ -112,6 +122,16 @@ This fork exposes optional `modelai_*` Prometheus metrics and a contract endpoin
 - M-RoPE (multi-modal positional encoding): untested
 - Pure recurrent architectures: not applicable (no KV cache)
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines on submitting issues, pull requests, and the review process. All compaction-related changes go through the adversarial review protocol documented in [AGENTS.md](AGENTS.md).
+
+## Community & Support
+
+This project is maintained on a **best-effort basis with no SLA**. Bug reports and feature requests are welcome via GitHub Issues. We aim to triage issues weekly but response times may vary.
+
+**Scope:** This fork focuses on KV cache compaction. Features unrelated to compaction should be contributed upstream to [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp).
+
 ## Documentation
 
 - [HIGHLIGHTS.md](docs/HIGHLIGHTS.md) -- Full benchmark tables and feature summary
@@ -119,7 +139,6 @@ This fork exposes optional `modelai_*` Prometheus metrics and a contract endpoin
 - [CHANGELOG.md](docs/CHANGELOG.md) -- Implementation history
 - [DESIGN-DECISIONS.md](docs/DESIGN-DECISIONS.md) -- Architecture rationale
 - [UPSTREAM-SYNC.md](docs/UPSTREAM-SYNC.md) -- Upstream sync process
-- [CONTRIBUTING.md](CONTRIBUTING.md) -- How to contribute
 - [AGENTS.md](AGENTS.md) -- AI agent review protocol
 
 ## Upstream Relationship

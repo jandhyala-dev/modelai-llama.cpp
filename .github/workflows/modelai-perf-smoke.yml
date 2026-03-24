@@ -5,6 +5,7 @@ on:
   pull_request:
     branches:
       - modelai-main
+    types: [opened, synchronize, reopened]
     paths:
       - '.github/workflows/modelai-perf-smoke.yml'
       - 'src/**'

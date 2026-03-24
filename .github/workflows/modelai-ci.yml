@@ -20,6 +20,8 @@ on:
       - 'tools/**'
       - 'examples/**'
   pull_request:
+    branches:
+      - modelai-main
     types: [opened, synchronize, reopened]
     paths:
       - '.github/workflows/modelai-ci.yml'

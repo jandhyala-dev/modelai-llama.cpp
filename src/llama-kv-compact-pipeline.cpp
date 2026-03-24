@@ -600,6 +600,7 @@ bool llama_kv_compact_select_from_live_kv(
 
     auto * seq = kv.get_compacted_prefix()->get_seq(seq_id);
     if (seq == nullptr || !seq->enabled || seq->layers.size() != layouts.size()) {
+        kv.compacted_prefix_clear(seq_id, true);
         return false;
     }
 
@@ -950,6 +951,7 @@ bool llama_kv_compact_nonuniform_from_live_kv(
 
     auto * seq = kv.get_compacted_prefix()->get_seq(seq_id);
     if (seq == nullptr || !seq->enabled || seq->layers.size() != layouts.size()) {
+        kv.compacted_prefix_clear(seq_id, true);
         return false;
     }
 
