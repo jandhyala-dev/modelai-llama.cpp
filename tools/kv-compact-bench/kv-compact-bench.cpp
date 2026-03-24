@@ -1,8 +1,8 @@
 // KV compaction benchmark tool — measures perplexity impact of compaction.
 //
 // Usage:
-//   llama-kv-compact-bench -m model.gguf -f wikitext-2.txt \
-//       --ratios 2,5,10,20,50 --methods select,solver --csv results.csv
+//   llama-kv-compact-bench -m model.gguf -f wikitext-2.txt
+//     --ratios 2,5,10,20,50 --methods select,solver --csv results.csv
 //
 // Ablation flags:
 //   --no-beta     Skip beta fitting (zero-beta selection only)
