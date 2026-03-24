@@ -24,6 +24,24 @@ modelai-llama.cpp tracks [ggml-org/llama.cpp](https://github.com/ggml-org/llama.
 2. **Tests:** `ctest --test-dir build -L main --output-on-failure` — all CI-gated tests must pass
 3. **Conflict resolution:** Merge conflicts in compaction files are resolved manually and re-tested
 4. **CI workflow audit:** New upstream workflows are disabled to prevent billing drain on the fork (only `modelai-ci`, `modelai-server-smoke`, `modelai-perf-smoke` are active)
+5. **Upstream KV cache watch:** Check for open PRs or merged changes that touch KV cache internals (see Weekly Upstream Watch below)
+
+## Weekly Upstream Watch
+
+Runs every Saturday at 2 PM MT via GitHub Actions (`modelai-upstream-watch.yml`). Checks for upstream activity that could affect our compaction code:
+
+**1. Open PRs touching KV cache:**
+```bash
+gh search prs --repo ggml-org/llama.cpp --state open -q "kv cache" --json number,title
+```
+
+**2. Recent upstream commits to KV cache files:**
+```bash
+gh api "repos/ggml-org/llama.cpp/commits?path=src/llama-kv-cache.cpp&since=$(date -v-7d +%Y-%m-%dT%H:%M:%SZ)" --jq '.[].commit.message | split("\n")[0]'
+gh api "repos/ggml-org/llama.cpp/commits?path=src/llama-kv-cache.h&since=$(date -v-7d +%Y-%m-%dT%H:%M:%SZ)" --jq '.[].commit.message | split("\n")[0]'
+```
+
+If either check finds results, the workflow creates a GitHub Issue tagged `upstream-watch` with the findings. No email — just an issue to review during the next sync.
 
 ## Sync History
 
