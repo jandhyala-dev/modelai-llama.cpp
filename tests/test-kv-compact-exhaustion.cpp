@@ -299,8 +299,12 @@ int main(int argc, char ** argv) {
         check(compact_ok, "quality-check compaction succeeds");
 
         if (compact_ok) {
-            kv->compacted_prefix_set_execution(0, true);
-            kv->compacted_prefix_reclaim_live_kv(0);
+            if (!kv->compacted_prefix_set_execution(0, true)) {
+                return fail("quality-check: set_execution failed");
+            }
+            if (!kv->compacted_prefix_reclaim_live_kv(0)) {
+                return fail("quality-check: reclaim_live_kv failed");
+            }
 
             batch = llama_batch_init(1, 0, 1);
             common_batch_add(batch, 1, fill_tokens, {0}, true);

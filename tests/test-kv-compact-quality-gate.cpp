@@ -121,8 +121,14 @@ compact_result run_compaction_at_ratio(
             0, target_tokens, live_suffix_pos0, &result.stats);
     if (!result.ok) return result;
 
-    kv->compacted_prefix_set_execution(0, true);
-    kv->compacted_prefix_reclaim_live_kv(0);
+    if (!kv->compacted_prefix_set_execution(0, true)) {
+        result.ok = false;
+        return result;
+    }
+    if (!kv->compacted_prefix_reclaim_live_kv(0)) {
+        result.ok = false;
+        return result;
+    }
 
     result.tokens_after = kv->compacted_prefix_active_n_kv(0);
 
@@ -303,8 +309,12 @@ int main(int argc, char ** argv) {
         check(compact_ok, "serialization: compaction succeeds");
 
         if (compact_ok) {
-            kv->compacted_prefix_set_execution(0, true);
-            kv->compacted_prefix_reclaim_live_kv(0);
+            if (!kv->compacted_prefix_set_execution(0, true)) {
+                return fail("serialization: set_execution failed");
+            }
+            if (!kv->compacted_prefix_reclaim_live_kv(0)) {
+                return fail("serialization: reclaim_live_kv failed");
+            }
 
             // Decode BEFORE save to get pre-save logits.
             const std::vector<float> pre_save_logits =

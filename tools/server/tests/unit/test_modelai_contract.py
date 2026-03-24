@@ -87,6 +87,7 @@ def test_props_modelai_runtime_kv():
 REQUIRED_MODELAI_METRICS = [
     "llamacpp:modelai_allocated_model_bytes",
     "llamacpp:modelai_allocated_context_bytes",
+    "llamacpp:modelai_allocated_compute_bytes",
     "llamacpp:modelai_active_n_kv_total",
     "llamacpp:modelai_active_n_kv_max",
     "llamacpp:modelai_sequence_state_bytes_total",
@@ -207,3 +208,35 @@ def test_compact_negative_slot_returns_400():
     assert 400 <= res.status_code < 500, \
         f"expected 4xx for negative slot, got {res.status_code}"
     assert "error" in res.body
+
+
+# ---------------------------------------------------------------------------
+# 6. /v1/chat/completions and /completion — id_slot in response
+# ---------------------------------------------------------------------------
+
+def test_chat_completion_contains_id_slot():
+    """/v1/chat/completions response includes id_slot as integer."""
+    global server
+    server.start()
+    res = server.make_request("POST", "/v1/chat/completions", data={
+        "messages": [{"role": "user", "content": "Hi"}],
+        "max_tokens": 4,
+    })
+    assert res.status_code == 200
+    assert "id_slot" in res.body, "missing id_slot in chat completion response"
+    assert isinstance(res.body["id_slot"], int), \
+        f"id_slot should be int, got {type(res.body['id_slot'])}"
+
+
+def test_completion_contains_id_slot():
+    """/completion response includes id_slot as integer."""
+    global server
+    server.start()
+    res = server.make_request("POST", "/completion", data={
+        "prompt": "Hi",
+        "n_predict": 4,
+    })
+    assert res.status_code == 200
+    assert "id_slot" in res.body, "missing id_slot in completion response"
+    assert isinstance(res.body["id_slot"], int), \
+        f"id_slot should be int, got {type(res.body['id_slot'])}"

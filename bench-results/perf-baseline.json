@@ -5,6 +5,7 @@
   "metrics": {
     "prompt_eval_tok_s": null,
     "generation_tok_s": null,
+    "ttft_ms": null,
     "compact_2x_ms": null,
     "peak_rss_mb": null
   },

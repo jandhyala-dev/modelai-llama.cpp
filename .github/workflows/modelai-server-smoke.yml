@@ -17,6 +17,8 @@ on:
       - 'examples/**'
       - '**/CMakeLists.txt'
   pull_request:
+    branches:
+      - modelai-main
     types: [opened, synchronize, reopened]
     paths:
       - '.github/workflows/modelai-server-smoke.yml'
@@ -27,6 +29,9 @@ on:
       - 'tools/mtmd/**'
       - 'examples/**'
       - '**/CMakeLists.txt'
+
+permissions:
+  contents: read
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
