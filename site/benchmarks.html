@@ -30,7 +30,7 @@
 
   <div class="container">
     <h1>Benchmarks</h1>
-    <p>Performance and quality data from CI runs on Apple M2 Pro (32GB, Metal GPU). All measurements use 128-token generation.</p>
+    <p>Performance and quality data from CI runs on Apple M2 Pro (32GB, Metal GPU). All measurements generate 128 output tokens.</p>
 
     <div class="cards cards-4">
       <div class="card">
@@ -79,8 +79,8 @@
           <th style="text-align:center">Context</th>
           <th style="text-align:center">Ratio</th>
           <th style="text-align:center">Quality</th>
-          <th style="text-align:right">After (t/s)</th>
           <th style="text-align:right">Before (t/s)</th>
+          <th style="text-align:right">After (t/s)</th>
           <th style="text-align:right">Speedup</th>
         </tr>
       </thead>
@@ -90,8 +90,8 @@
           <td style="text-align:center">8K</td>
           <td style="text-align:center">8x</td>
           <td style="text-align:center">0.997</td>
-          <td style="text-align:right">9.3</td>
           <td style="text-align:right">5.7</td>
+          <td style="text-align:right">9.3</td>
           <td style="text-align:right;color:var(--green)">+63%</td>
         </tr>
         <tr>
@@ -99,8 +99,8 @@
           <td style="text-align:center">4K</td>
           <td style="text-align:center">8x</td>
           <td style="text-align:center">0.999</td>
-          <td style="text-align:right">20.2</td>
           <td style="text-align:right">13.5</td>
+          <td style="text-align:right">20.2</td>
           <td style="text-align:right;color:var(--green)">+50%</td>
         </tr>
         <tr>
@@ -108,8 +108,8 @@
           <td style="text-align:center">4K</td>
           <td style="text-align:center">8x</td>
           <td style="text-align:center">0.997</td>
-          <td style="text-align:right">13.8</td>
           <td style="text-align:right">10.7</td>
+          <td style="text-align:right">13.8</td>
           <td style="text-align:right;color:var(--green)">+29%</td>
         </tr>
         <tr>
@@ -117,8 +117,8 @@
           <td style="text-align:center">16K</td>
           <td style="text-align:center">8x</td>
           <td style="text-align:center">0.999</td>
-          <td style="text-align:right">5.3</td>
           <td style="text-align:right">4.8</td>
+          <td style="text-align:right">5.3</td>
           <td style="text-align:right;color:var(--green)">+10%</td>
         </tr>
       </tbody>
@@ -284,7 +284,8 @@
   </div>
 
   <footer>
-    <p>Data from CI runs on Apple M2 Pro. <a href="https://github.com/jandhyala-dev/modelai-llama.cpp" target="_blank" rel="noopener noreferrer">View on GitHub</a></p>
+    <p>modelai-llama.cpp is MIT licensed. <a href="https://github.com/jandhyala-dev/modelai-llama.cpp" target="_blank" rel="noopener noreferrer">View on GitHub</a></p>
+    <p>Data from CI runs on Apple M2 Pro (32GB, Metal GPU).</p>
   </footer>
 
   <script>

@@ -6,7 +6,7 @@
   <title>modelai-llama.cpp — KV Cache Compaction for llama.cpp</title>
   <meta name="description" content="Production fork of llama.cpp with KV cache compaction. 50x compression, 0.9967 quality, +63% faster decoding, 256K context. 15 models validated. MIT licensed.">
   <meta property="og:title" content="modelai-llama.cpp — KV Cache Compaction for llama.cpp">
-  <meta property="og:description" content="LLMs forget long conversations. We fixed that. Compress context instead of discarding it. A 16GB laptop can hold conversations that previously required 64GB. Drop-in llama.cpp replacement.">
+  <meta property="og:description" content="Every AI model has a memory limit. modelai-llama.cpp compresses conversation history instead of dropping it — so local models on ordinary hardware can sustain deep, multi-hour sessions.">
   <meta property="og:url" content="https://www.model-ai.org/">
   <meta property="og:type" content="website">
   <meta name="twitter:card" content="summary">
@@ -32,8 +32,8 @@
   <!-- ====== HERO ====== -->
   <div class="hero">
     <h1>LLMs forget long conversations.<br>We fixed that.</h1>
-    <p class="hero-sub">When an AI model runs out of memory mid-conversation, it throws away the oldest context and forgets what you said. <strong>modelai-llama.cpp</strong> compresses that memory instead of discarding it &mdash; shrinking earlier parts of the conversation into a compact summary that stays in context, so nothing is lost. The model keeps the full conversation, runs faster, and produces nearly identical output.</p>
-    <p class="hero-sub">This means a retail laptop with 16GB of RAM can hold conversations that previously required 64GB or a cloud API &mdash; local models stay coherent through hour-long analysis sessions instead of losing track after ten minutes. Built on research from MIT, implemented in production C++, and validated across 15 models.</p>
+    <p class="hero-sub">Every AI model has a memory limit. Once a conversation exceeds it, the model silently drops the earliest context &mdash; it simply stops knowing what you discussed. <strong>modelai-llama.cpp</strong> takes a different approach: it compresses the conversation history into a fraction of its original size while preserving what the model actually needs to recall. Nothing is discarded. Responses stay faithful to the full dialogue, and inference speeds up because the compressed memory is smaller to search.</p>
+    <p class="hero-sub">For anyone running models locally, this changes what's possible. An ordinary laptop with 16 GB of RAM can now sustain long, complex conversations that previously required far more memory or a cloud API. Whether you're writing code, drafting a novel, analyzing data, tutoring a student, or simply having a conversation that spans hours instead of minutes &mdash; local models no longer lose track halfway through. Grounded in <a href="https://arxiv.org/abs/2602.16284" target="_blank" rel="noopener noreferrer">peer-reviewed research from MIT</a>, written entirely in production C++, and tested against 15 open-source models.</p>
     <div class="hero-badges">
       <span class="badge badge-green">MIT License</span>
       <span class="badge badge-blue">Drop-in llama.cpp Replacement</span>
@@ -123,7 +123,7 @@
 
     <!-- ====== HOW IT WORKS ====== -->
     <h2>How compaction works</h2>
-    <p>The algorithm runs in four stages, all in pure C++ with zero external dependencies:</p>
+    <p>The lifecycle above shows <em>when</em> compaction fires. Here's <em>what happens</em> inside that compression step &mdash; four stages, all in pure C++ with zero external dependencies:</p>
     <div class="stage-list">
       <div class="stage">
         <div class="stage-header">
@@ -174,7 +174,7 @@
     </div>
 
     <!-- ====== WHAT WE FIXED ====== -->
-    <h2>18 critical bugs found and fixed</h2>
+    <h2>18 Critical and Major bugs found and fixed</h2>
     <p>Implementing a research paper in production C++ exposed bugs the reference Python code never hit. Every bug was found through <a href="qa.html">adversarial review</a> &mdash; a 13-section protocol where the reviewer systematically tries to break the code.</p>
     <div class="bug-highlights">
       <div class="bug-item">
@@ -280,7 +280,7 @@
 git clone https://github.com/jandhyala-dev/modelai-llama.cpp
 cd modelai-llama.cpp
 cmake -B build -DGGML_METAL=ON
-cmake --build build --config Release -j$(nproc)
+cmake --build build --config Release -j
 
 <span class="code-comment"># Run with compaction enabled</span>
 ./build/bin/llama-server -m model.gguf --endpoint-compact -c 8192
@@ -305,10 +305,10 @@ llama_kv_cache_set_auto_compact(ctx, 0.9f);</div>
 
     <!-- ====== CI AND TESTING ====== -->
     <h2>CI and testing</h2>
-    <p>7 CI workflows, 53 tests, 8 test tiers. Every push and PR runs the full suite. <a href="qa.html">Full QA process</a>.</p>
+    <p>7 CI workflows, 52 C++ tests, 8 test tiers. Every push and PR runs the full suite. <a href="qa.html">Full QA process</a>.</p>
     <div class="cards cards-4">
       <div class="card"><div class="label">CI Workflows</div><div class="value">7</div><div class="detail">macOS, Windows, server, perf, sync</div></div>
-      <div class="card"><div class="label">C++ Tests</div><div class="value">53</div><div class="detail">CI-gated, all passing</div></div>
+      <div class="card"><div class="label">C++ Tests</div><div class="value">52</div><div class="detail">CI-gated, all passing</div></div>
       <div class="card"><div class="label">Test Tiers</div><div class="value">8</div><div class="detail">Unit tests to live dashboard</div></div>
       <div class="card"><div class="label">Review Sections</div><div class="value">13</div><div class="detail">Per adversarial review</div></div>
     </div>
