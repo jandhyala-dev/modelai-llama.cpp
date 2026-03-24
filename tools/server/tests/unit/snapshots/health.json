@@ -1,0 +1,8 @@
+{
+  "$comment": "Structural schema for /health response",
+  "type": "object",
+  "required": ["status"],
+  "properties": {
+    "status": { "type": "string" }
+  }
+}

@@ -1,0 +1,48 @@
+{
+  "$comment": "Structural schema for /completion (non-streaming) response",
+  "type": "object",
+  "required": [
+    "content",
+    "id_slot",
+    "stop",
+    "model",
+    "tokens_predicted",
+    "tokens_evaluated",
+    "generation_settings",
+    "prompt",
+    "has_new_line",
+    "truncated",
+    "stop_type",
+    "timings",
+    "tokens"
+  ],
+  "properties": {
+    "content":          { "type": "string" },
+    "id_slot":          { "type": "integer" },
+    "stop":             { "type": "boolean" },
+    "model":            { "type": "string" },
+    "tokens_predicted": { "type": "integer" },
+    "tokens_evaluated": { "type": "integer" },
+    "prompt":           { "type": "string" },
+    "has_new_line":     { "type": "boolean" },
+    "truncated":        { "type": "boolean" },
+    "stop_type":        { "type": "string" },
+    "tokens":           { "type": "array" },
+    "generation_settings": {
+      "type": "object",
+      "required": ["n_predict", "seed"],
+      "properties": {
+        "n_predict": { "type": "integer" },
+        "seed":      { "type": "integer" }
+      }
+    },
+    "timings": {
+      "type": "object",
+      "required": ["prompt_n", "predicted_n"],
+      "properties": {
+        "prompt_n":    { "type": "integer" },
+        "predicted_n": { "type": "integer" }
+      }
+    }
+  }
+}

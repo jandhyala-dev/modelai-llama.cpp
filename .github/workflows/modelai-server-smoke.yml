@@ -147,3 +147,42 @@ jobs:
           echo "compact endpoint returned HTTP $HTTP_CODE"
           # 200 or 4xx are both acceptable (proves endpoint is registered and gated flag works)
           test "$HTTP_CODE" -lt 500
+
+  server-pytests-macos:
+    name: server-pytests-macos
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Fetch upstream provenance branch
+        run: |
+          git fetch --no-tags origin refs/heads/upstream-master:refs/remotes/origin/upstream-master
+
+      - name: Configure
+        run: |
+          cmake -B build \
+            -DCMAKE_BUILD_RPATH="@loader_path" \
+            -DGGML_METAL=ON \
+            -DLLAMA_BUILD_TESTS=ON \
+            -DLLAMA_BUILD_EXAMPLES=ON \
+            -DLLAMA_FATAL_WARNINGS=ON
+
+      - name: Build llama-server
+        run: |
+          cmake --build build --config Release -j $(sysctl -n hw.logicalcpu) --target llama-server
+
+      - name: Install test dependencies
+        run: |
+          pip3 install -r tools/server/tests/requirements.txt
+
+      - name: Run server pytests (fast)
+        env:
+          LLAMA_SERVER_BIN_PATH: ./build/bin/llama-server
+          N_GPU_LAYERS: 0
+        run: |
+          cd tools/server/tests
+          python3 -m pytest unit/ -v -x -m "not slow" --timeout=120 2>&1 | tail -60

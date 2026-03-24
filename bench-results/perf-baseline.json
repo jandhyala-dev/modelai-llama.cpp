@@ -1,0 +1,15 @@
+{
+  "model": "",
+  "commit": "",
+  "date": "",
+  "metrics": {
+    "prompt_eval_tok_s": null,
+    "generation_tok_s": null,
+    "compact_2x_ms": null,
+    "peak_rss_mb": null
+  },
+  "thresholds": {
+    "regression_max_pct": 10,
+    "memory_regression_max_pct": 15
+  }
+}

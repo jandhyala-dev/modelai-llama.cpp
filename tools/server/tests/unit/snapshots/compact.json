@@ -1,0 +1,21 @@
+{
+  "$comment": "Structural schema for /compact (success) response",
+  "type": "object",
+  "required": [
+    "success",
+    "method",
+    "compacted_tokens",
+    "original_tokens",
+    "compression_ratio",
+    "compaction_time_ms"
+  ],
+  "properties": {
+    "success":           { "type": "boolean" },
+    "method":            { "type": "string" },
+    "compacted_tokens":  { "type": "integer" },
+    "original_tokens":   { "type": "integer" },
+    "compression_ratio": { "type": "number" },
+    "compaction_time_ms":{ "type": "number" },
+    "reclaimed":         { "type": "boolean" }
+  }
+}

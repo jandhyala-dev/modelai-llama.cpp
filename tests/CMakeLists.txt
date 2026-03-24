@@ -276,6 +276,18 @@ llama_build_and_test(test-kv-compact-pipeline-integration.cpp LABEL "model" ARGS
 target_include_directories(test-kv-compact-pipeline-integration PRIVATE ${PROJECT_SOURCE_DIR})
 set_tests_properties(test-kv-compact-pipeline-integration PROPERTIES FIXTURES_REQUIRED test-download-model)
 
+llama_build_and_test(test-kv-compact-exhaustion.cpp LABEL "model" ARGS -m "${MODEL_DEST}")
+target_include_directories(test-kv-compact-exhaustion PRIVATE ${PROJECT_SOURCE_DIR})
+set_tests_properties(test-kv-compact-exhaustion PROPERTIES FIXTURES_REQUIRED test-download-model)
+
+llama_build_and_test(test-kv-compact-parallel-slots.cpp LABEL "model" ARGS -m "${MODEL_DEST}")
+target_include_directories(test-kv-compact-parallel-slots PRIVATE ${PROJECT_SOURCE_DIR})
+set_tests_properties(test-kv-compact-parallel-slots PROPERTIES FIXTURES_REQUIRED test-download-model)
+
+llama_build_and_test(test-kv-compact-quality-gate.cpp LABEL "model" ARGS -m "${MODEL_DEST}")
+target_include_directories(test-kv-compact-quality-gate PRIVATE ${PROJECT_SOURCE_DIR})
+set_tests_properties(test-kv-compact-quality-gate PROPERTIES FIXTURES_REQUIRED test-download-model)
+
 # F-C-12: register model-dependent tests (previously built but never registered)
 llama_build_and_test(test-kv-compact-workload.cpp LABEL "model" ARGS -m "${MODEL_DEST}")
 target_include_directories(test-kv-compact-workload PRIVATE ${PROJECT_SOURCE_DIR})

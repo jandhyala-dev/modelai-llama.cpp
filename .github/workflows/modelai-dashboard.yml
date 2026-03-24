@@ -1,0 +1,51 @@
+name: ModelAI Dashboard Update
+
+on:
+  workflow_dispatch:
+  workflow_run:
+    workflows: ["ModelAI CI", "ModelAI Perf Smoke"]
+    types: [completed]
+    branches: [modelai-main]
+
+concurrency:
+  group: dashboard-update
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  update-dashboard:
+    name: update-dashboard-data
+    runs-on: ubuntu-latest
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Generate dashboard data
+        run: |
+          python3 scripts/update-dashboard-data.py \
+            --bench-dir bench-results \
+            --baseline bench-results/perf-baseline.json \
+            --output bench-results/history.jsonl
+
+      - name: Commit if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet bench-results/history.jsonl 2>/dev/null; then
+            echo "No changes to history.jsonl"
+          else
+            git add bench-results/history.jsonl
+            git commit -m "chore: update dashboard data [skip ci]"
+            git push
+          fi

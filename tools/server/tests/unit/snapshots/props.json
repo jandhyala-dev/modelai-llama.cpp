@@ -1,0 +1,147 @@
+{
+  "$comment": "Structural schema for /props response",
+  "type": "object",
+  "required": [
+    "default_generation_settings",
+    "total_slots",
+    "model_path",
+    "modelai"
+  ],
+  "properties": {
+    "default_generation_settings": {
+      "type": "object",
+      "required": ["n_ctx"],
+      "properties": {
+        "n_ctx": { "type": "integer" }
+      }
+    },
+    "total_slots": { "type": "integer" },
+    "model_path":  { "type": "string" },
+    "modelai": {
+      "type": "object",
+      "required": ["contract", "capabilities", "runtime"],
+      "properties": {
+        "contract": {
+          "type": "object",
+          "required": [
+            "name",
+            "contract_version",
+            "engine_version",
+            "engine_commit",
+            "upstream_base_commit",
+            "server_mode"
+          ],
+          "properties": {
+            "name":                 { "type": "string" },
+            "contract_version":     { "type": "string" },
+            "engine_version":       { "type": "string" },
+            "engine_commit":        { "type": "string" },
+            "upstream_base_commit": { "type": "string" },
+            "server_mode":          { "type": "string" }
+          }
+        },
+        "capabilities": {
+          "type": "object",
+          "required": [
+            "effective_context_window",
+            "flash_attention",
+            "structured_output",
+            "prompt_cache",
+            "save_restore",
+            "compacted_prefix",
+            "features"
+          ],
+          "properties": {
+            "effective_context_window": { "type": "integer" },
+            "flash_attention": {
+              "type": "object",
+              "required": ["supports_additive_kq_b"],
+              "properties": {
+                "supports_additive_kq_b": { "type": "boolean" }
+              }
+            },
+            "structured_output": {
+              "type": "object",
+              "required": ["json_schema"],
+              "properties": {
+                "json_schema": { "type": "boolean" }
+              }
+            },
+            "prompt_cache": {
+              "type": "object",
+              "required": ["enabled"],
+              "properties": {
+                "enabled": { "type": "boolean" }
+              }
+            },
+            "save_restore": {
+              "type": "object",
+              "required": ["available"],
+              "properties": {
+                "available": { "type": "boolean" }
+              }
+            },
+            "compacted_prefix": {
+              "type": "object",
+              "required": ["available", "enabled", "tested_envelope"],
+              "properties": {
+                "available":             { "type": "boolean" },
+                "enabled":               { "type": "boolean" },
+                "flash_attn_overridden": { "type": "boolean" },
+                "last_fallback_reason":  { "type": "string" },
+                "tested_envelope": {
+                  "type": "object",
+                  "required": ["min_context", "max_context", "max_ratio_4k", "pipelines", "note"],
+                  "properties": {
+                    "min_context":  { "type": "integer" },
+                    "max_context":  { "type": "integer" },
+                    "max_ratio_4k": { "type": "integer" },
+                    "pipelines":    { "type": "array" },
+                    "note":         { "type": "string" }
+                  }
+                }
+              }
+            },
+            "features": {
+              "type": "object",
+              "required": ["metrics_endpoint", "slots_endpoint"],
+              "properties": {
+                "metrics_endpoint": { "type": "boolean" },
+                "slots_endpoint":   { "type": "boolean" }
+              }
+            }
+          }
+        },
+        "runtime": {
+          "type": "object",
+          "required": ["state", "memory", "kv", "compaction"],
+          "properties": {
+            "state": { "type": "string" },
+            "memory": {
+              "type": "object",
+              "required": ["allocated_context_bytes"],
+              "properties": {
+                "allocated_context_bytes": { "type": "integer" }
+              }
+            },
+            "kv": {
+              "type": "object",
+              "required": ["active_n_kv_total"],
+              "properties": {
+                "active_n_kv_total": { "type": "integer" }
+              }
+            },
+            "compaction": {
+              "type": "object",
+              "required": ["available", "enabled"],
+              "properties": {
+                "available": { "type": "boolean" },
+                "enabled":   { "type": "boolean" }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,68 @@
+name: ModelAI CI Windows
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - modelai-main
+      - upstream-master
+      - kv-compact-*
+      - feature/**
+    paths:
+      - '.github/workflows/modelai-ci-windows.yml'
+      - '**/CMakeLists.txt'
+      - '**/*.cmake'
+      - 'ggml/**'
+      - 'include/**'
+      - 'src/**'
+      - 'common/**'
+      - 'tests/**'
+      - 'tools/**'
+      - 'examples/**'
+  pull_request:
+    types: [opened, synchronize, reopened]
+    paths:
+      - '.github/workflows/modelai-ci-windows.yml'
+      - '**/CMakeLists.txt'
+      - '**/*.cmake'
+      - 'ggml/**'
+      - 'include/**'
+      - 'src/**'
+      - 'common/**'
+      - 'tests/**'
+      - 'tools/**'
+      - 'examples/**'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  build-windows-cpu:
+    name: build-windows-cpu
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Fetch upstream provenance branch
+        run: |
+          git fetch --no-tags origin refs/heads/upstream-master:refs/remotes/origin/upstream-master
+
+      - name: Configure
+        run: |
+          cmake -B build -G "Visual Studio 17 2022" -A x64 `
+            -DLLAMA_BUILD_TESTS=ON `
+            -DLLAMA_BUILD_EXAMPLES=ON `
+            -DLLAMA_FATAL_WARNINGS=ON
+
+      - name: Build
+        run: |
+          cmake --build build --config Release -j $env:NUMBER_OF_PROCESSORS
+
+      - name: Test
+        run: |
+          ctest --test-dir build -L main --output-on-failure --timeout 900
