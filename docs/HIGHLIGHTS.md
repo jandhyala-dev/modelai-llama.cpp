@@ -98,9 +98,11 @@ Zero regression from compaction code. MoE model (30B-A3B) is 13% faster than Oll
 
 - **29 fix commits** addressing 29 distinct bugs (18 Critical/Major)
 - **17 models tested** — 15 pass the 0.95 cosine quality gate
-- **49 CI-gated C++ tests**, 61 total
+- **51 CI-gated C++ tests**, 64 total (48 main-label + 3 model-label + 13 server pytests)
+- **8 engine test tiers** — pytests, API snapshots, perf regression, quality gate, Windows CI, stress tests, contract tests, live dashboard
 - **6 upstream KV cache changes** verified compatible before shipping
 - **RPC RCE security patch** synced same-day from upstream
+- **Weekly upstream sync** — automated Saturday 2PM PDT via CI, 3-branch model
 - **Every merge gated** by 13-section adversarial review with concrete traces
 
 ---
@@ -122,7 +124,7 @@ Gemma3-12B (upstream SWA bug), Qwen2-VL (M-RoPE spatial), GLM4 (M-RoPE), Mamba/R
 | [CHANGELOG](CHANGELOG.md) | Full implementation history: V0 → V1 → V2 → V5 → Phase 8 |
 | [DESIGN-DECISIONS](DESIGN-DECISIONS.md) | 13 architecture decisions with rationale |
 | [BUGS-AND-FIXES](BUGS-AND-FIXES.md) | All 29 bugs: root cause, fix, commit SHA |
-| [UPSTREAM-SYNC](UPSTREAM-SYNC.md) | Sync process, verified compatibility, sync history |
+| [UPSTREAM-SYNC](UPSTREAM-SYNC.md) | Sync process, CI workflows, test tiers |
 | [kv-compaction-algorithm](kv-compaction-algorithm.md) | Algorithm stages: selection, fitting, execution |
 | [kv-compaction-integration](kv-compaction-integration.md) | File map and architecture support matrix |
 | [benchmark-fork-vs-upstream](benchmark-fork-vs-upstream.md) | 3-way speed comparison |

@@ -67,6 +67,26 @@ jobs:
         run: |
           ctest --test-dir build -L main -E "test-llama-archs" --output-on-failure --timeout 900
 
+      # Benchmark regression check: runs bench-regression-check.py against
+      # existing bench-results if a baseline exists. This validates that the
+      # most recent benchmark data still passes thresholds after the upstream
+      # merge. Full benchmark runs (needle-haystack, multiturn, throughput)
+      # require real models and are run manually before the weekly merge.
+      # See plan section 7.1.4 for the manual benchmark gate process.
+      - name: Benchmark regression check (if baseline exists)
+        if: steps.merge.outputs.conflict == 'false' && steps.test.outcome == 'success'
+        run: |
+          if ls bench-results/20*/manifest.json 1>/dev/null 2>&1; then
+            echo "Baseline found — running regression check"
+            python3 scripts/bench-regression-check.py \
+              --current bench-results \
+              --branch upstream-sync \
+              --commit "$(git rev-parse --short HEAD)" \
+              --out-dir bench-results/upstream-sync || echo "::warning::Benchmark regression check failed"
+          else
+            echo "No baseline found — skipping regression check"
+          fi
+
       - name: Push upstream-sync (on all success)
         if: steps.merge.outputs.conflict == 'false' && steps.build.outcome == 'success' && steps.test.outcome == 'success'
         run: |

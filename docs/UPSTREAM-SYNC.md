@@ -8,15 +8,16 @@ modelai-llama.cpp tracks [ggml-org/llama.cpp](https://github.com/ggml-org/llama.
 
 | Branch | Purpose |
 |--------|---------|
-| `upstream-sync` | Mirror of upstream `master`. Manually updated before each merge. |
-| `modelai-main` | Stable shipping branch. Merge-only from `upstream-sync` after review. |
-| `kv-compact-*` | Feature branches for compaction milestones. |
+| `modelai-main` | Working branch. All development, PRs, and releases. |
+| `upstream-master` | Clean upstream tracking. Read-only mirror of `ggml-org/llama.cpp:master`. |
+| `upstream-sync` | Single reusable sync staging branch. All merge history in one place. |
+
+Three long-lived branches, no sprawl. Feature work uses short-lived branches off `modelai-main`.
 
 ## Sync Cadence
 
-- **Before each merge:** Fetch `ggml-org/llama.cpp:master` into `upstream-sync`.
-- **Weekly:** `upstream-sync` is merged into `modelai-main` after build verification and conflict resolution.
-- **Emergency:** Security patches (e.g., RCE fixes) are synced and merged same-day.
+- **Weekly:** Automated CI sync every Saturday 2PM PDT (`modelai-upstream-sync.yml`). Merges `upstream/master` into `upstream-sync`, builds, tests, and pushes. Opens a GitHub Issue on failure.
+- **Emergency:** Security patches (e.g., RCE fixes) are synced and merged same-day via `workflow_dispatch`.
 
 ## What Gets Validated on Each Merge
 
@@ -86,7 +87,7 @@ Forking llama.cpp inherits all upstream GitHub Actions workflows. We disable inh
 - CI billing drain (minutes consumed on every push)
 - Self-hosted runner queue failures (runners don't exist in the fork)
 
-**Active workflows:** `modelai-ci`, `modelai-server-smoke`, `modelai-perf-smoke`
+**Active workflows (7):** `modelai-ci`, `modelai-server-smoke`, `modelai-perf-smoke`, `modelai-ci-windows`, `modelai-upstream-sync`, `modelai-dashboard`, `modelai-auto-label`
 **Disabled:** All inherited upstream workflows (renamed to `.disabled`)
 
 When upstream adds new workflow files (e.g., splitting `build.yml` into per-platform files), they are disabled in the next sync commit.

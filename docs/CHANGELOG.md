@@ -174,11 +174,38 @@ Audited fork against arXiv:2602.16284 reference implementation. Identified 16 ga
 
 ---
 
+## OSS Launch Infrastructure
+
+### Engine Test Tiers (8 tiers)
+| Tier | Name | Implementation |
+|------|------|---------------|
+| 1 | Server pytests | `modelai-server-smoke.yml` — fast unit tests in CI |
+| 2 | API contract snapshots | `test_api_contract.py` — schema validation against `snapshots/*.json` |
+| 3 | Perf regression | `perf-regression-check.py` — speed/RSS/compact latency vs baseline |
+| 4 | Quality gate | `test-kv-compact-quality-gate.cpp` — cosine floor, KV survival, state round-trip |
+| 5 | Windows CI | `modelai-ci-windows.yml` — MSVC x64 CPU-only build + test |
+| 6 | Stress tests | `test-kv-compact-exhaustion.cpp`, `test-kv-compact-parallel-slots.cpp` |
+| 7 | ModelAI contract | `test_modelai_contract.py` — /props, /metrics, /compact contract validation |
+| 8 | Live dashboard | `update-dashboard-data.py` + `modelai-dashboard.yml` → `history.jsonl` |
+
+### CI Workflows (7 active)
+| Workflow | Trigger | Purpose |
+|----------|---------|---------|
+| `modelai-ci` | push, PR | Build + 48 main-label tests |
+| `modelai-server-smoke` | push, PR | Server smoke + pytests |
+| `modelai-perf-smoke` | push, PR | Performance regression detection |
+| `modelai-ci-windows` | push, PR | Windows MSVC build + test |
+| `modelai-upstream-sync` | Saturday 2PM PDT | Weekly upstream merge + build + test |
+| `modelai-dashboard` | after CI/perf success | Aggregate bench data to history.jsonl |
+| `modelai-auto-label` | issues, PRs | Auto-label by path/keyword |
+
+---
+
 ## Upstream Sync
 
 ### Process
-- Daily CI fetch of `ggml-org/llama.cpp:master` into `upstream-sync` branch
-- Weekly merge to `modelai-main` after build + test verification
+- Weekly CI sync of `ggml-org/llama.cpp:master` into `upstream-sync` branch (Saturday 2PM PDT)
+- 3 long-lived branches: `modelai-main`, `upstream-master`, `upstream-sync`
 - Emergency same-day sync for security patches
 
 ### Sync Events
@@ -206,5 +233,7 @@ Audited fork against arXiv:2602.16284 reference implementation. Identified 16 ga
 | Best quality (cosine) | 0.999 (Qwen3-30B-A3B at 4K/2x) |
 | Best speedup | +63% decode at 8K/8x (Qwen3-8B) |
 | Max effective context | 256K from 64K physical (100% recall) |
-| C++ test points | 49 CI-gated, 61 total |
+| C++ test points | 51 CI-gated, 64 total |
+| Engine test tiers | 8 (pytests → live dashboard) |
+| CI workflows | 7 active |
 | Adversarial review rounds | Every merge gated |

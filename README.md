@@ -82,7 +82,24 @@ curl -X POST http://localhost:8080/compact \
 
 ## Benchmarks
 
-See [bench-results/](bench-results/) for raw benchmark data across 17 models.
+See [bench-results/](bench-results/) for raw benchmark data across 17 models and [bench-results/history.jsonl](bench-results/history.jsonl) for dashboard-ready time series.
+
+## Testing
+
+8 engine test tiers, 7 CI workflows:
+
+```bash
+# Run main test suite (48 tests)
+ctest --test-dir build -L main --output-on-failure
+
+# Run server pytests
+cd tools/server/tests && python3 -m pytest unit/ -v -x -m "not slow"
+
+# Run perf regression check
+python3 scripts/perf-regression-check.py --model-path model.gguf
+```
+
+See [docs/CHANGELOG.md](docs/CHANGELOG.md#oss-launch-infrastructure) for the full test tier breakdown.
 
 ## ModelAI Integration
 
@@ -107,7 +124,7 @@ This fork exposes optional `modelai_*` Prometheus metrics and a contract endpoin
 
 ## Upstream Relationship
 
-This is a fork of [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp). We sync weekly with upstream and maintain full backwards compatibility. All compaction code lives in `src/llama-kv-compact-*` files with minimal hooks into upstream code.
+This is a fork of [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp). Automated weekly sync every Saturday (CI-gated: merge + build + test). Three branches: `modelai-main` (working), `upstream-master` (tracking), `upstream-sync` (staging). All compaction code lives in `src/llama-kv-compact-*` files with minimal hooks into upstream code.
 
 Related upstream discussion: [ggml-org/llama.cpp#20037](https://github.com/ggml-org/llama.cpp/issues/20037)
 
