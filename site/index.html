@@ -30,13 +30,13 @@
   </nav>
 
   <div class="hero">
-    <h1>Keep more context without pretending the tradeoffs do not exist.</h1>
-    <p class="hero-sub">Large language models keep prior tokens in a KV cache, which functions like a conversation memory buffer. When that memory fills up, most local runtimes slide the window forward and discard earlier context. <strong>modelai-llama.cpp</strong> adds KV cache compaction instead: compress the older memory into a smaller learned representation, then continue the session with more of the earlier context preserved.</p>
-    <p class="hero-sub">This fork is a production C++ implementation built on top of <a href="https://github.com/ggml-org/llama.cpp" target="_blank" rel="noopener noreferrer">llama.cpp</a>, based on <a href="https://arxiv.org/abs/2602.16284" target="_blank" rel="noopener noreferrer">Attention Matching</a> from MIT. The current verified benchmark set shows baseline parity with upstream, large decode gains at some higher-ratio / longer-context settings, and specific configurations that slow down. Those slower cases are shown on this site too.</p>
+    <h1>Longer local sessions, lower memory pressure, and a fork that stays close to llama.cpp.</h1>
+    <p class="hero-sub"><strong>modelai-llama.cpp</strong> is a production fork of <a href="https://github.com/ggml-org/llama.cpp" target="_blank" rel="noopener noreferrer">llama.cpp</a> that improves local inference efficiency by compacting KV cache instead of dropping old context. For users, that means longer conversations with less forgetting and faster decode in the stronger published configurations. For developers, it stays close to upstream while adding compaction pipelines, auto-compaction, persistence, and public server/C API surfaces.</p>
+    <p class="hero-sub">The current verified benchmark set shows baseline parity with upstream, up to <strong>+63%</strong> decode speed at 8K / 8x on Qwen3-8B, and a documented iterative <strong>256K-from-64K</strong> context-extension result. It also includes slower cases such as <strong>-31%</strong> at 16K / 2x, which are shown on this site rather than hidden.</p>
     <div class="hero-badges">
       <span class="badge badge-green">MIT License</span>
       <span class="badge badge-blue">Drop-in llama.cpp fork</span>
-      <span class="badge badge-green">Benchmarks attributed to source files</span>
+      <span class="badge badge-green">17 models, 5 architectures</span>
     </div>
   </div>
 
