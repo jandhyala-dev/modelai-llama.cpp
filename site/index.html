@@ -30,9 +30,10 @@
   </nav>
 
   <div class="hero">
-    <h1>Longer local sessions, lower memory pressure, and a fork that stays close to llama.cpp.</h1>
-    <p class="hero-sub"><strong>modelai-llama.cpp</strong> is a production fork of <a href="https://github.com/ggml-org/llama.cpp" target="_blank" rel="noopener noreferrer">llama.cpp</a> that improves local inference efficiency by compacting KV cache instead of dropping old context. For users, that means longer conversations with less forgetting and faster decode in the stronger published configurations. For developers, it stays close to upstream while adding compaction pipelines, auto-compaction, persistence, and public server/C API surfaces.</p>
-    <p class="hero-sub">The current verified benchmark set shows baseline parity with upstream, up to <strong>+63%</strong> decode speed at 8K / 8x on Qwen3-8B, and a documented iterative <strong>256K-from-64K</strong> context-extension result. Speedups depend on compression ratio and context length, and the detailed tradeoffs are shown below and on the benchmarks page.</p>
+    <div class="hero-kicker">KV cache compaction for llama.cpp</div>
+    <h1>Longer local sessions without throwing away context.</h1>
+    <p class="hero-sub"><strong>modelai-llama.cpp</strong> is a production fork of <a href="https://github.com/ggml-org/llama.cpp" target="_blank" rel="noopener noreferrer">llama.cpp</a> that compacts KV cache instead of dropping older history when memory fills up. For users, that means less forgetting and better long-session behavior on local hardware. For developers, it adds compaction pipelines, auto-compaction, persistence, and public server/C API surfaces while staying close to upstream.</p>
+    <p class="hero-sub">Published benchmarks show baseline parity with upstream, up to <strong>+63%</strong> decode speed at 8K / 8x on Qwen3-8B, and an iterative <strong>256K-from-64K</strong> context-extension result. The exact tables, constraints, and tradeoffs are linked below.</p>
     <div class="hero-badges">
       <span class="badge badge-green">MIT License</span>
       <span class="badge badge-blue">Drop-in llama.cpp fork</span>
