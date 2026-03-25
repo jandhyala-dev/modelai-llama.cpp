@@ -4,15 +4,14 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Benchmarks — modelai-llama.cpp</title>
-  <meta name="description" content="Benchmark data for modelai-llama.cpp: decode speedup after compaction, quality heatmap, fork vs upstream comparison, 256K context extension results.">
+  <meta name="description" content="Published benchmark tables for modelai-llama.cpp, including baseline parity, compacted decode speed, slowdown rows, quality heatmaps, and iterative 256K context-extension notes.">
   <meta property="og:title" content="Benchmarks — modelai-llama.cpp">
-  <meta property="og:description" content="Decode speedup, quality heatmap, fork vs upstream comparison. Benchmark data from CI.">
+  <meta property="og:description" content="Full benchmark tables with attribution, tradeoffs, and methodology notes.">
   <meta property="og:url" content="https://www.model-ai.org/benchmarks.html">
   <meta property="og:type" content="website">
   <meta name="twitter:card" content="summary">
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><rect width='100' height='100' rx='20' fill='%230d1117'/><text x='50' y='68' font-size='55' text-anchor='middle' fill='%2358a6ff' font-family='system-ui' font-weight='700'>M</text></svg>">
   <link rel="stylesheet" href="style.css">
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
 </head>
 <body>
   <nav>
@@ -30,289 +29,250 @@
 
   <div class="container">
     <h1>Benchmarks</h1>
-    <p>Performance and quality data from CI runs on Apple M2 Pro (32GB, Metal GPU). All measurements generate 128 output tokens.</p>
+    <p>This page uses only the currently approved benchmark sources for the site. That means the published data here is intentionally narrower than the full repo history. It includes the full Qwen tables from the fork-vs-upstream benchmark note, the iterative 50x / 256K result from the changelog, and the summary ranges in <code>docs/HIGHLIGHTS.md</code>.</p>
+    <p style="font-size:0.85rem;">Primary source: <a href="https://github.com/jandhyala-dev/modelai-llama.cpp/blob/modelai-main/docs/benchmark-fork-vs-upstream.md" target="_blank" rel="noopener noreferrer">docs/benchmark-fork-vs-upstream.md</a> (2026-03-13). Hardware: Apple M2 Pro, 32GB unified memory, Metal GPU, 128-token generation.</p>
 
     <div class="cards cards-4">
       <div class="card">
-        <div class="label">Models Tested</div>
-        <div class="value">17</div>
-        <div class="detail">15 pass the 0.95 quality gate</div>
+        <div class="label">Baseline parity</div>
+        <div class="value">within 2%</div>
+        <div class="detail">modelai-llama.cpp vs upstream llama.cpp on the published decode benchmark.</div>
       </div>
       <div class="card">
-        <div class="label">Best Quality</div>
-        <div class="value">0.999</div>
-        <div class="detail">Qwen3-30B-A3B at 4K/2x</div>
-      </div>
-      <div class="card">
-        <div class="label">Best Speedup</div>
+        <div class="label">Best published decode gain</div>
         <div class="value">+63%</div>
-        <div class="detail">Qwen3-8B at 8K/8x</div>
+        <div class="detail">Qwen3-8B at 8K / 8x on the select pipeline.</div>
       </div>
       <div class="card">
-        <div class="label">Max Context</div>
-        <div class="value">256K</div>
-        <div class="detail">From 64K physical, 100% recall</div>
+        <div class="label">Best published quality</div>
+        <div class="value">0.999</div>
+        <div class="detail">Multiple select-pipeline rows in the published Qwen tables.</div>
+      </div>
+      <div class="card card-problem">
+        <div class="label">Largest published slowdown</div>
+        <div class="value">-31%</div>
+        <div class="detail">Qwen3-8B at 16K / 2x. This page includes the negative rows too.</div>
       </div>
     </div>
 
-    <!-- ====== 50X HEADLINE ====== -->
-    <h2>High-compression benchmark</h2>
-    <p>Iterative on-policy refinement enables extreme compression ratios while maintaining near-perfect quality.</p>
+    <h2>1. Baseline runtime comparison (no compaction)</h2>
+    <p>This table matters because it shows what happens when compaction is not used. The fork stays close to upstream on decode speed, which means the compaction code does not introduce a baseline penalty in the published benchmark run.</p>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th style="text-align:left">Model</th>
+            <th style="text-align:right">modelai Gen (t/s)</th>
+            <th style="text-align:right">upstream Gen (t/s)</th>
+            <th style="text-align:right">Ollama Gen (t/s)</th>
+            <th style="text-align:right">modelai vs upstream</th>
+            <th style="text-align:right">modelai vs Ollama</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style="text-align:left">Qwen3-8B</td>
+            <td style="text-align:right">30.4</td>
+            <td style="text-align:right">30.1</td>
+            <td style="text-align:right">29.2</td>
+            <td style="text-align:right;color:var(--green)">+1.0%</td>
+            <td style="text-align:right;color:var(--green)">+4.1%</td>
+          </tr>
+          <tr>
+            <td style="text-align:left">Qwen3-14B</td>
+            <td style="text-align:right">17.1</td>
+            <td style="text-align:right">17.4</td>
+            <td style="text-align:right">16.7</td>
+            <td style="text-align:right;color:var(--text-muted)">-1.7%</td>
+            <td style="text-align:right;color:var(--green)">+2.4%</td>
+          </tr>
+          <tr>
+            <td style="text-align:left">Qwen3-30B-A3B</td>
+            <td style="text-align:right">52.8</td>
+            <td style="text-align:right">51.8</td>
+            <td style="text-align:right">46.7</td>
+            <td style="text-align:right;color:var(--green)">+1.9%</td>
+            <td style="text-align:right;color:var(--green)">+13.1%</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>Prompt processing throughput</h3>
+    <p>The same benchmark note also publishes prompt-side throughput. The site should show it because it is part of the documented runtime baseline even though the fork’s core claim is about decode after compaction.</p>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th style="text-align:left">Model</th>
+            <th style="text-align:right">modelai Prompt (t/s)</th>
+            <th style="text-align:right">upstream Prompt (t/s)</th>
+            <th style="text-align:right">Ollama Prompt (t/s)</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style="text-align:left">Qwen3-8B</td>
+            <td style="text-align:right">93.6</td>
+            <td style="text-align:right">92.4</td>
+            <td style="text-align:right">131.0</td>
+          </tr>
+          <tr>
+            <td style="text-align:left">Qwen3-14B</td>
+            <td style="text-align:right">52.0</td>
+            <td style="text-align:right">52.5</td>
+            <td style="text-align:right">73.3</td>
+          </tr>
+          <tr>
+            <td style="text-align:left">Qwen3-30B-A3B</td>
+            <td style="text-align:right">85.8</td>
+            <td style="text-align:right">97.4</td>
+            <td style="text-align:right">112.5</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2>2. Compacted decode speed (select pipeline)</h2>
+    <p>This is the main published evidence for the fork’s practical value. It is also where the tradeoffs show up most clearly. Higher ratios and longer contexts can help. Lower ratios can be neutral or slower. The negative rows are kept here intentionally.</p>
+
+    <h3>Qwen3-8B</h3>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th style="text-align:center">Context</th>
+            <th style="text-align:center">Ratio</th>
+            <th style="text-align:center">Cosine</th>
+            <th style="text-align:right">Compacted Decode (t/s)</th>
+            <th style="text-align:right">Baseline Decode (t/s)</th>
+            <th style="text-align:right">Effective Speedup</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td style="text-align:center">4K</td><td style="text-align:center">2x</td><td style="text-align:center">0.999</td><td style="text-align:right">10.0</td><td style="text-align:right">10.7</td><td style="text-align:right;color:var(--red)">-7%</td></tr>
+          <tr><td style="text-align:center">4K</td><td style="text-align:center">4x</td><td style="text-align:center">0.999</td><td style="text-align:right">12.3</td><td style="text-align:right">10.7</td><td style="text-align:right;color:var(--green)">+15%</td></tr>
+          <tr><td style="text-align:center">4K</td><td style="text-align:center">8x</td><td style="text-align:center">0.997</td><td style="text-align:right">13.8</td><td style="text-align:right">10.7</td><td style="text-align:right;color:var(--green)">+29%</td></tr>
+          <tr><td style="text-align:center">8K</td><td style="text-align:center">2x</td><td style="text-align:center">0.999</td><td style="text-align:right">6.1</td><td style="text-align:right">5.7</td><td style="text-align:right;color:var(--green)">+7%</td></tr>
+          <tr><td style="text-align:center">8K</td><td style="text-align:center">4x</td><td style="text-align:center">0.998</td><td style="text-align:right">8.0</td><td style="text-align:right">5.7</td><td style="text-align:right;color:var(--green)">+40%</td></tr>
+          <tr><td style="text-align:center">8K</td><td style="text-align:center">8x</td><td style="text-align:center">0.997</td><td style="text-align:right">9.3</td><td style="text-align:right">5.7</td><td style="text-align:right;color:var(--green)">+63%</td></tr>
+          <tr><td style="text-align:center">16K</td><td style="text-align:center">2x</td><td style="text-align:center">0.999</td><td style="text-align:right">3.3</td><td style="text-align:right">4.8</td><td style="text-align:right;color:var(--red)">-31%</td></tr>
+          <tr><td style="text-align:center">16K</td><td style="text-align:center">4x</td><td style="text-align:center">0.999</td><td style="text-align:right">4.5</td><td style="text-align:right">4.8</td><td style="text-align:right;color:var(--red)">-6%</td></tr>
+          <tr><td style="text-align:center">16K</td><td style="text-align:center">8x</td><td style="text-align:center">0.999</td><td style="text-align:right">5.3</td><td style="text-align:right">4.8</td><td style="text-align:right;color:var(--green)">+10%</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>Qwen3-30B-A3B</h3>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th style="text-align:center">Context</th>
+            <th style="text-align:center">Ratio</th>
+            <th style="text-align:center">Cosine</th>
+            <th style="text-align:right">Compacted Decode (t/s)</th>
+            <th style="text-align:right">Baseline Decode (t/s)</th>
+            <th style="text-align:right">Effective Speedup</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td style="text-align:center">4K</td><td style="text-align:center">2x</td><td style="text-align:center">0.999</td><td style="text-align:right">14.0</td><td style="text-align:right">13.5</td><td style="text-align:right;color:var(--green)">+4%</td></tr>
+          <tr><td style="text-align:center">4K</td><td style="text-align:center">4x</td><td style="text-align:center">0.999</td><td style="text-align:right">17.6</td><td style="text-align:right">13.5</td><td style="text-align:right;color:var(--green)">+30%</td></tr>
+          <tr><td style="text-align:center">4K</td><td style="text-align:center">8x</td><td style="text-align:center">0.999</td><td style="text-align:right">20.2</td><td style="text-align:right">13.5</td><td style="text-align:right;color:var(--green)">+50%</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2>3. Quality heatmap (select pipeline)</h2>
+    <p>The current public quality story is strongest for the select pipeline. These are the exact heatmap values published in the benchmark note.</p>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th style="text-align:left">Model</th>
+            <th style="text-align:center">4K / 2x</th>
+            <th style="text-align:center">4K / 4x</th>
+            <th style="text-align:center">4K / 8x</th>
+            <th style="text-align:center">8K / 2x</th>
+            <th style="text-align:center">8K / 4x</th>
+            <th style="text-align:center">8K / 8x</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td style="text-align:left">Qwen3-8B</td><td style="text-align:center">0.999</td><td style="text-align:center">0.999</td><td style="text-align:center">0.997</td><td style="text-align:center">0.999</td><td style="text-align:center">0.998</td><td style="text-align:center">0.997</td></tr>
+          <tr><td style="text-align:left">Qwen3-30B-A3B</td><td style="text-align:center">0.999</td><td style="text-align:center">0.999</td><td style="text-align:center">0.999</td><td style="text-align:center">&mdash;</td><td style="text-align:center">&mdash;</td><td style="text-align:center">&mdash;</td></tr>
+          <tr><td style="text-align:left">Qwen3-14B</td><td style="text-align:center">0.995</td><td style="text-align:center">0.996</td><td style="text-align:center">0.992</td><td style="text-align:center">0.999</td><td style="text-align:center">0.997</td><td style="text-align:center">0.973</td></tr>
+          <tr><td style="text-align:left">DeepSeek-R1-14B</td><td style="text-align:center">0.999</td><td style="text-align:center">0.998</td><td style="text-align:center">0.993</td><td style="text-align:center">&mdash;</td><td style="text-align:center">&mdash;</td><td style="text-align:center">&mdash;</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2>4. Iterative 50x / 256K result</h2>
+    <p>The iterative context-extension result is real and worth showing, but it needs to be framed carefully. It is a specific iterative on-policy test from <code>docs/CHANGELOG.md</code> Phase 8, not the default single-pass benchmark configuration used in the runtime comparison note above.</p>
     <div class="headline-result">
       <div class="headline-stat">
         <div class="headline-value">50x</div>
-        <div class="headline-label">compression</div>
+        <div class="headline-label">iterative test</div>
       </div>
       <div class="headline-detail">
-        <p><strong>Qwen3-30B-A3B</strong> compressed at 50x ratio with <strong>0.9967 cosine similarity</strong> and <strong>10/10 fact recall</strong>. Achieved through iterative on-policy refinement with quality-gated convergence. 256K effective context from 64K physical memory through 49-57 compaction cycles &mdash; 100% recall verified at every checkpoint.</p>
+        <p>Phase 8 reports a <strong>50x compression</strong> run on <strong>Qwen3-30B-A3B</strong> with <strong>0.9967 cosine</strong> and <strong>10/10 fact recall</strong>, plus <strong>256K effective context from 64K physical memory</strong> across 49-57 compaction cycles. That is a specific iterative refinement result. It should be read as an existence proof for the technique, not as the default operating point of the published runtime benchmark suite.</p>
+      </div>
+    </div>
+    <p style="font-size:0.85rem;">Source: <a href="https://github.com/jandhyala-dev/modelai-llama.cpp/blob/modelai-main/docs/CHANGELOG.md" target="_blank" rel="noopener noreferrer">docs/CHANGELOG.md</a>, Phase 8.</p>
+
+    <h2>5. Summary ranges from HIGHLIGHTS.md</h2>
+    <div class="cards cards-3">
+      <div class="card">
+        <div class="label">Select pipeline quality range</div>
+        <div class="value">0.946-0.999</div>
+        <div class="detail">Across 15 models in <code>docs/HIGHLIGHTS.md</code>.</div>
+      </div>
+      <div class="card">
+        <div class="label">Compaction time</div>
+        <div class="value">62-518ms</div>
+        <div class="detail">Depends on context length and compression ratio.</div>
+      </div>
+      <div class="card">
+        <div class="label">Models tested</div>
+        <div class="value">17 / 15 pass</div>
+        <div class="detail">17 tested, 15 passing the current quality gate.</div>
       </div>
     </div>
 
-    <!-- ====== DECODE SPEED ====== -->
-    <h2>Decode speed after compaction</h2>
-    <p>Compaction shrinks the KV cache, which means attention runs over fewer tokens. The result is faster decoding &mdash; up to 63% faster at 8x compression.</p>
-    <div class="table-wrap">
-    <table>
-      <thead>
-        <tr>
-          <th style="text-align:left">Model</th>
-          <th style="text-align:center">Context</th>
-          <th style="text-align:center">Ratio</th>
-          <th style="text-align:center">Quality</th>
-          <th style="text-align:right">Before (t/s)</th>
-          <th style="text-align:right">After (t/s)</th>
-          <th style="text-align:right">Speedup</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td style="text-align:left">Qwen3-8B</td>
-          <td style="text-align:center">8K</td>
-          <td style="text-align:center">8x</td>
-          <td style="text-align:center">0.997</td>
-          <td style="text-align:right">5.7</td>
-          <td style="text-align:right">9.3</td>
-          <td style="text-align:right;color:var(--green)">+63%</td>
-        </tr>
-        <tr>
-          <td style="text-align:left">Qwen3-30B-A3B</td>
-          <td style="text-align:center">4K</td>
-          <td style="text-align:center">8x</td>
-          <td style="text-align:center">0.999</td>
-          <td style="text-align:right">13.5</td>
-          <td style="text-align:right">20.2</td>
-          <td style="text-align:right;color:var(--green)">+50%</td>
-        </tr>
-        <tr>
-          <td style="text-align:left">Qwen3-8B</td>
-          <td style="text-align:center">4K</td>
-          <td style="text-align:center">8x</td>
-          <td style="text-align:center">0.997</td>
-          <td style="text-align:right">10.7</td>
-          <td style="text-align:right">13.8</td>
-          <td style="text-align:right;color:var(--green)">+29%</td>
-        </tr>
-        <tr>
-          <td style="text-align:left">Qwen3-8B</td>
-          <td style="text-align:center">16K</td>
-          <td style="text-align:center">8x</td>
-          <td style="text-align:center">0.999</td>
-          <td style="text-align:right">4.8</td>
-          <td style="text-align:right">5.3</td>
-          <td style="text-align:right;color:var(--green)">+10%</td>
-        </tr>
-      </tbody>
-    </table>
-    </div>
-
-    <!-- ====== QUALITY HEATMAP ====== -->
-    <h2>Quality heatmap</h2>
-    <p>Logit cosine similarity across context sizes and compression ratios. The <code>select</code> pipeline (production default) maintains 0.99+ quality at most configurations. <span style="color:var(--green)">Green</span> = 0.99+, <span style="color:var(--yellow)">yellow</span> = 0.95+.</p>
-    <div class="table-wrap">
-    <table>
-      <thead>
-        <tr>
-          <th style="text-align:left">Model</th>
-          <th style="text-align:center">4K / 2x</th>
-          <th style="text-align:center">4K / 4x</th>
-          <th style="text-align:center">4K / 8x</th>
-          <th style="text-align:center">8K / 2x</th>
-          <th style="text-align:center">8K / 4x</th>
-          <th style="text-align:center">8K / 8x</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td style="text-align:left">Qwen3-8B</td>
-          <td style="text-align:center;color:var(--green)">0.999</td>
-          <td style="text-align:center;color:var(--green)">0.999</td>
-          <td style="text-align:center;color:var(--green)">0.997</td>
-          <td style="text-align:center;color:var(--green)">0.999</td>
-          <td style="text-align:center;color:var(--green)">0.998</td>
-          <td style="text-align:center;color:var(--green)">0.997</td>
-        </tr>
-        <tr>
-          <td style="text-align:left">Qwen3-30B-A3B</td>
-          <td style="text-align:center;color:var(--green)">0.999</td>
-          <td style="text-align:center;color:var(--green)">0.999</td>
-          <td style="text-align:center;color:var(--green)">0.999</td>
-          <td style="text-align:center;color:var(--text-muted)">&mdash;</td>
-          <td style="text-align:center;color:var(--text-muted)">&mdash;</td>
-          <td style="text-align:center;color:var(--text-muted)">&mdash;</td>
-        </tr>
-        <tr>
-          <td style="text-align:left">Qwen3-14B</td>
-          <td style="text-align:center;color:var(--green)">0.995</td>
-          <td style="text-align:center;color:var(--green)">0.996</td>
-          <td style="text-align:center;color:var(--green)">0.992</td>
-          <td style="text-align:center;color:var(--green)">0.999</td>
-          <td style="text-align:center;color:var(--green)">0.997</td>
-          <td style="text-align:center;color:var(--yellow)">0.973</td>
-        </tr>
-        <tr>
-          <td style="text-align:left">DeepSeek-R1-14B</td>
-          <td style="text-align:center;color:var(--green)">0.999</td>
-          <td style="text-align:center;color:var(--green)">0.998</td>
-          <td style="text-align:center;color:var(--green)">0.993</td>
-          <td style="text-align:center;color:var(--text-muted)">&mdash;</td>
-          <td style="text-align:center;color:var(--text-muted)">&mdash;</td>
-          <td style="text-align:center;color:var(--text-muted)">&mdash;</td>
-        </tr>
-      </tbody>
-    </table>
-    </div>
-
-    <!-- ====== BASELINE ====== -->
-    <h2>Fork vs upstream vs Ollama (no compaction)</h2>
-    <p>When compaction is not active, the fork matches upstream llama.cpp within measurement noise. No performance regression from having compaction code in the binary. The MoE model (Qwen3-30B-A3B) runs 13% faster than Ollama at baseline.</p>
-    <div class="chart-container">
-      <canvas id="baseline-chart" height="200"></canvas>
-    </div>
-    <div class="table-wrap">
-    <table>
-      <thead>
-        <tr>
-          <th style="text-align:left">Model</th>
-          <th style="text-align:right">modelai (t/s)</th>
-          <th style="text-align:right">upstream (t/s)</th>
-          <th style="text-align:right">Ollama (t/s)</th>
-          <th style="text-align:right">Delta</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td style="text-align:left">Qwen3-8B</td>
-          <td style="text-align:right">30.4</td>
-          <td style="text-align:right">30.1</td>
-          <td style="text-align:right">29.2</td>
-          <td style="text-align:right;color:var(--green)">+1%</td>
-        </tr>
-        <tr>
-          <td style="text-align:left">Qwen3-14B</td>
-          <td style="text-align:right">17.1</td>
-          <td style="text-align:right">17.4</td>
-          <td style="text-align:right">16.7</td>
-          <td style="text-align:right;color:var(--text-muted)">&minus;2%</td>
-        </tr>
-        <tr>
-          <td style="text-align:left">Qwen3-30B-A3B</td>
-          <td style="text-align:right">52.8</td>
-          <td style="text-align:right">51.8</td>
-          <td style="text-align:right">46.7</td>
-          <td style="text-align:right;color:var(--green)">+2%</td>
-        </tr>
-      </tbody>
-    </table>
-    </div>
-    <p style="font-size:0.85rem;">Hardware: Apple M2 Pro, 32GB unified memory, Metal GPU, 128-token generation.</p>
-
-    <!-- ====== 256K CONTEXT ====== -->
-    <h2>256K iterative context extension</h2>
-    <p>Starting from a 64K physical KV cache, iterative compaction at 4x ratio extends effective context to 256K tokens through 49-57 compaction cycles. At every checkpoint, a 10-fact recall test verifies that no information is lost.</p>
-    <div class="card" style="text-align:center; padding:2rem; max-width:400px; margin:1.5rem auto;">
-      <div class="value" style="color:var(--green);font-size:2.5rem;">100%</div>
-      <div class="label" style="margin-top:0.5rem;">10-Fact Recall</div>
-      <div class="detail">At every checkpoint through 256K tokens</div>
-    </div>
-
-    <!-- ====== CI STATUS ====== -->
-    <h2>CI and build status</h2>
-    <div class="table-wrap">
-    <table>
-      <thead>
-        <tr>
-          <th style="text-align:left">Platform</th>
-          <th style="text-align:left">Workflow</th>
-          <th style="text-align:left">Trigger</th>
-          <th style="text-align:center">Status</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr>
-          <td style="text-align:left">macOS (Apple Silicon)</td>
-          <td style="text-align:left">modelai-ci</td>
-          <td style="text-align:left">Push, PR</td>
-          <td style="text-align:center"><span class="badge badge-green">Active</span></td>
-        </tr>
-        <tr>
-          <td style="text-align:left">macOS (Server)</td>
-          <td style="text-align:left">modelai-server-smoke</td>
-          <td style="text-align:left">Push, PR</td>
-          <td style="text-align:center"><span class="badge badge-green">Active</span></td>
-        </tr>
-        <tr>
-          <td style="text-align:left">macOS (Performance)</td>
-          <td style="text-align:left">modelai-perf-smoke</td>
-          <td style="text-align:left">Push, PR</td>
-          <td style="text-align:center"><span class="badge badge-green">Active</span></td>
-        </tr>
-        <tr>
-          <td style="text-align:left">Windows (MSVC x64)</td>
-          <td style="text-align:left">modelai-ci-windows</td>
-          <td style="text-align:left">Push, PR</td>
-          <td style="text-align:center"><span class="badge badge-green">Active</span></td>
-        </tr>
-        <tr>
-          <td style="text-align:left">Upstream sync</td>
-          <td style="text-align:left">modelai-upstream-sync</td>
-          <td style="text-align:left">Saturday 2PM PDT</td>
-          <td style="text-align:center"><span class="badge badge-blue">Weekly</span></td>
-        </tr>
-      </tbody>
-    </table>
+    <h2>6. How to read these results</h2>
+    <div class="cards cards-2">
+      <div class="card">
+        <div class="label">Reasonable conclusions</div>
+        <div class="detail">
+          <ul style="padding-left:1.2rem; color:var(--text-muted); margin-top:0.5rem;">
+            <li>The fork does not show a meaningful published baseline decode regression against upstream.</li>
+            <li>The select pipeline can improve decode speed substantially at some higher-ratio / longer-context operating points.</li>
+            <li>The public quality numbers support "near-identical" behavior in the strongest published cases, not universal exact equivalence.</li>
+          </ul>
+        </div>
+      </div>
+      <div class="card card-problem">
+        <div class="label">Bad conclusions</div>
+        <div class="detail">
+          <ul style="padding-left:1.2rem; color:var(--text-muted); margin-top:0.5rem;">
+            <li>Do not read the 50x result as the default benchmark outcome.</li>
+            <li>Do not assume every compression ratio improves speed.</li>
+            <li>Do not mix the published cosine benchmark set with unrelated Phase D quality experiments that use different scoring methods.</li>
+          </ul>
+        </div>
+      </div>
     </div>
   </div>
 
   <footer>
     <p>modelai-llama.cpp is MIT licensed. <a href="https://github.com/jandhyala-dev/modelai-llama.cpp" target="_blank" rel="noopener noreferrer">View on GitHub</a></p>
-    <p>Data from CI runs on Apple M2 Pro (32GB, Metal GPU).</p>
+    <p>Benchmark sources: benchmark-fork-vs-upstream.md, CHANGELOG.md Phase 8, HIGHLIGHTS.md.</p>
   </footer>
 
   <script>
     document.querySelector('.nav-toggle').addEventListener('click', function() {
       document.querySelector('nav .links').classList.toggle('open');
-    });
-  </script>
-  <script>
-    const ctx = document.getElementById('baseline-chart').getContext('2d');
-    new Chart(ctx, {
-      type: 'bar',
-      data: {
-        labels: ['Qwen3-8B', 'Qwen3-14B', 'Qwen3-30B-A3B'],
-        datasets: [
-          { label: 'modelai (t/s)', data: [30.4, 17.1, 52.8], backgroundColor: 'rgba(88, 166, 255, 0.7)' },
-          { label: 'upstream (t/s)', data: [30.1, 17.4, 51.8], backgroundColor: 'rgba(139, 148, 158, 0.7)' },
-          { label: 'Ollama (t/s)', data: [29.2, 16.7, 46.7], backgroundColor: 'rgba(210, 153, 34, 0.5)' }
-        ]
-      },
-      options: {
-        responsive: true,
-        plugins: { legend: { labels: { color: '#8b949e' } } },
-        scales: {
-          x: { ticks: { color: '#8b949e' }, grid: { color: '#30363d' } },
-          y: { ticks: { color: '#8b949e' }, grid: { color: '#30363d' }, title: { display: true, text: 'Tokens / sec', color: '#8b949e' } }
-        }
-      }
     });
   </script>
 </body>
