@@ -32,8 +32,13 @@
   <div class="hero">
     <div class="hero-kicker">KV cache compaction for llama.cpp</div>
     <h1>Longer local sessions without throwing away context.</h1>
-    <p class="hero-sub"><strong>modelai-llama.cpp</strong> is a production fork of <a href="https://github.com/ggml-org/llama.cpp" target="_blank" rel="noopener noreferrer">llama.cpp</a> that compacts KV cache instead of dropping older history when memory fills up. For users, that means less forgetting and better long-session behavior on local hardware. For developers, it adds compaction pipelines, auto-compaction, persistence, and public server/C API surfaces while staying close to upstream.</p>
-    <p class="hero-sub">Published benchmarks show baseline parity with upstream, up to <strong>+63%</strong> decode speed at 8K / 8x on Qwen3-8B, and an iterative <strong>256K-from-64K</strong> context-extension result. The exact tables, constraints, and tradeoffs are linked below.</p>
+    <p class="hero-sub"><strong>modelai-llama.cpp</strong> is a production fork of <a href="https://github.com/ggml-org/llama.cpp" target="_blank" rel="noopener noreferrer">llama.cpp</a> that compacts KV cache instead of dropping older history when memory fills. For users, that means longer local sessions with less forgetting. For developers, it adds compaction pipelines, auto-compaction, persistence, and public server/C API surfaces while staying close to upstream.</p>
+    <p class="hero-sub">Current public benchmarks show baseline decode parity with upstream, a best published <strong>+63%</strong> gain at 8K / 8x on Qwen3-8B, and a documented iterative <strong>256K-from-64K</strong> extension result. The benchmark page carries the full tables, including the negative rows.</p>
+    <div class="hero-actions">
+      <a class="button-link button-primary" href="benchmarks.html">View Benchmarks</a>
+      <a class="button-link" href="paper.html">Read The Paper Notes</a>
+      <a class="button-link" href="https://github.com/jandhyala-dev/modelai-llama.cpp" target="_blank" rel="noopener noreferrer">Open GitHub</a>
+    </div>
     <div class="hero-badges">
       <span class="badge badge-green">MIT License</span>
       <span class="badge badge-blue">Drop-in llama.cpp fork</span>
@@ -65,7 +70,9 @@
       </div>
     </div>
 
-    <p style="font-size:0.85rem;">Sources: <a href="https://github.com/jandhyala-dev/modelai-llama.cpp/blob/modelai-main/docs/benchmark-fork-vs-upstream.md" target="_blank" rel="noopener noreferrer">docs/benchmark-fork-vs-upstream.md</a> (2026-03-13), <a href="https://github.com/jandhyala-dev/modelai-llama.cpp/blob/modelai-main/docs/CHANGELOG.md" target="_blank" rel="noopener noreferrer">docs/CHANGELOG.md</a>, and <a href="https://github.com/jandhyala-dev/modelai-llama.cpp/blob/modelai-main/docs/HIGHLIGHTS.md" target="_blank" rel="noopener noreferrer">docs/HIGHLIGHTS.md</a>.</p>
+    <div class="section-note">
+      Public claim boundary: this site only leans on <a href="https://github.com/jandhyala-dev/modelai-llama.cpp/blob/modelai-main/docs/benchmark-fork-vs-upstream.md" target="_blank" rel="noopener noreferrer">docs/benchmark-fork-vs-upstream.md</a>, <a href="https://github.com/jandhyala-dev/modelai-llama.cpp/blob/modelai-main/docs/CHANGELOG.md" target="_blank" rel="noopener noreferrer">docs/CHANGELOG.md</a>, and <a href="https://github.com/jandhyala-dev/modelai-llama.cpp/blob/modelai-main/docs/HIGHLIGHTS.md" target="_blank" rel="noopener noreferrer">docs/HIGHLIGHTS.md</a> for benchmark and implementation claims.
+    </div>
 
     <h2>The problem</h2>
     <p>Long-running local sessions have two separate failure modes. First, the runtime eventually runs out of KV cache and starts forgetting old context. Second, even before memory is exhausted, decode gets slower as the model attends over a larger history. That is why local sessions often feel fine early and then degrade as they get longer.</p>

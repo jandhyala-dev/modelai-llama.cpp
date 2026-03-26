@@ -30,6 +30,9 @@
   <div class="container">
     <h1>What the paper proposes, and what the fork had to add</h1>
     <p><a href="https://arxiv.org/abs/2602.16284" target="_blank" rel="noopener noreferrer">Fast KV Compaction via Attention Matching</a> asks a practical question: if a model has already seen a long prefix, can you replace that large KV cache with a much smaller one that makes the model behave almost the same way? The paper’s answer is yes, if the compacted cache is optimized to preserve the attention-weighted output rather than simply keeping a subset of tokens.</p>
+    <div class="section-note">
+      This page is intentionally narrower than a paper summary blog post. It focuses on where the production fork had to differ from the research reference and where the implementation work actually went.
+    </div>
 
     <h2>The core idea in plain terms</h2>
     <p>Most long-context management strategies throw information away. Attention Matching instead tries to build a smaller synthetic memory that behaves like the larger original memory. The model does not get the old tokens back verbatim. It gets a compacted prefix designed to preserve the attention pattern that matters downstream.</p>

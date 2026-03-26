@@ -29,8 +29,10 @@
 
   <div class="container">
     <h1>Benchmarks</h1>
-    <p>Full Qwen decode tables from the fork-vs-upstream benchmark, the iterative 50x / 256K result from the changelog, and summary ranges from <code>docs/HIGHLIGHTS.md</code>.</p>
-    <p style="font-size:0.85rem;">Primary source: <a href="https://github.com/jandhyala-dev/modelai-llama.cpp/blob/modelai-main/docs/benchmark-fork-vs-upstream.md" target="_blank" rel="noopener noreferrer">docs/benchmark-fork-vs-upstream.md</a> (2026-03-13). Hardware: Apple M2 Pro, 32GB unified memory, Metal GPU, 128-token generation.</p>
+    <p>This is the evidence page. It carries the published Qwen decode tables, the iterative 50x / 256K result from the changelog, and the summary ranges cited elsewhere on the site.</p>
+    <div class="section-note">
+      Primary benchmark source: <a href="https://github.com/jandhyala-dev/modelai-llama.cpp/blob/modelai-main/docs/benchmark-fork-vs-upstream.md" target="_blank" rel="noopener noreferrer">docs/benchmark-fork-vs-upstream.md</a> (2026-03-13). Hardware: Apple M2 Pro, 32GB unified memory, Metal GPU, 128-token generation. Negative rows are included intentionally.
+    </div>
 
     <div class="cards cards-4">
       <div class="card">
@@ -261,6 +263,22 @@
             <li>Do not mix the published cosine benchmark set with other experiments that use different scoring methods.</li>
           </ul>
         </div>
+      </div>
+    </div>
+
+    <h2>Primary source trail</h2>
+    <div class="cards cards-3">
+      <div class="card">
+        <div class="label">Fork vs upstream benchmark</div>
+        <div class="detail">Three-way baseline comparison, compacted decode tables, and the Qwen quality heatmap.</div>
+      </div>
+      <div class="card">
+        <div class="label">CHANGELOG</div>
+        <div class="detail">Specific iterative 50x / 256K result, including the fact-recall note and cycle counts.</div>
+      </div>
+      <div class="card">
+        <div class="label">HIGHLIGHTS</div>
+        <div class="detail">One-page summary of ranges, model coverage, test counts, and implementation scope.</div>
       </div>
     </div>
   </div>
