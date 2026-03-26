@@ -209,17 +209,17 @@
     </div>
 
     <h2>4. Iterative 50x / 256K result</h2>
-    <p>The iterative context-extension result is real and worth showing, but it needs to be framed carefully. It is a specific iterative on-policy test from <code>docs/CHANGELOG.md</code> Phase 8, not the default single-pass benchmark configuration used in the runtime comparison note above.</p>
+    <p>The iterative context-extension result is real and worth showing, but it needs to be framed carefully. It is a specific iterative on-policy test from <code>docs/CHANGELOG.md</code>, not the default single-pass benchmark configuration used in the runtime comparison note above.</p>
     <div class="headline-result">
       <div class="headline-stat">
         <div class="headline-value">50x</div>
         <div class="headline-label">iterative test</div>
       </div>
       <div class="headline-detail">
-        <p>Phase 8 reports a <strong>50x compression</strong> run on <strong>Qwen3-30B-A3B</strong> with <strong>0.9967 cosine</strong> and <strong>10/10 fact recall</strong>, plus <strong>256K effective context from 64K physical memory</strong> across 49-57 compaction cycles. That is a specific iterative refinement result. It should be read as an existence proof for the technique, not as the default operating point of the published runtime benchmark suite.</p>
+        <p>The CHANGELOG reports a <strong>50x compression</strong> run on <strong>Qwen3-30B-A3B</strong> with <strong>0.9967 cosine</strong> and <strong>10/10 fact recall</strong>, plus <strong>256K effective context from 64K physical memory</strong> across 49-57 compaction cycles. That is a specific iterative refinement result. It should be read as an existence proof for the technique, not as the default operating point of the published runtime benchmark suite.</p>
       </div>
     </div>
-    <p style="font-size:0.85rem;">Source: <a href="https://github.com/jandhyala-dev/modelai-llama.cpp/blob/modelai-main/docs/CHANGELOG.md" target="_blank" rel="noopener noreferrer">docs/CHANGELOG.md</a>, Phase 8.</p>
+    <p style="font-size:0.85rem;">Source: <a href="https://github.com/jandhyala-dev/modelai-llama.cpp/blob/modelai-main/docs/CHANGELOG.md" target="_blank" rel="noopener noreferrer">docs/CHANGELOG.md</a>.</p>
 
     <h2>5. Summary ranges from HIGHLIGHTS.md</h2>
     <div class="cards cards-3">
@@ -258,7 +258,7 @@
           <ul style="padding-left:1.2rem; color:var(--text-muted); margin-top:0.5rem;">
             <li>Do not read the 50x result as the default benchmark outcome.</li>
             <li>Do not assume every compression ratio improves speed.</li>
-            <li>Do not mix the published cosine benchmark set with unrelated Phase D quality experiments that use different scoring methods.</li>
+            <li>Do not mix the published cosine benchmark set with other experiments that use different scoring methods.</li>
           </ul>
         </div>
       </div>
@@ -267,7 +267,7 @@
 
   <footer>
     <p>modelai-llama.cpp is MIT licensed. <a href="https://github.com/jandhyala-dev/modelai-llama.cpp" target="_blank" rel="noopener noreferrer">View on GitHub</a></p>
-    <p>Benchmark sources: benchmark-fork-vs-upstream.md, CHANGELOG.md Phase 8, HIGHLIGHTS.md.</p>
+    <p>Benchmark sources: benchmark-fork-vs-upstream.md, CHANGELOG.md, HIGHLIGHTS.md.</p>
   </footer>
 
   <script>

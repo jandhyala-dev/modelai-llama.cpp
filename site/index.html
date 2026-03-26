@@ -56,7 +56,7 @@
       <div class="card">
         <div class="label">Iterative extension result</div>
         <div class="value">256K</div>
-        <div class="detail">Specific on-policy test from 64K physical memory, documented in Phase 8 notes.</div>
+        <div class="detail">Specific on-policy test from 64K physical memory, documented in the CHANGELOG.</div>
       </div>
       <div class="card">
         <div class="label">Baseline overhead</div>
@@ -65,7 +65,7 @@
       </div>
     </div>
 
-    <p style="font-size:0.85rem;">Sources: <a href="https://github.com/jandhyala-dev/modelai-llama.cpp/blob/modelai-main/docs/benchmark-fork-vs-upstream.md" target="_blank" rel="noopener noreferrer">docs/benchmark-fork-vs-upstream.md</a> (2026-03-13), <a href="https://github.com/jandhyala-dev/modelai-llama.cpp/blob/modelai-main/docs/CHANGELOG.md" target="_blank" rel="noopener noreferrer">docs/CHANGELOG.md</a> Phase 8, and <a href="https://github.com/jandhyala-dev/modelai-llama.cpp/blob/modelai-main/docs/HIGHLIGHTS.md" target="_blank" rel="noopener noreferrer">docs/HIGHLIGHTS.md</a>.</p>
+    <p style="font-size:0.85rem;">Sources: <a href="https://github.com/jandhyala-dev/modelai-llama.cpp/blob/modelai-main/docs/benchmark-fork-vs-upstream.md" target="_blank" rel="noopener noreferrer">docs/benchmark-fork-vs-upstream.md</a> (2026-03-13), <a href="https://github.com/jandhyala-dev/modelai-llama.cpp/blob/modelai-main/docs/CHANGELOG.md" target="_blank" rel="noopener noreferrer">docs/CHANGELOG.md</a>, and <a href="https://github.com/jandhyala-dev/modelai-llama.cpp/blob/modelai-main/docs/HIGHLIGHTS.md" target="_blank" rel="noopener noreferrer">docs/HIGHLIGHTS.md</a>.</p>
 
     <h2>The problem</h2>
     <p>Long-running local sessions have two separate failure modes. First, the runtime eventually runs out of KV cache and starts forgetting old context. Second, even before memory is exhausted, decode gets slower as the model attends over a larger history. That is why local sessions often feel fine early and then degrade as they get longer.</p>
@@ -173,7 +173,7 @@ cmake --build build -j
 <span class="code-comment"># Trigger compaction through the server API</span>
 curl -X POST http://localhost:8080/compact \
   -H "Content-Type: application/json" \
-  -d '{"ratio":4.0,"pipeline":"select","reclaim":true}'
+  -d '{"ratio":4.0,"method":"select","reclaim":true}'
 
 <span class="code-comment"># Programmatic C API entry point</span>
 struct llama_compact_params params = llama_compact_default_params();
@@ -196,7 +196,7 @@ llama_kv_cache_compact(ctx, params);</div>
             <td style="text-align:left">Three-way baseline comparison, compacted decode tables, and quality heatmap on Apple M2 Pro 32GB.</td>
           </tr>
           <tr>
-            <td style="text-align:left"><a href="https://github.com/jandhyala-dev/modelai-llama.cpp/blob/modelai-main/docs/CHANGELOG.md" target="_blank" rel="noopener noreferrer">docs/CHANGELOG.md</a> Phase 8</td>
+            <td style="text-align:left"><a href="https://github.com/jandhyala-dev/modelai-llama.cpp/blob/modelai-main/docs/CHANGELOG.md" target="_blank" rel="noopener noreferrer">docs/CHANGELOG.md</a></td>
             <td style="text-align:left">Specific iterative on-policy 50x / 256K result and the fact-recall checkpoint record.</td>
           </tr>
           <tr>
