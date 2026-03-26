@@ -29,7 +29,7 @@
 
   <div class="container">
     <h1>Benchmarks</h1>
-    <p>This page uses only the currently approved benchmark sources for the site. That means the published data here is intentionally narrower than the full repo history. It includes the full Qwen tables from the fork-vs-upstream benchmark note, the iterative 50x / 256K result from the changelog, and the summary ranges in <code>docs/HIGHLIGHTS.md</code>.</p>
+    <p>Full Qwen decode tables from the fork-vs-upstream benchmark, the iterative 50x / 256K result from the changelog, and summary ranges from <code>docs/HIGHLIGHTS.md</code>.</p>
     <p style="font-size:0.85rem;">Primary source: <a href="https://github.com/jandhyala-dev/modelai-llama.cpp/blob/modelai-main/docs/benchmark-fork-vs-upstream.md" target="_blank" rel="noopener noreferrer">docs/benchmark-fork-vs-upstream.md</a> (2026-03-13). Hardware: Apple M2 Pro, 32GB unified memory, Metal GPU, 128-token generation.</p>
 
     <div class="cards cards-4">
@@ -99,7 +99,7 @@
     </div>
 
     <h3>Prompt processing throughput</h3>
-    <p>The same benchmark note also publishes prompt-side throughput. The site should show it because it is part of the documented runtime baseline even though the fork’s core claim is about decode after compaction.</p>
+    <p>Same benchmark run, prompt-side throughput. Included for completeness — Ollama leads here.</p>
     <div class="table-wrap">
       <table>
         <thead>
