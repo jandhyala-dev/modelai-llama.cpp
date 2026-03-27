@@ -615,6 +615,9 @@ struct common_params {
     bool endpoint_metrics = false;
     bool endpoint_compact = false; // F-C-20: /compact endpoint gated behind --endpoint-compact
 
+    // enable built-in tools
+    std::vector<std::string> server_tools;
+
     // router server configs
     std::string models_dir    = ""; // directory containing models for the router server
     std::string models_preset = ""; // directory containing model presets for the router server
