@@ -20,6 +20,7 @@
 #include "src/llama-kv-compact-self-study.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cinttypes>
 #include <exception>
@@ -2396,7 +2397,7 @@ private:
                             send_error(task, "Compression ratio must be >= 1.0", ERROR_TYPE_INVALID_REQUEST);
                             break;
                         }
-                        requested_target_tokens = std::max(2u, (uint32_t)(compactable / cp.ratio));
+                        requested_target_tokens = std::max(2u, (uint32_t)std::ceil((double)compactable / (double)cp.ratio));
                     }
 
                     // Resolve hybrid-aware effective budget using the shared helper.
@@ -2434,6 +2435,13 @@ private:
                         clear_pending();
                         queue_results.send(std::move(res));
                     };
+
+                    // If a compacted prefix is already active for this sequence,
+                    // the live KV was reclaimed — re-compaction is a no-op.
+                    if (kv->compacted_prefix_execution_enabled(seq_id)) {
+                        send_noop_result();
+                        break;
+                    }
 
                     // Short-circuit near-no-op hybrid outcomes.
                     if (!explicit_target && budget.skipped_noop) {

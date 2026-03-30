@@ -594,6 +594,47 @@ int main() {
     }
 
     // -----------------------------------------------------------------------
+    // 12. Budget resolution — ceiling division prevents truncation noop miss
+    // -----------------------------------------------------------------------
+    std::printf("\n--- Section 12: Ceiling division precision ---\n");
+    {
+        // Reproduce F-E2E-2: compactable=61342, ratio=4.0, scale=4.0.
+        // With floor: requested = (uint32_t)(61342/4.0) = 15335, scaled = 61340 < 61341 → NOT noop.
+        // With ceil:  requested = (uint32_t)ceil(61342/4.0) = 15336, scaled = 61344, capped → noop.
+        // The budget resolver sees the requested_target after ceiling is applied by the caller.
+        llama_kv_compact_hybrid_info hi = {};
+        hi.n_total_layers       = 40;
+        hi.n_recurrent_layers   = 30;
+        hi.n_attn_layers        = 10;
+        hi.n_compactable_layers = 10;
+        hi.is_hybrid            = true;
+        hi.compactable_fraction = 0.25f;
+
+        const uint32_t compactable = 61342;
+        const uint32_t req_floor = (uint32_t)(compactable / 4.0);
+        const uint32_t req_ceil  = (uint32_t)std::ceil((double)compactable / 4.0);
+
+        check(req_floor == 15335, "Ceil: floor(61342/4) == 15335");
+        check(req_ceil  == 15336, "Ceil: ceil(61342/4)  == 15336");
+
+        // With floor-based target: noop is missed.
+        auto r_floor = llama_kv_compact_resolve_budget(hi, compactable, req_floor, false, 4.0);
+        check(!r_floor.skipped_noop, "Ceil: floor-based misses noop");
+        check(r_floor.effective_target_tokens == 61340, "Ceil: floor-based effective == 61340");
+
+        // With ceil-based target: noop triggers.
+        auto r_ceil = llama_kv_compact_resolve_budget(hi, compactable, req_ceil, false, 4.0);
+        check(r_ceil.skipped_noop, "Ceil: ceil-based triggers noop");
+        check(r_ceil.effective_target_tokens == compactable, "Ceil: ceil-based effective == compactable");
+
+        // Verify ceiling doesn't affect real compactions: ratio=8.0 on same data.
+        const uint32_t req8_ceil = (uint32_t)std::ceil((double)compactable / 8.0);
+        auto r8 = llama_kv_compact_resolve_budget(hi, compactable, req8_ceil, false, 8.0);
+        check(!r8.skipped_noop, "Ceil: ratio=8 still compacts");
+        check(r8.effective_target_tokens == 30672, "Ceil: ratio=8 effective == 30672");
+    }
+
+    // -----------------------------------------------------------------------
     // Summary
     // -----------------------------------------------------------------------
     std::printf("\n=== SUMMARY: %d passed, %d failed ===\n", n_passed, n_failed);

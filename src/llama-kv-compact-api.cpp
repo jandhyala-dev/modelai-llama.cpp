@@ -12,6 +12,7 @@
 #include "llama-kv-compact-pipeline.h"
 
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <string>
 
@@ -88,7 +89,7 @@ int32_t llama_kv_cache_compact(
             LLAMA_LOG_ERROR("%s: ratio must be >= 1.0 (got %.2f)\n", __func__, params.ratio);
             return -1;
         }
-        requested_target_tokens = std::max(2u, (uint32_t)(compactable / params.ratio));
+        requested_target_tokens = std::max(2u, (uint32_t)std::ceil((double)compactable / (double)params.ratio));
     }
 
     // Resolve hybrid-aware effective budget using the shared helper.
@@ -107,6 +108,14 @@ int32_t llama_kv_cache_compact(
                        budget.requested_target_tokens,
                        budget.effective_target_tokens,
                        budget.budget_scale);
+        return (int32_t)compactable;
+    }
+
+    // If a compacted prefix is already active for this sequence,
+    // the live KV was reclaimed — return existing count as no-op.
+    if (kv->compacted_prefix_execution_enabled(seq_id)) {
+        LLAMA_LOG_INFO("%s: compacted prefix already active for seq %d, nothing to re-compact\n",
+                       __func__, seq_id);
         return (int32_t)compactable;
     }
 
