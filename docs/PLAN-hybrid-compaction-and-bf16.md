@@ -1,331 +1,445 @@
-# Plan: Hybrid-Aware Compaction Ratios + BF16 Solver Precision
+# Plan: Hybrid Budget Resolution + BF16 Type Safety
 
 ## Overview
 
-Two enhancements to the KV compaction pipeline targeting models with hybrid
-attention architectures (Qwen3.5 family) and bfloat16 KV caches.
+This plan hardens two compaction-adjacent areas that are currently underspecified:
 
-**Feature A — Hybrid-aware compaction budget scaling:**
-Detect that a model uses hybrid attention (e.g., Qwen3.5-35B: 10 full-attention
-layers + 30 DeltaNet layers), and automatically adjust compaction budget
-allocation so that the few attention layers that carry all KV context get an
-appropriate compression ratio rather than the naive ratio intended for dense
-models.
+1. **Hybrid budget resolution for ratio-based compaction**
+   - Detect hybrid architectures such as Qwen3.5.
+   - Resolve an **effective** compaction target from the user-requested ratio in one shared helper used by both the server path and the public C API.
+   - Make the server response explicit about **requested vs effective** budgets so the feature does not silently drift the `/compact` contract.
+   - Short-circuit near-no-op hybrid requests instead of running the full solver/selection pipeline to remove a single token.
 
-**Feature B — BF16 round-trip precision preservation:**
-Ensure the compaction pipeline preserves bfloat16 fidelity when the live KV
-cache uses `GGML_TYPE_BF16`, avoiding precision-reducing intermediate
-conversions and guaranteeing the compacted prefix store uses the same type.
+2. **BF16 type safety for compacted-prefix storage**
+   - Make compacted-prefix layout types fail-closed if not initialized.
+   - Preserve the existing exception-based validation contract rather than aborting the process.
+   - Prove BF16 payloads are not silently downcast to F16.
+
+This revision incorporates all blocking findings from R0, R1, R2, and R3.
 
 ## Baseline
 
-- **Branch:** `modelai-main`
-- **HEAD at plan time:** `f898d8375`
-- **Pre-requisites:** Phases 1-7 complete, Phase 8 plan exists but only partially
-  implemented (auto-tuning sentinels landed; iterative/sequential on-policy and
-  high-compression tests NOT yet landed).
+- Branch: `modelai-main`
+- Baseline commit under review: `6d3c1ca93`
+- Scope: docs + implementation plan only. No code is changed in this document.
 
-## OSS References
+## Non-Goals
 
-| Source | License | What we leverage |
-|--------|---------|------------------|
-| NVIDIA kvpress `PerLayerCompressionPress` | Apache 2.0 | Per-layer ratio concept (Python reference only) |
-| vLLM `HybridKVCacheCoordinator` | Apache 2.0 | Layer-type grouping design pattern |
-| SGLang `HybridLinearKVPool` | Apache 2.0 | `full_attention_layer_ids` mapping pattern |
-| llama.cpp `llama_memory_hybrid` (#13979) | MIT | Already integrated via `llama-kv-compact-utils.h` |
-| llama.cpp native bf16 flash attention (#20525) | MIT | Confirms bf16 KV is a first-class path upstream |
-| ggml bf16 type traits | MIT | `ggml_bf16_to_fp32`, `ggml_fp32_to_bf16_row`, `from_float_ref` |
+- No solver algorithm changes.
+- No per-model tuning table beyond the initial 4.0x cap.
+- No changes to unsupported architecture policy.
+- No new request fields in `/compact` JSON.
+- No benchmark or website work.
+
+## Design Constraints
+
+1. The server path and the public C API must not diverge on hybrid budget behavior.
+2. `ratio`-driven requests may be hybrid-adjusted, but that adjustment must be observable and documented.
+3. Explicit `target_tokens` remains authoritative and bypasses hybrid scaling.
+4. Near-no-op hybrid outcomes must not pay full compaction cost.
+5. BF16 validation failures remain recoverable testable errors, not process aborts.
+6. Hybrid behavior must be derived from live architecture metadata (`hparams` + compacted layouts), not hardcoded model-name rules.
 
 ## Commit Structure
 
-1. `kv-compact: hybrid-aware budget scaling + detection` (Feature A)
-2. `kv-compact: bf16 precision preservation in solver pipeline` (Feature B)
-3. `kv-compact: hybrid + bf16 unit tests` (Tests for both)
-
-Commits 1 and 2 are independent. Commit 3 depends on both.
+1. `kv-compact: add shared hybrid budget resolution helper`
+2. `kv-compact: use shared hybrid budget resolution in server and C api`
+3. `kv-compact: harden compacted-prefix bf16 type validation`
+4. `kv-compact: add hybrid and bf16 regression tests`
+5. `kv-compact: update compact response schema and docs`
 
 ---
 
-## Change 1: Hybrid-Aware Budget Scaling
+## Change 1: Shared Hybrid Detection + Budget Resolution
 
-### 1a. Hybrid model detection utility
+### 1a. Split hybrid detection into a pure helper and a thin KV wrapper
 
-**File:** `src/llama-kv-compact-utils.h` (modified)
+**File:** `src/llama-kv-compact-utils.h`
 
-Add a function that queries the model's hparams to count how many of the
-compacted layouts correspond to full-attention (non-recurrent) layers, and
-returns the attention-layer fraction.
+Add two layers:
+
+1. A pure helper that is trivial to unit test.
+2. A thin wrapper that reads the live KV cache and calls the pure helper.
 
 ```cpp
-#include "llama-hparams.h"
-
 struct llama_kv_compact_hybrid_info {
-    uint32_t n_total_layers    = 0;  // model hparams.n_layer
-    uint32_t n_attn_layers     = 0;  // layers with KV cache (non-recurrent)
-    uint32_t n_recurrent_layers = 0; // DeltaNet/Mamba/etc.
-    bool     is_hybrid         = false;
-    float    attn_fraction     = 1.0f; // n_attn_layers / n_total_layers
+    uint32_t n_total_layers       = 0;
+    uint32_t n_recurrent_layers   = 0;
+    uint32_t n_attn_layers        = 0;  // from hparams
+    uint32_t n_compactable_layers = 0;  // from compacted-prefix layouts
+    bool     is_hybrid            = false;
+    bool     layout_count_mismatch = false;
+    float    compactable_fraction = 1.0f; // n_compactable_layers / n_total_layers
 };
 
-// Query hybrid architecture info from the compacted prefix layouts and model
-// hparams.  Returns {is_hybrid=false, attn_fraction=1.0} for dense models.
-//
-// The layouts vector only contains entries for layers that have KV cache
-// (full-attention layers).  For a dense model, layouts.size() == n_layer.
-// For Qwen3.5-35B: layouts.size() == 10, n_layer == 40.
+static inline llama_kv_compact_hybrid_info llama_kv_compact_make_hybrid_info(
+        uint32_t n_total_layers,
+        uint32_t n_recurrent_layers,
+        uint32_t n_compactable_layers) {
+    llama_kv_compact_hybrid_info info;
+    info.n_total_layers       = n_total_layers;
+    info.n_recurrent_layers   = n_recurrent_layers;
+    info.n_attn_layers        = n_total_layers >= n_recurrent_layers
+                              ? (n_total_layers - n_recurrent_layers)
+                              : 0;
+    info.n_compactable_layers = n_compactable_layers;
+    info.is_hybrid            = (info.n_recurrent_layers > 0);
+    info.layout_count_mismatch = (info.n_compactable_layers != info.n_attn_layers);
+
+    if (info.n_total_layers > 0) {
+        info.compactable_fraction = float(info.n_compactable_layers) / float(info.n_total_layers);
+    } else {
+        info.compactable_fraction = 0.0f;
+    }
+    return info;
+}
+
 static inline llama_kv_compact_hybrid_info llama_kv_compact_detect_hybrid(
         const llama_kv_cache & kv) {
-    llama_kv_compact_hybrid_info info;
-
     const auto * cp = kv.get_compacted_prefix();
-    if (!cp) return info;
+    if (!cp) {
+        return {};
+    }
 
     const auto & layouts = cp->get_layouts();
-    if (layouts.empty()) return info;
-
-    // Access hparams directly (public member of llama_kv_cache).
     const auto & hparams = kv.hparams;
-    info.n_total_layers = hparams.n_layer;
 
-    // Count recurrent layers from hparams.
+    uint32_t n_recurrent_layers = 0;
     for (uint32_t il = 0; il < hparams.n_layer; ++il) {
         if (hparams.is_recurrent(il)) {
-            info.n_recurrent_layers++;
+            n_recurrent_layers++;
         }
     }
-    info.n_attn_layers = info.n_total_layers - info.n_recurrent_layers;
-    info.is_hybrid = (info.n_recurrent_layers > 0);
 
-    // Sanity: layouts should match attention layer count.
-    // Allow mismatch (SWA exclusions may reduce layouts further).
-    if (info.n_attn_layers > 0) {
-        info.attn_fraction = float(info.n_attn_layers) / float(info.n_total_layers);
-    } else {
-        info.attn_fraction = 0.0f;  // fully recurrent: no attention layers
+    auto info = llama_kv_compact_make_hybrid_info(
+        hparams.n_layer,
+        n_recurrent_layers,
+        (uint32_t) layouts.size());
+
+    if (info.layout_count_mismatch) {
+        LLAMA_LOG_WARN(
+            "%s: hybrid layer mismatch (attn=%u, compactable=%u, total=%u)\n",
+            __func__,
+            info.n_attn_layers,
+            info.n_compactable_layers,
+            info.n_total_layers);
     }
 
     return info;
 }
 ```
 
-**Rationale:** This is a pure query — no state mutation. The layouts vector
-already filters out recurrent layers (they have no K/V tensors), so
-`layouts.size()` gives the actual compacted-layer count. We cross-reference
-with `hparams.is_recurrent()` for the full picture.
+**Why this shape**
 
-**Model access path:** `kv.hparams` is a public `const llama_hparams &` member
-on `llama_kv_cache` (see `src/llama-kv-cache.h`). This is the same hparams
-instance used throughout the compaction pipeline.
+- The pure helper is testable without constructing a full `llama_kv_cache`.
+- The wrapper still exercises the real access path through `kv.hparams` and `get_compacted_prefix()`.
+- `compactable_fraction` is based on `layouts.size()`, not just `n_attn_layers`, so hybrid+excluded-layer cases do not silently use the wrong numerator.
+- A mismatch is logged rather than silently ignored.
 
-### 1b. Budget scaling in server dispatch
+### 1b. Add one shared budget-resolution helper used by both server and C API
 
-**File:** `tools/server/server-context.cpp` (modified, lines ~2350-2360)
+**File:** `src/llama-kv-compact-utils.h`
 
-After the existing Phase 8 auto-tuning block, add hybrid-aware ratio
-adjustment:
+Add a small result carrier for hybrid-aware budget resolution.
 
 ```cpp
-// Phase 8: Resolve auto-tuning sentinels based on compression ratio.
-const bool high_compression = (cp.ratio >= 10.0f);
-if (cp.max_queries         == UINT32_MAX) { cp.max_queries         = high_compression ? 512u  : 256u;  }
-if (cp.nnls_iters          < 0)           { cp.nnls_iters          = high_compression ? 4     : 2;     }
-if (cp.lambda              < 0.0f)        { cp.lambda              = high_compression ? 1e-5f : 1e-6f; }
-if (cp.n_generate          == UINT32_MAX) { cp.n_generate          = high_compression ? 512u  : 256u;  }
-if (cp.max_queries_per_kv_head == UINT32_MAX) { cp.max_queries_per_kv_head = high_compression ? 2048u : 1024u; }
-if (cp.n_on_policy_passes  == UINT32_MAX) { cp.n_on_policy_passes  = high_compression ? 2u    : 1u;    }
-
-// --- NEW: Hybrid model budget scaling ---
-// For hybrid models (e.g., Qwen3.5: 25% attention, 75% recurrent),
-// the attention layers carry ALL the KV context burden.  The user's
-// requested ratio (e.g., 4x) was calibrated for dense models where
-// every layer has KV cache.  For hybrid models, applying the same
-// ratio to the few attention layers is MORE aggressive because those
-// layers are the only source of positional recall.
-//
-// Adjustment: scale target_tokens UP by 1/attn_fraction (bounded).
-// Example: Qwen3.5-35B has attn_fraction=0.25.
-//   User requests ratio=4 → target_tokens=1000 for a 4K prefix.
-//   Scaled: target_tokens = min(1000 / 0.25, compactable) = min(4000, 4000)
-//   Effective ratio on the 10 attention layers = 1x (no compression).
-//   But the total KV memory savings are huge because 30/40 layers have
-//   no KV cache at all.
-//
-// The scaling is clamped:
-//   - floor: attn_fraction (no scaling if dense model)
-//   - ceiling: 4.0x multiplier (prevents absurd inflation for models
-//     with very few attention layers, e.g., 2/52)
-//   - explicit user target_tokens bypasses scaling (user knows best)
-//
-const bool user_set_explicit_target = (json_value(data, "target_tokens", -1) >= 0);
-if (!user_set_explicit_target) {
-    const auto hybrid_info = llama_kv_compact_detect_hybrid(*kv);
-    if (hybrid_info.is_hybrid && hybrid_info.n_attn_layers > 0) {
-        const float scale = std::min(1.0f / hybrid_info.attn_fraction, 4.0f);
-        // Clamp to compactable - 1: the existing guard at server-context.cpp:2340
-        // rejects target_tokens >= compactable.  Without this clamp, the primary
-        // production case (Qwen3.5 at ratio <= 4) would hit that guard.
-        // Use float-domain min to avoid uint32_t overflow on intermediate cast.
-        const uint32_t scaled_target = (uint32_t)std::min(
-            (float)target_tokens * scale,
-            (float)(compactable - 1u));
-        LLAMA_LOG_INFO(
-            "%s: hybrid model detected (%u/%u attention layers, fraction=%.2f) "
-            "— scaling target_tokens %u → %u (%.1fx)\n",
-            __func__,
-            hybrid_info.n_attn_layers,
-            hybrid_info.n_total_layers,
-            hybrid_info.attn_fraction,
-            target_tokens,
-            scaled_target,
-            scale);
-        target_tokens = scaled_target;
-    }
-}
-```
-
-**Key design decisions:**
-
-1. **Scale UP target_tokens, not down the ratio.** This keeps the ratio field
-   semantically consistent (user-facing compression ratio) while adjusting the
-   internal token budget. The ratio field still reflects what the user asked for
-   in logs and `/props`.
-
-2. **4x ceiling.** For a model with 2/52 attention layers (`attn_fraction=0.038`),
-   uncapped scaling would produce `1/0.038 = 26x`, making compaction almost a
-   no-op. The 4x ceiling ensures some meaningful compression still occurs. The
-   value 4.0 was chosen because: at `attn_fraction=0.25` (Qwen3.5), the
-   multiplier is exactly 4.0, meaning the user's ratio is fully neutralized —
-   the model's recurrent layers already provide the "compression." For sparser
-   models, partial compression is applied.
-
-3. **Explicit target_tokens bypass.** If the user sends `"target_tokens": 500`
-   in the JSON, they explicitly chose the budget. Scaling would violate their
-   intent.
-
-### 1c. Add hybrid_info to pipeline stats
-
-**File:** `src/llama-kv-compact-pipeline.h` (modified)
-
-```cpp
-struct llama_kv_compact_pipeline_stats {
-    double query_generation_time_ms = 0.0;
-    double solver_time_ms = 0.0;
-    double k_extraction_time_ms = 0.0;
-    double attention_score_time_ms = 0.0;
-    double selection_time_ms = 0.0;
-    double v_extraction_time_ms = 0.0;
-    double kv_write_time_ms = 0.0;
-    double total_time_ms = 0.0;
-    uint32_t n_prefix_tokens = 0;
-    uint32_t n_selected_tokens = 0;
-    float mean_partition_sum_relative_error = 0.0f;
-
-    // Hybrid model info (populated by server dispatch, not by solver)
-    bool     hybrid_detected  = false;
-    uint32_t hybrid_n_attn_layers = 0;
-    uint32_t hybrid_n_total_layers = 0;
-    float    hybrid_budget_scale = 1.0f;
+struct llama_kv_compact_budget_resolution {
+    uint32_t requested_target_tokens = 0;
+    uint32_t effective_target_tokens = 0;
+    double   requested_ratio         = 0.0;
+    double   effective_ratio         = 0.0;
+    bool     explicit_target         = false;
+    bool     hybrid_detected         = false;
+    bool     skipped_noop            = false;
+    float    budget_scale            = 1.0f;
+    llama_kv_compact_hybrid_info hybrid = {};
 };
-```
 
-**File:** `tools/server/server-context.cpp` — populate stats after scaling:
+static inline llama_kv_compact_budget_resolution llama_kv_compact_resolve_budget(
+        const llama_kv_cache & kv,
+        uint32_t compactable,
+        uint32_t requested_target_tokens,
+        bool explicit_target,
+        double requested_ratio) {
+    llama_kv_compact_budget_resolution out;
+    out.requested_target_tokens = requested_target_tokens;
+    out.effective_target_tokens = requested_target_tokens;
+    out.explicit_target         = explicit_target;
+    out.requested_ratio         = requested_ratio;
+    out.effective_ratio         = requested_ratio;
 
-```cpp
-if (hybrid_info.is_hybrid) {
-    stats.hybrid_detected = true;
-    stats.hybrid_n_attn_layers = hybrid_info.n_attn_layers;
-    stats.hybrid_n_total_layers = hybrid_info.n_total_layers;
-    stats.hybrid_budget_scale = scale;
+    if (compactable == 0 || requested_target_tokens == 0) {
+        return out;
+    }
+
+    if (explicit_target) {
+        out.requested_ratio = compactable > 0 ? double(compactable) / double(requested_target_tokens) : 0.0;
+        out.effective_ratio = out.requested_ratio;
+        return out;
+    }
+
+    out.hybrid = llama_kv_compact_detect_hybrid(kv);
+    out.hybrid_detected = out.hybrid.is_hybrid && out.hybrid.n_compactable_layers > 0;
+    if (!out.hybrid_detected || out.hybrid.compactable_fraction <= 0.0f) {
+        return out;
+    }
+
+    const float scale = std::min(1.0f / out.hybrid.compactable_fraction, 4.0f);
+    out.budget_scale = scale;
+
+    const uint32_t scaled_target = (uint32_t) std::min(
+        (float) requested_target_tokens * scale,
+        (float) compactable);
+
+    if (scaled_target >= compactable - 1u) {
+        out.effective_target_tokens = compactable;
+        out.effective_ratio = 1.0;
+        out.skipped_noop = true;
+        return out;
+    }
+
+    out.effective_target_tokens = scaled_target;
+    out.effective_ratio = compactable > 0
+        ? double(compactable) / double(out.effective_target_tokens)
+        : 0.0;
+    return out;
 }
 ```
 
-### 1d. JSON response enrichment
+**Key contract decisions**
 
-**File:** `tools/server/server-task.h` — add hybrid fields to `server_task_result_compact`:
+1. `ratio` is a **requested** budget, not a guaranteed final target on hybrid models.
+2. The **effective** target is what actually runs.
+3. The server response will expose both requested and effective values when hybrid adjustment happens.
+4. Explicit `target_tokens` bypasses scaling.
+5. Near-no-op hybrid outcomes short-circuit without running the pipeline.
+
+This is the change that closes the prior hidden-contract bug: the adjustment is now deliberate and observable.
+
+### 1c. Apply the shared helper in both entry points
+
+**Files:**
+- `tools/server/server-context.cpp`
+- `src/llama-kv-compact-api.cpp`
+
+#### Server path
+
+Keep the existing ratio validation and base target computation. Then resolve the effective budget through the shared helper.
+
+```cpp
+uint32_t requested_target_tokens;
+bool explicit_target = false;
+if (cp.target_tokens > 0) {
+    explicit_target = true;
+    requested_target_tokens = (uint32_t) cp.target_tokens;
+} else {
+    if (cp.ratio < 1.0f) {
+        // existing error path
+    }
+    requested_target_tokens = std::max(1u, (uint32_t) (compactable / cp.ratio));
+}
+
+const auto budget = llama_kv_compact_resolve_budget(
+    *kv,
+    compactable,
+    requested_target_tokens,
+    explicit_target,
+    explicit_target ? 0.0 : cp.ratio);
+
+if (!explicit_target && budget.skipped_noop) {
+    auto res = std::make_unique<server_task_result_compact>();
+    res->id                  = task.id;
+    res->id_slot             = id_slot;
+    res->method              = method;
+    res->compacted_tokens    = compactable;
+    res->original_tokens     = compactable;
+    res->compression_ratio   = 1.0;
+    res->compaction_time_ms  = 0.0;
+    res->active_n_kv_before  = n_kv_before;
+    res->active_n_kv_after   = n_kv_before;
+    res->reclaimed           = false;
+    // hybrid metadata copied below
+    queue_results.send(std::move(res));
+    break;
+}
+
+const uint32_t target_tokens = budget.effective_target_tokens;
+if (target_tokens >= compactable) {
+    // existing explicit-target / invalid-budget path remains an error
+}
+```
+
+#### C API path
+
+Apply the same helper before the existing `target_tokens >= compactable` guard.
+
+```cpp
+uint32_t requested_target_tokens;
+bool explicit_target = false;
+if (params.target_tokens > 0) {
+    explicit_target = true;
+    requested_target_tokens = (uint32_t) params.target_tokens;
+} else {
+    if (params.ratio < 1.0f) {
+        // existing error path
+    }
+    requested_target_tokens = std::max(2u, (uint32_t) (compactable / params.ratio));
+}
+
+const auto budget = llama_kv_compact_resolve_budget(
+    *kv,
+    compactable,
+    requested_target_tokens,
+    explicit_target,
+    explicit_target ? 0.0 : params.ratio);
+
+if (!explicit_target && budget.skipped_noop) {
+    LLAMA_LOG_INFO("%s: hybrid no-op (%u -> %u, scale=%.2f)\n",
+                   __func__,
+                   budget.requested_target_tokens,
+                   budget.effective_target_tokens,
+                   budget.budget_scale);
+    return (int32_t) compactable;
+}
+
+const uint32_t target_tokens = budget.effective_target_tokens;
+if (target_tokens >= compactable) {
+    // existing no-op return path for invalid explicit targets remains
+}
+```
+
+Implementation note:
+- In both the no-op and real-compaction server paths, copy the resolved `budget`
+  fields onto `server_task_result_compact` so the JSON response exposes the same
+  requested/effective metadata regardless of whether the pipeline actually ran.
+
+**Why this closes the blocker**
+
+- There is now one hybrid budget rule, not separate server-only behavior.
+- The C API and server path no longer silently diverge.
+
+### 1d. Response contract: add requested vs effective hybrid fields directly to `server_task_result_compact`
+
+**File:** `tools/server/server-task.h`
+
+Do **not** push this through `llama_kv_compact_pipeline_stats`. That carrier is method-specific and not shared across all compaction methods.
+
+Extend `server_task_result_compact` directly.
 
 ```cpp
 struct server_task_result_compact : server_task_result {
-    // ... existing fields ...
+    std::string method;
+    uint32_t    compacted_tokens     = 0;
+    uint32_t    original_tokens      = 0;
+    double      compression_ratio    = 0.0;
+    double      compaction_time_ms   = 0.0;
+    uint32_t    active_n_kv_before   = 0;
+    uint32_t    active_n_kv_after    = 0;
+    bool        reclaimed            = false;
 
-    // Hybrid model info (from pipeline stats)
-    bool     hybrid_detected       = false;
-    uint32_t hybrid_n_attn_layers  = 0;
-    uint32_t hybrid_n_total_layers = 0;
-    float    hybrid_budget_scale   = 1.0f;
+    bool        hybrid_detected          = false;
+    bool        hybrid_skipped_noop      = false;
+    uint32_t    hybrid_n_attn_layers     = 0;
+    uint32_t    hybrid_n_compactable_layers = 0;
+    uint32_t    hybrid_n_total_layers    = 0;
+    float       hybrid_budget_scale      = 1.0f;
+    uint32_t    requested_target_tokens  = 0;
+    uint32_t    effective_target_tokens  = 0;
+    double      requested_ratio          = 0.0;
+    double      effective_ratio          = 0.0;
+
+    json to_json() override {
+        json j = {
+            { "success",             true },
+            { "id_slot",             id_slot },
+            { "method",              method },
+            { "compacted_tokens",    compacted_tokens },
+            { "original_tokens",     original_tokens },
+            { "compression_ratio",   compression_ratio },
+            { "compaction_time_ms",  compaction_time_ms },
+            { "active_n_kv_before",  active_n_kv_before },
+            { "active_n_kv_after",   active_n_kv_after },
+            { "reclaimed",           reclaimed },
+        };
+
+        if (hybrid_detected) {
+            j["hybrid"] = {
+                {"detected",               true},
+                {"skipped_noop",           hybrid_skipped_noop},
+                {"n_attn_layers",          hybrid_n_attn_layers},
+                {"n_compactable_layers",   hybrid_n_compactable_layers},
+                {"n_total_layers",         hybrid_n_total_layers},
+                {"budget_scale",           hybrid_budget_scale},
+                {"requested_target_tokens", requested_target_tokens},
+                {"effective_target_tokens", effective_target_tokens},
+                {"requested_ratio",         requested_ratio},
+                {"effective_ratio",         effective_ratio},
+            };
+        }
+        return j;
+    }
 };
 ```
 
-**File:** `tools/server/server-task.h` — in `server_task_result_compact::to_json()`:
+**Why this closes the blocker**
+
+- The metadata is attached directly where the response is built.
+- No invalid `stats` plumbing.
+- No signature drift: `json to_json() override`, not `const`.
+
+### 1e. Update public API comments to match the new behavior
+
+**File:** `include/llama.h`
+
+Update the `llama_kv_cache_compact()` comments so they no longer claim raw `n / ratio` is always the final target.
 
 ```cpp
-json to_json() const {
-    json j = /* existing fields */;
-    // Add hybrid info to response (only when detected)
-    if (hybrid_detected) {
-        j["hybrid"] = {
-            {"detected",       true},
-            {"n_attn_layers",  hybrid_n_attn_layers},
-            {"n_total_layers", hybrid_n_total_layers},
-            {"budget_scale",   hybrid_budget_scale},
-        };
-    }
-    return j;
-}
+// Compact the KV cache for a sequence using Attention Matching.
+// For explicit target_tokens, compaction aims for that exact target.
+// For ratio-driven requests, hybrid architectures may resolve to a larger
+// effective target to preserve attention-layer context. The return value is the
+// authoritative final compacted-prefix token count.
 ```
 
-**File:** `tools/server/tests/unit/snapshots/compact.json` — update snapshot to
-include the optional `hybrid` field in the response schema.
+This avoids shipping a public API comment that becomes false the moment the feature lands.
+
+### 1f. Snapshot / schema update
+
+**File:** `tools/server/tests/unit/snapshots/compact.json`
+
+Update the snapshot so it matches the live response shape before layering on `hybrid`.
+
+Required top-level fields should include:
+- `success`
+- `id_slot`
+- `method`
+- `compacted_tokens`
+- `original_tokens`
+- `compression_ratio`
+- `compaction_time_ms`
+- `active_n_kv_before`
+- `active_n_kv_after`
+- `reclaimed`
+
+Add optional `hybrid` with:
+- `detected`
+- `skipped_noop`
+- `n_attn_layers`
+- `n_compactable_layers`
+- `n_total_layers`
+- `budget_scale`
+- `requested_target_tokens`
+- `effective_target_tokens`
+- `requested_ratio`
+- `effective_ratio`
 
 ---
 
-## Change 2: BF16 Precision Preservation
+## Change 2: BF16 Type Safety
 
-### 2a. Audit: Current bf16 data flow
+### 2a. Use a sentinel type in the compacted-prefix layout
 
-The compaction pipeline's bf16 data flow is:
-
-```
-Live KV cache (bf16) ──type_to_float()──▸ fp32 solver matrices ──solver──▸ fp32 result
-                                                                              │
-                                                          write_compacted_payload()
-                                                                              │
-                                                          from_float_ref(type)──▸ bf16 store
-```
-
-**Current correctness:** The extraction path (`type_to_float`) correctly
-handles bf16 via `ggml_get_type_traits(GGML_TYPE_BF16)->to_float`, which calls
-`ggml_bf16_to_fp32_row`. The write path (`write_compacted_payload`) uses
-`ggml_get_type_traits(type)->from_float_ref`, which correctly handles bf16 via
-`ggml_fp32_to_bf16_row`.
-
-The solver math itself (Cholesky, NNLS, ridge regression) is all fp32 and
-MUST remain fp32 for numerical stability — this is correct.
-
-**The actual bug:** The compacted prefix store's layout inherits `type_k` and
-`type_v` from the live KV cache layer tensors at initialization time
-(`llama-kv-cache.cpp:~1022`). However, the default fallback values in the
-`llama_compacted_prefix_layer_layout` struct are `GGML_TYPE_F16`:
-
-```cpp
-struct llama_compacted_prefix_layer_layout {
-    // ...
-    ggml_type type_k = GGML_TYPE_F16;  // default fallback
-    ggml_type type_v = GGML_TYPE_F16;  // default fallback
-};
-```
-
-If a code path constructs a layout without explicitly setting the type (e.g.,
-a test, or a future refactor), it silently downcasts bf16→f16, losing dynamic
-range (bf16 has 8-bit exponent like fp32; f16 has only 5-bit exponent).
-
-Additionally, the execution path that materializes compacted prefix tensors
-for the attention graph must use the correct type when creating ggml tensors.
-
-### 2b. Fix default type sentinel
-
-**File:** `src/llama-kv-compacted-prefix.h` (modified)
-
-Change the default type to a sentinel that forces explicit initialization:
+**File:** `src/llama-kv-compacted-prefix.h`
 
 ```cpp
 struct llama_compacted_prefix_layer_layout {
@@ -333,352 +447,241 @@ struct llama_compacted_prefix_layer_layout {
     uint32_t  n_head_kv      = 0;
     uint32_t  n_embd_head_k  = 0;
     uint32_t  n_embd_head_v  = 0;
-    ggml_type type_k         = GGML_TYPE_COUNT;  // sentinel: must be set explicitly
-    ggml_type type_v         = GGML_TYPE_COUNT;  // sentinel: must be set explicitly
+    ggml_type type_k         = GGML_TYPE_COUNT;
+    ggml_type type_v         = GGML_TYPE_COUNT;
 };
 ```
 
-### 2c. Validate type at configure time
+### 2b. Validate the sentinel with exceptions, not aborts
 
-**File:** `src/llama-kv-compacted-prefix.cpp` (modified, in `layer_storage::configure()` at ~line 204)
+**File:** `src/llama-kv-compacted-prefix.cpp`
 
-In `llama_compacted_prefix_store::layer_storage::configure()`, add validation
-BEFORE the existing `is_supported_compacted_type()` check. This is the method
-that processes per-layer layout at storage allocation time — not `configure_seq()`
-which handles per-sequence runtime configuration.
+The live contract already throws `std::runtime_error` from `layer_storage::configure()` on invalid types. Preserve that failure mode.
 
 ```cpp
 void llama_compacted_prefix_store::layer_storage::configure(uint32_t n_tokens) {
-    // Validate types are explicitly set (not sentinel).
-    // This must come BEFORE is_supported_compacted_type() which would
-    // crash on GGML_TYPE_COUNT.
     if (layout.type_k >= GGML_TYPE_COUNT || layout.type_v >= GGML_TYPE_COUNT) {
-        LLAMA_LOG_ERROR("%s: layer %u has uninitialized type_k=%d or type_v=%d\n",
-                       __func__, layout.layer_id, (int)layout.type_k, (int)layout.type_v);
-        GGML_ABORT("compacted prefix layout has uninitialized type");
+        throw std::runtime_error("compacted-prefix layout has uninitialized type");
     }
-    // Validate bf16 is supported for KV operations.
+
+    if (!is_supported_compacted_type(layout.type_k, layout.n_embd_head_k, layout.n_embd_head_v) ||
+        !is_supported_compacted_type(layout.type_v, layout.n_embd_head_k, layout.n_embd_head_v)) {
+        throw std::runtime_error(k_quantized_cache_error);
+    }
+
     if (layout.type_k == GGML_TYPE_BF16 || layout.type_v == GGML_TYPE_BF16) {
-        // Verify ggml has from_float_ref for bf16 (should always be true
-        // in current ggml, but guard against future regressions).
         const auto * traits_k = ggml_get_type_traits(layout.type_k);
         const auto * traits_v = ggml_get_type_traits(layout.type_v);
         GGML_ASSERT(traits_k->from_float_ref != nullptr);
         GGML_ASSERT(traits_v->from_float_ref != nullptr);
     }
-    // ... rest of existing configure logic ...
+
+    // existing allocation logic
+}
 ```
 
-### 2d. Ensure tensor materialization respects bf16
+**Why this shape**
 
-**File:** `src/llama-kv-cache.cpp` — in `compacted_prefix_build_k_tensor()` and
-`compacted_prefix_build_v_tensor()` (or equivalent `set_input` paths)
+- It catches uninitialized type usage early.
+- It keeps the existing testable failure contract.
+- It does not turn misconfiguration into process death.
 
-The execution path creates ggml tensors for the compacted prefix data. These
-tensors must use the correct `ggml_type` from the layout, not a hardcoded type.
+### 2c. Materialization audit: no planned code change unless the grep audit proves one is needed
 
-Verify (and fix if needed) that the tensor creation uses `layout.type_k`:
+**Files to audit during implementation**
+- `src/llama-graph.cpp`
+- `src/llama-kv-compacted-prefix-exec.cpp`
+- `src/llama-kv-cache.cpp`
 
-```cpp
-// In the tensor materialization path (set_input or build_attn_inp_kv_impl):
-struct ggml_tensor * k_compact = ggml_new_tensor_2d(
-    ctx, layout.type_k,                    // NOT hardcoded GGML_TYPE_F16
-    layout.n_embd_head_k,
-    n_tokens * layout.n_head_kv);
+Current review evidence shows the graph/materialization path already respects dynamic `type_k` / `type_v`. This plan therefore does **not** require a speculative code change in that path unless the implementation grep finds a real hardcoded `GGML_TYPE_F16` compacted-prefix site.
 
-// Copy raw bytes from compacted store into tensor data.
-// The store already holds data in layout.type_k format.
-memcpy(k_compact->data, layer_data.k_data.data(), ggml_nbytes(k_compact));
-```
+Implementation rule:
+- If the audit finds a hardcoded compacted-prefix tensor type, fix it and add a regression test.
+- If the audit is clean, record that fact in the implementation notes and do not make a no-op patch.
 
-If the current code uses `GGML_TYPE_F16` hardcoded anywhere in tensor creation
-for compacted prefix, change it to read from `layout.type_k` / `layout.type_v`.
+### 2d. Precision documentation
 
-### 2e. Solver precision documentation
+**File:** `docs/kv-compaction-algorithm.md`
 
-**File:** `docs/kv-compaction-algorithm.md` (modified)
-
-Add a section after "Beta Fitting":
-
-```markdown
-### Numeric Precision
-
-The solver pipeline operates in fp32 throughout:
-
-- K/V extraction: dequantized to fp32 via `ggml_get_type_traits(type)->to_float`.
-- Attention scoring, Cholesky solve, NNLS, ridge regression: all fp32.
-- K/V write-back: quantized from fp32 to the layout's native type via
-  `ggml_get_type_traits(type)->from_float_ref`.
-
-This means the compacted prefix store preserves the original KV cache type.
-A bf16 KV cache produces a bf16 compacted prefix. The round-trip introduces
-quantization noise bounded by the type's precision:
-
-| Type | Mantissa bits | Max relative error per element |
-|------|---------------|-------------------------------|
-| f32  | 23            | ~6e-8                         |
-| f16  | 10            | ~5e-4                         |
-| bf16 | 7             | ~4e-3                         |
-| q8_0 | ~7 effective  | ~4e-3                         |
-| q4_0 | ~4 effective  | ~3e-2                         |
-
-For the solver math itself, fp32 is necessary: Cholesky factorization with
-bf16 intermediates would accumulate catastrophic rounding errors due to
-bf16's 7-bit mantissa. The current design is correct: extract → fp32 solve →
-write back in native type.
-```
+Add a short numeric-precision note:
+- extraction to FP32
+- FP32 solver path remains unchanged
+- write-back uses native layout type via `from_float_ref`
+- BF16 compacted-prefix storage is preserved end to end
 
 ---
 
-## Change 3: Unit Tests
+## Change 3: Regression Tests
 
-### 3a. Hybrid detection test
+### 3a. Test the pure hybrid-info helper directly
 
-**File:** `tests/test-kv-compact-features.cpp` (modified)
+**File:** `tests/test-kv-compact-features.cpp`
+
+Replace the mock arithmetic-only test with a pure-helper test over `llama_kv_compact_make_hybrid_info(...)`.
+
+Required cases:
+1. Dense: `32 total, 0 recurrent, 32 compactable` -> dense, fraction `1.0`
+2. Qwen3.5-35B-like: `40 total, 30 recurrent, 10 compactable` -> hybrid, fraction `0.25`
+3. Qwen3.5-122B-like: `48 total, 36 recurrent, 12 compactable` -> hybrid, fraction `0.25`
+4. Sparse hybrid example: `52 total, 46 recurrent, 6 compactable` -> hybrid, fraction `6/52`
+5. Mismatch case: `52 total, 46 recurrent, 4 compactable` -> `layout_count_mismatch=true`
+
+This closes the prior “test only the arithmetic comment, not the actual helper” gap.
+
+### 3b. Test shared budget resolution directly
+
+**File:** `tests/test-kv-compact-features.cpp`
+
+Add cases that exercise the actual shared budget-resolution helper contract.
+
+Required cases:
+1. Dense model ratio path: effective target == requested target
+2. Explicit target path: no scaling
+3. Qwen3.5-like hybrid with `ratio=8`: scaling applied, effective target larger than requested target, no noop
+4. Qwen3.5-like hybrid with `ratio=4`: `skipped_noop=true`, effective target == `compactable`
+5. Sparse hybrid cap case: scale capped at `4.0`
+
+Assertions must cover:
+- `requested_target_tokens`
+- `effective_target_tokens`
+- `requested_ratio`
+- `effective_ratio`
+- `budget_scale`
+- `skipped_noop`
+
+### 3c. Add server response contract tests for hybrid metadata
+
+**Files:**
+- `tools/server/tests/unit/test_compact.py`
+- `tools/server/tests/unit/snapshots/compact.json`
+
+Add tests for:
+1. default response still validates against the updated snapshot
+2. hybrid response includes requested/effective fields when `hybrid.detected == true`
+3. no-op hybrid response returns success with `hybrid.skipped_noop == true`
+4. explicit target path does not set `hybrid.skipped_noop`
+
+Use `method = "select"` in default local tests so the V1 beta allowlist is not a false blocker.
+
+### 3d. Add a C API parity test
+
+**File:** `tests/test-kv-compact-quality-multi.cpp` or new dedicated test file
+
+Add a focused C API regression test that verifies hybrid budget resolution is shared, not server-only.
+
+Minimum requirement:
+- one model-backed CI test on a Qwen3.5-like GGUF that compares the effective compacted token count from the server path and the C API path for the same ratio-driven request.
+
+Local-dev note:
+- if a real hybrid GGUF is unavailable locally, this test is CI-only but must still be part of the implementation plan.
+
+### 3e. BF16 sentinel and exception behavior
+
+**File:** `tests/test-kv-compacted-prefix.cpp`
+
+Required tests:
+1. default layout uses `GGML_TYPE_COUNT`
+2. uninitialized type throws `std::runtime_error`
+3. explicit BF16 type succeeds
+4. existing quantized negative tests still throw (not abort)
+
+### 3f. BF16 round-trip test with values outside F16 range
+
+**File:** `tests/test-kv-compacted-prefix.cpp`
+
+Replace the `1e-5`-scale test values with values that actually distinguish BF16 from F16.
+
+Recommended pattern:
 
 ```cpp
-// Test: hybrid model detection for Qwen3.5-like architecture
-static bool test_hybrid_detection() {
-    printf("  test_hybrid_detection... ");
-
-    // Simulate a Qwen3.5-like model: 40 layers, every 4th is full attention.
-    // Layers 3, 7, 11, 15, 19, 23, 27, 31, 35, 39 are full attention (10/40).
-    // The compacted prefix layouts only contain entries for those 10 layers.
-
-    // Create a mock hparams with recurrent_layer_arr set.
-    // We can't easily construct a full llama_kv_cache without a model,
-    // so test the detection logic directly.
-
-    struct mock_hybrid_info {
-        uint32_t n_total_layers;
-        uint32_t n_layouts;  // simulates layouts.size()
-        bool     expected_is_hybrid;
-        float    expected_attn_fraction;
-    };
-
-    const mock_hybrid_info cases[] = {
-        // Dense model: all layers are attention
-        {32, 32, false, 1.0f},
-        // Qwen3.5-35B: 40 layers, 10 attention
-        {40, 10, true, 0.25f},
-        // Qwen3.5-122B: 48 layers, 12 attention
-        {48, 12, true, 0.25f},
-        // Hypothetical: 52 layers, 6 attention (Nemotron-like)
-        {52,  6, true, 6.0f/52.0f},
-    };
-
-    for (const auto & c : cases) {
-        const float attn_fraction = float(c.n_layouts) / float(c.n_total_layers);
-        const bool is_hybrid = (c.n_total_layers != c.n_layouts);
-
-        GGML_ASSERT(is_hybrid == c.expected_is_hybrid);
-        GGML_ASSERT(std::abs(attn_fraction - c.expected_attn_fraction) < 0.01f);
+for (uint32_t t = 0; t < n_tokens; ++t) {
+    for (uint32_t d = 0; d < dim; ++d) {
+        rows.data[t * dim + d] = 70000.0f + float(t * dim + d);
     }
-
-    printf("OK\n");
-    return true;
 }
 ```
 
-### 3b. Budget scaling test
+Assertions:
+- readback remains finite
+- readback values stay above `65504.0f`
+- relative error remains within BF16 bounds
 
-**File:** `tests/test-kv-compact-features.cpp` (modified)
+This closes the prior false-positive test gap where silent F16 downcast would still pass.
 
-```cpp
-// Test: hybrid budget scaling arithmetic
-static bool test_hybrid_budget_scaling() {
-    printf("  test_hybrid_budget_scaling... ");
+### 3g. Keep the sparse-hybrid comments consistent
 
-    struct scaling_case {
-        float    attn_fraction;
-        uint32_t original_target;
-        uint32_t compactable;
-        uint32_t expected_target;
-    };
-
-    const scaling_case cases[] = {
-        // Dense model: no scaling (handled by is_hybrid check, not this formula)
-        {1.0f, 1000, 4000, 1000},
-        // Qwen3.5 (25% attn): scale 4x, clamped to compactable - 1
-        {0.25f, 1000, 4000, 3999},
-        // Qwen3.5 with lower target: scale 4x, below compactable
-        {0.25f, 500, 4000, 2000},
-        // Very sparse (2/52 ≈ 3.8%): capped at 4x ceiling
-        {6.0f/52.0f, 1000, 40000, 4000},
-        // Edge: attn_fraction = 0.5 (50/50 hybrid): scale 2x
-        {0.5f, 1000, 4000, 2000},
-        // Edge: target * scale exactly equals compactable (must clamp to -1)
-        {0.25f, 1024, 4096, 4095},
-    };
-
-    for (const auto & c : cases) {
-        const float scale = std::min(1.0f / c.attn_fraction, 4.0f);
-        // Match the production formula: float-domain min, clamp to compactable - 1
-        const uint32_t scaled = (uint32_t)std::min(
-            (float)c.original_target * scale,
-            (float)(c.compactable - 1u));
-
-        if (scaled != c.expected_target) {
-            printf("FAIL: attn_fraction=%.3f, target=%u, compactable=%u "
-                   "→ got %u, expected %u\n",
-                   c.attn_fraction, c.original_target, c.compactable,
-                   scaled, c.expected_target);
-            return false;
-        }
-    }
-
-    printf("OK\n");
-    return true;
-}
-```
-
-### 3c. BF16 type sentinel test
-
-**File:** `tests/test-kv-compacted-prefix.cpp` (modified)
-
-```cpp
-// Test: default layout type is sentinel, not F16
-static bool test_layout_type_sentinel() {
-    printf("  test_layout_type_sentinel... ");
-
-    llama_compacted_prefix_layer_layout layout;
-
-    // Default types must be GGML_TYPE_COUNT (sentinel), not F16.
-    GGML_ASSERT(layout.type_k == GGML_TYPE_COUNT);
-    GGML_ASSERT(layout.type_v == GGML_TYPE_COUNT);
-
-    // Explicitly set to bf16
-    layout.type_k = GGML_TYPE_BF16;
-    layout.type_v = GGML_TYPE_BF16;
-    GGML_ASSERT(layout.type_k == GGML_TYPE_BF16);
-    GGML_ASSERT(layout.type_v == GGML_TYPE_BF16);
-
-    // Verify from_float_ref exists for bf16
-    auto from_float_k = ggml_get_type_traits(layout.type_k)->from_float_ref;
-    auto from_float_v = ggml_get_type_traits(layout.type_v)->from_float_ref;
-    GGML_ASSERT(from_float_k != nullptr);
-    GGML_ASSERT(from_float_v != nullptr);
-
-    printf("OK\n");
-    return true;
-}
-```
-
-### 3d. BF16 round-trip precision test
-
-**File:** `tests/test-kv-compacted-prefix.cpp` (modified)
-
-```cpp
-// Test: bf16 round-trip through write_compacted_payload preserves precision
-// within bf16 bounds (no silent f16 downcast).
-static bool test_bf16_roundtrip_precision() {
-    printf("  test_bf16_roundtrip_precision... ");
-
-    const uint32_t n_tokens = 8;
-    const uint32_t dim = 128;
-    const uint32_t n_head_kv = 1;
-
-    // Create test data with values that exercise bf16 dynamic range.
-    // bf16 has 8-bit exponent (range ~1e-38 to ~3.4e38, same as fp32).
-    // f16 has 5-bit exponent (range ~6e-8 to ~6.5e4).
-    // Use values outside f16 range to detect silent f16 downcast.
-    llama_kv_compact_matrix rows;
-    rows.resize(n_tokens, dim);
-    for (uint32_t t = 0; t < n_tokens; ++t) {
-        for (uint32_t d = 0; d < dim; ++d) {
-            // Values in [1e-6, 1e-3] — within bf16 but near f16 subnormal range
-            rows.data[t * dim + d] = 1e-5f * (1.0f + float(t * dim + d) / float(n_tokens * dim));
-        }
-    }
-
-    // Write as bf16
-    const size_t token_bytes = ggml_row_size(GGML_TYPE_BF16, dim);
-    std::vector<uint8_t> buf(n_head_kv * n_tokens * token_bytes, 0);
-    write_compacted_payload(buf, GGML_TYPE_BF16, n_head_kv, n_tokens, 0, dim, rows);
-
-    // Read back to fp32
-    std::vector<float> readback(dim);
-    float max_rel_error = 0.0f;
-    for (uint32_t t = 0; t < n_tokens; ++t) {
-        const void * src = buf.data() + t * token_bytes;
-        ggml_bf16_to_fp32_row((const ggml_bf16_t *)src, readback.data(), dim);
-
-        for (uint32_t d = 0; d < dim; ++d) {
-            const float orig = rows.data[t * dim + d];
-            const float back = readback[d];
-            const float rel_err = std::abs(orig - back) / std::max(std::abs(orig), 1e-12f);
-            max_rel_error = std::max(max_rel_error, rel_err);
-        }
-    }
-
-    // bf16 has 7 mantissa bits → max relative error ≈ 2^-7 ≈ 0.0078
-    // Allow 1% tolerance (slightly above theoretical max for rounding).
-    printf("max_rel_error=%.6f ", max_rel_error);
-    GGML_ASSERT(max_rel_error < 0.01f);
-
-    // Verify the values are NOT silently stored as f16 by checking
-    // that small values survive (f16 would flush sub-6e-8 to zero).
-    // Our test values are ~1e-5, well within both bf16 and f16 range,
-    // but the relative precision should match bf16 (~0.8%) not f16 (~0.05%).
-    // This is verified by the max_rel_error check above.
-
-    printf("OK\n");
-    return true;
-}
-```
-
-### 3e. Register new tests
-
-**File:** `tests/test-kv-compact-features.cpp` — in `main()`:
-
-```cpp
-ok = ok && test_hybrid_detection();
-ok = ok && test_hybrid_budget_scaling();
-```
-
-**File:** `tests/test-kv-compacted-prefix.cpp` — in `main()`:
-
-```cpp
-ok = ok && test_layout_type_sentinel();
-ok = ok && test_bf16_roundtrip_precision();
-```
+Use `6/52` consistently in both the plan and tests. Remove the stale `2/52` references.
 
 ---
 
 ## Verification
 
-- **Build:** `cmake -B build -DGGML_METAL=ON -DCMAKE_BUILD_TYPE=Release && cmake --build build --config Release -j$(sysctl -n hw.ncpu)`
-- **Unit tests:** `ctest --test-dir build -L main --output-on-failure`
-- **Specific tests:** `build/bin/test-kv-compact-features && build/bin/test-kv-compacted-prefix`
-- **Manual validation:** Send compaction request to `llama-server` running a Qwen3.5-35B-A3B GGUF:
-  ```bash
-  curl -X POST http://localhost:8080/compact \
-    -H "Content-Type: application/json" \
-    -d '{"ratio": 4, "method": "solver"}'
-  ```
-  Verify response JSON contains `"hybrid": {"detected": true, "n_attn_layers": 10, ...}`.
-- **Model integration deferred to CI** (no .gguf on dev machine).
+### Build + tests
+
+- `cmake -B build -DGGML_METAL=ON -DCMAKE_BUILD_TYPE=Release`
+- `cmake --build build --config Release -j$(sysctl -n hw.ncpu)`
+- `ctest --test-dir build -L main --output-on-failure`
+- `build/bin/test-kv-compact-features`
+- `build/bin/test-kv-compacted-prefix`
+
+### Manual server validation
+
+Use the allowlisted method by default.
+
+```bash
+curl -X POST http://localhost:8080/compact \
+  -H "Content-Type: application/json" \
+  -d '{"ratio": 4, "method": "select"}'
+```
+
+Expected on a Qwen3.5-like hybrid:
+- success response
+- `hybrid.detected == true`
+- `hybrid.requested_target_tokens < hybrid.effective_target_tokens`
+- if the result is effectively no-op, `hybrid.skipped_noop == true`
+
+### Optional solver validation
+
+If solver is intentionally enabled for local validation, document the required override explicitly:
+
+```bash
+LLAMA_COMPACT_ALLOWED_METHODS=select,solver ./build/bin/llama-server ...
+```
+
+### CI model-backed validation
+
+Required before implementation is considered done:
+1. real Qwen3.5-like GGUF covers the shared helper via both server and C API paths
+2. hybrid no-op short-circuit path is exercised
+3. BF16 round-trip regression passes with values outside F16 range
+
+---
 
 ## Risks
 
 | Risk | Severity | Mitigation |
 |------|----------|------------|
-| `get_model()` not available on KV cache | Low | Already used by `compacted_prefix_layer_layout_for_solver()`; same access pattern |
-| `GGML_TYPE_COUNT` sentinel breaks existing callers | Medium | All production layout construction explicitly sets type from live cache tensors; only uninitialized/test layouts affected |
-| 4x ceiling too conservative for some models | Low | Exposed via `hybrid_budget_scale` in stats JSON; can be tuned per-model in future |
-| bf16 tensor creation hardcoded elsewhere | Medium | Grep audit in Change 2d; existing tests will catch type mismatch |
-| Budget scaling makes compaction a no-op | Low | Clamped to `compactable - 1`; user can override with explicit `target_tokens` |
+| Hybrid scaling still feels too conservative on some models | Medium | expose requested/effective fields in response; tune only after data |
+| Shared helper diverges from callers again | Medium | one helper, two callers, parity test in CI |
+| Near-no-op success surprises clients | Low | document `hybrid.skipped_noop`; keep top-level `compacted_tokens` authoritative |
+| Sentinel default breaks stale tests | Low | add explicit exception-based negative tests |
+| Hidden hardcoded F16 compacted-prefix site exists elsewhere | Medium | grep audit during implementation; only patch if real |
 
-## R0 Self-Review Findings (Fixed)
+---
 
-Self-adversarial review performed per `hostile-review-protocol.md`. Full review
-at `docs/REVIEW-R0-hybrid-compaction-and-bf16.md`. Verdict: **CONDITIONAL PASS**
-with 5 findings, all resolved in this revision:
+## Review Delta Incorporated
 
-| ID | Severity | Fix Applied |
-|----|----------|-------------|
-| F-01 | Major | Changed `kv.get_model().hparams` → `kv.hparams` (direct public member) |
-| F-02 | Minor | Corrected insertion point to `layer_storage::configure()` at `llama-kv-compacted-prefix.cpp:204` |
-| F-03 | Major | Clamped `scaled_target` to `compactable - 1` using float-domain min; added test case for exact boundary |
-| F-04 | Minor | Set `attn_fraction = 0.0f` for `n_attn_layers == 0`; guarded call site with `n_attn_layers > 0` |
-| F-05 | Minor | Moved JSON enrichment to `server_task_result_compact` in `server-task.h`; noted snapshot update |
+This revision explicitly absorbs:
+- R0: invalid `kv.get_model()` access, wrong insertion point, boundary clamp, wrong JSON target, zero-attention edge case
+- R1: server-only scaling, bad `data` variable, near-no-op waste path, BF16 test weakness, detection test weakness, stale snapshot
+- R2: ratio-semantics drift, invalid stats plumbing, `to_json()` signature mismatch, abort-vs-throw contract break, stale verification flow
+- R3: mismatch logging, stale risk table, sparse-example inconsistency
+
+## Implementation Readiness Bar
+
+This plan is ready for implementation only if reviewers agree that:
+1. hybrid scaling is now a shared budget-resolution contract, not a hidden server-only rewrite
+2. requested vs effective budget semantics are explicit
+3. no-op hybrid cases are handled without running the full pipeline
+4. BF16 validation remains exception-based
+5. test coverage matches the actual helper and entry-point boundaries
