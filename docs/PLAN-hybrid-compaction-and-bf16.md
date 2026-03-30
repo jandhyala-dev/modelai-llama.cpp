@@ -563,6 +563,7 @@ Add tests for:
 2. hybrid response includes requested/effective fields when `hybrid.detected == true`
 3. no-op hybrid response returns success with `hybrid.skipped_noop == true`
 4. explicit target path does not set `hybrid.skipped_noop`
+5. dense/non-hybrid responses keep `requested_* == effective_*` and do not emit misleading hybrid-adjustment fields
 
 Use `method = "select"` in default local tests so the V1 beta allowlist is not a false blocker.
 
@@ -570,13 +571,24 @@ Use `method = "select"` in default local tests so the V1 beta allowlist is not a
 
 **File:** `tests/test-kv-compact-quality-multi.cpp` or new dedicated test file
 
-Add a focused C API regression test that verifies hybrid budget resolution is shared, not server-only.
+Add focused model-backed regression tests that verify budget resolution is shared, not server-only, and that supported non-hybrid models keep existing semantics.
 
-Minimum requirement:
-- one model-backed CI test on a Qwen3.5-like GGUF that compares the effective compacted token count from the server path and the C API path for the same ratio-driven request.
+Required model-backed matrix:
+1. **Primary hybrid lane:** one real Qwen3.5-like GGUF compares server vs C API for the same ratio-driven request and proves hybrid adjustment is visible in the response contract.
+2. **Dense-MoE regression lane:** one real Qwen3-30B-A3B GGUF verifies server vs C API parity with `requested_target_tokens == effective_target_tokens`.
+3. **Dense Qwen regression lane:** one real Qwen2.5-14B-Instruct GGUF verifies no hybrid adjustment and no ratio drift.
+4. **Dense benchmark baseline lane:** one real Qwen3-8B GGUF verifies no hybrid adjustment and preserves current dense-model semantics.
+5. **Dense non-Qwen control lane:** one real Llama-3.2-3B GGUF, if available in CI/local cache, verifies the same dense-model contract. Llama 3.x is a dense control here, not a hybrid architecture lane.
+
+Minimum assertions on every real model-backed case:
+- server path and C API path resolve the same final compacted token budget
+- dense / non-hybrid models keep `requested_target_tokens == effective_target_tokens`
+- dense / non-hybrid models keep `requested_ratio == effective_ratio`
+- dense / non-hybrid models do not take the hybrid no-op path
+- hybrid models expose the `hybrid` metadata block only when adjustment actually occurs
 
 Local-dev note:
-- if a real hybrid GGUF is unavailable locally, this test is CI-only but must still be part of the implementation plan.
+- if a listed real GGUF is unavailable locally, the corresponding test may be CI-only but must still be part of the implementation plan.
 
 ### 3e. BF16 sentinel and exception behavior
 
@@ -643,6 +655,12 @@ Expected on a Qwen3.5-like hybrid:
 - `hybrid.requested_target_tokens < hybrid.effective_target_tokens`
 - if the result is effectively no-op, `hybrid.skipped_noop == true`
 
+Expected on dense / non-hybrid controls such as Qwen3-8B, Qwen2.5-14B-Instruct, Qwen3-30B-A3B, and Llama-3.2-3B:
+- success response
+- `hybrid` block absent or `hybrid.detected == false`
+- `requested_target_tokens == effective_target_tokens`
+- `requested_ratio == effective_ratio`
+
 ### Optional solver validation
 
 If solver is intentionally enabled for local validation, document the required override explicitly:
@@ -655,8 +673,12 @@ LLAMA_COMPACT_ALLOWED_METHODS=select,solver ./build/bin/llama-server ...
 
 Required before implementation is considered done:
 1. real Qwen3.5-like GGUF covers the shared helper via both server and C API paths
-2. hybrid no-op short-circuit path is exercised
-3. BF16 round-trip regression passes with values outside F16 range
+2. hybrid no-op short-circuit path is exercised on the Qwen3.5-like lane
+3. real Qwen3-30B-A3B GGUF proves dense-MoE parity and non-hybrid semantics remain intact
+4. real Qwen2.5-14B-Instruct GGUF proves dense Qwen parity and non-hybrid semantics remain intact
+5. real Qwen3-8B GGUF proves baseline dense semantics remain intact
+6. real Llama-3.2-3B GGUF, if available in CI/local cache, proves dense non-Qwen semantics remain intact
+7. BF16 round-trip regression passes with values outside F16 range
 
 ---
 
