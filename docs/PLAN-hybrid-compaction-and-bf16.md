@@ -173,8 +173,9 @@ static inline llama_kv_compact_budget_resolution llama_kv_compact_resolve_budget
     }
 
     if (explicit_target) {
-        out.requested_ratio = compactable > 0 ? double(compactable) / double(requested_target_tokens) : 0.0;
-        out.effective_ratio = out.requested_ratio;
+        // No ratio was requested. Do not synthesize one from compactable/target.
+        out.requested_ratio = 0.0;
+        out.effective_ratio = 0.0;
         return out;
     }
 
@@ -211,8 +212,9 @@ static inline llama_kv_compact_budget_resolution llama_kv_compact_resolve_budget
 1. `ratio` is a **requested** budget, not a guaranteed final target on hybrid models.
 2. The **effective** target is what actually runs.
 3. The server response will expose both requested and effective values when hybrid adjustment happens.
-4. Explicit `target_tokens` bypasses scaling.
-5. Near-no-op hybrid outcomes short-circuit without running the pipeline.
+4. Explicit `target_tokens` bypasses scaling, and the response must not synthesize a fake requested ratio on that path.
+5. Ratio-driven requests use a shared minimum target floor of 2 tokens before hybrid adjustment.
+6. Near-no-op hybrid outcomes short-circuit without running the pipeline.
 
 This is the change that closes the prior hidden-contract bug: the adjustment is now deliberate and observable.
 
@@ -236,7 +238,7 @@ if (cp.target_tokens > 0) {
     if (cp.ratio < 1.0f) {
         // existing error path
     }
-    requested_target_tokens = std::max(1u, (uint32_t) (compactable / cp.ratio));
+    requested_target_tokens = std::max(2u, (uint32_t) (compactable / cp.ratio));
 }
 
 const auto budget = llama_kv_compact_resolve_budget(
@@ -472,8 +474,9 @@ void llama_compacted_prefix_store::layer_storage::configure(uint32_t n_tokens) {
     if (layout.type_k == GGML_TYPE_BF16 || layout.type_v == GGML_TYPE_BF16) {
         const auto * traits_k = ggml_get_type_traits(layout.type_k);
         const auto * traits_v = ggml_get_type_traits(layout.type_v);
-        GGML_ASSERT(traits_k->from_float_ref != nullptr);
-        GGML_ASSERT(traits_v->from_float_ref != nullptr);
+        if (traits_k->from_float_ref == nullptr || traits_v->from_float_ref == nullptr) {
+            throw std::runtime_error("compacted-prefix BF16 layout missing from_float_ref conversion");
+        }
     }
 
     // existing allocation logic

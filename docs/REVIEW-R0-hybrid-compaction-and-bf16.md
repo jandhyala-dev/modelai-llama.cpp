@@ -79,7 +79,8 @@ Result:
 Explicit target path:
 - `target_tokens = 500`
 - `explicit_target = true`
-- helper returns requested == effective
+- helper returns requested/effective target == 500
+- `requested_ratio == 0.0`, `effective_ratio == 0.0`
 - no hybrid scaling applied
 
 This preserves the explicit-target contract.
@@ -158,6 +159,8 @@ The plan now closes the earlier test gaps:
 - C API parity test requirement
 - BF16 sentinel throw test
 - BF16 round-trip values that actually distinguish BF16 from F16
+- explicit-target path leaves ratio fields at `0.0`
+- server/C API parity uses the same ratio-derived minimum target floor
 
 ## 9. Disprove-It Pass
 
@@ -208,6 +211,8 @@ Closed from prior review rounds:
 - wrong `data` variable in dispatch snippet
 - near-no-op waste path
 - stale BF16 round-trip values
+- synthetic requested-ratio on explicit-target path
+- server/C API floor divergence
 - detection test not exercising a real helper
 - stale `compact.json` schema
 - invalid stats propagation path
@@ -216,3 +221,4 @@ Closed from prior review rounds:
 - stale manual validation flow
 - stale risk-table text
 - sparse-example comment mismatch
+- BF16 trait check abort-vs-throw mismatch
