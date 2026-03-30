@@ -574,11 +574,14 @@ Use `method = "select"` in default local tests so the V1 beta allowlist is not a
 Add focused model-backed regression tests that verify budget resolution is shared, not server-only, and that supported non-hybrid models keep existing semantics.
 
 Required model-backed matrix:
-1. **Primary hybrid lane:** one real Qwen3.5-like GGUF compares server vs C API for the same ratio-driven request and proves hybrid adjustment is visible in the response contract.
-2. **Dense-MoE regression lane:** one real Qwen3-30B-A3B GGUF verifies server vs C API parity with `requested_target_tokens == effective_target_tokens`.
-3. **Dense Qwen regression lane:** one real Qwen2.5-14B-Instruct GGUF verifies no hybrid adjustment and no ratio drift.
-4. **Dense benchmark baseline lane:** one real Qwen3-8B GGUF verifies no hybrid adjustment and preserves current dense-model semantics.
-5. **Dense non-Qwen control lane:** one real Llama-3.2-3B GGUF, if available in CI/local cache, verifies the same dense-model contract. Llama 3.x is a dense control here, not a hybrid architecture lane.
+1. **Primary hybrid lane:** `Qwen3.5-35B-A3B-Q4_K_M.gguf` compares server vs C API for the same ratio-driven request and proves hybrid adjustment is visible in the response contract. This is the preferred daily-driver hybrid lane.
+2. **Secondary smaller hybrid lane:** `Qwen3.5-9B-Q4_K_M.gguf` verifies the same shared hybrid-budget contract on a smaller DeltaNet+attention architecture. If this model is used in multimodal or vision experiments elsewhere, compaction validation in this plan must remain text-only.
+3. **Dense-MoE regression lane:** one real Qwen3-30B-A3B GGUF verifies server vs C API parity with `requested_target_tokens == effective_target_tokens`.
+4. **Dense Qwen regression lane:** one real Qwen2.5-14B-Instruct GGUF verifies no hybrid adjustment and no ratio drift.
+5. **Dense benchmark baseline lane:** one real Qwen3-8B GGUF verifies no hybrid adjustment and preserves current dense-model semantics. This is the best current compaction target and should stay in the default regression set.
+6. **Exploratory hybrid lane:** `Falcon-H1-7B-Instruct-UD-Q4_K_XL.gguf` verifies hybrid detection and budget behavior on a Mamba2+attention architecture, but only if live metadata confirms it stays inside the current support matrix.
+7. **Exploratory hybrid lane:** `granite-4.0-h-tiny-UD-Q4_K_XL.gguf` verifies hybrid detection and budget behavior on a GQA+Mamba2+MoE architecture, but only if live metadata confirms standard-RoPE attention layers and a valid compactable-prefix layout.
+8. **Dense non-Qwen control lane:** one real Llama-3.2-3B GGUF, if available in CI/local cache, verifies the same dense-model contract. Llama 3.x is a dense control here, not a hybrid architecture lane.
 
 Minimum assertions on every real model-backed case:
 - server path and C API path resolve the same final compacted token budget
@@ -586,6 +589,16 @@ Minimum assertions on every real model-backed case:
 - dense / non-hybrid models keep `requested_ratio == effective_ratio`
 - dense / non-hybrid models do not take the hybrid no-op path
 - hybrid models expose the `hybrid` metadata block only when adjustment actually occurs
+
+Current local inventory that should be prioritized first:
+- `Qwen3.5-35B-A3B-Q4_K_M.gguf` (`21 GB`) — DeltaNet + attention + MoE hybrid, primary daily driver, already benchmarked
+- `Qwen3.5-9B-Q4_K_M.gguf` (`5.3 GB`) — DeltaNet + attention hybrid, downloaded and benchmarked; if used in vision experiments elsewhere, keep this plan's compaction checks text-only
+- `Qwen3-8B` — downloaded and benchmarked, best current dense compaction target
+- `model-defaults.json` v`1.1.0` should stay aligned with the default alloc/cap expectations used by this matrix (`64K` alloc / `256K` cap)
+
+Model location rule:
+- these model-backed tests should resolve GGUFs from the shared host model cache under `../models` (for example `dev/whippet/models`), not from files committed into this repository
+- the implementation should prefer a configurable model-root input for tests/CI rather than hardcoding repo-local model paths
 
 Local-dev note:
 - if a listed real GGUF is unavailable locally, the corresponding test may be CI-only but must still be part of the implementation plan.
@@ -649,7 +662,7 @@ curl -X POST http://localhost:8080/compact \
   -d '{"ratio": 4, "method": "select"}'
 ```
 
-Expected on a Qwen3.5-like hybrid:
+Expected on `Qwen3.5-35B-A3B-Q4_K_M.gguf` and `Qwen3.5-9B-Q4_K_M.gguf` in text-only hybrid validation:
 - success response
 - `hybrid.detected == true`
 - `hybrid.requested_target_tokens < hybrid.effective_target_tokens`
@@ -660,6 +673,11 @@ Expected on dense / non-hybrid controls such as Qwen3-8B, Qwen2.5-14B-Instruct, 
 - `hybrid` block absent or `hybrid.detected == false`
 - `requested_target_tokens == effective_target_tokens`
 - `requested_ratio == effective_ratio`
+
+Expected on exploratory hybrid controls such as `Falcon-H1-7B-Instruct-UD-Q4_K_XL.gguf` and `granite-4.0-h-tiny-UD-Q4_K_XL.gguf`:
+- only run if the loaded model exposes supported hybrid metadata at runtime
+- `hybrid.detected == true` if recurrent/attention split is present
+- any unsupported-architecture rejection must be explicit and logged, not silent
 
 ### Optional solver validation
 
@@ -672,13 +690,16 @@ LLAMA_COMPACT_ALLOWED_METHODS=select,solver ./build/bin/llama-server ...
 ### CI model-backed validation
 
 Required before implementation is considered done:
-1. real Qwen3.5-like GGUF covers the shared helper via both server and C API paths
-2. hybrid no-op short-circuit path is exercised on the Qwen3.5-like lane
-3. real Qwen3-30B-A3B GGUF proves dense-MoE parity and non-hybrid semantics remain intact
-4. real Qwen2.5-14B-Instruct GGUF proves dense Qwen parity and non-hybrid semantics remain intact
-5. real Qwen3-8B GGUF proves baseline dense semantics remain intact
-6. real Llama-3.2-3B GGUF, if available in CI/local cache, proves dense non-Qwen semantics remain intact
-7. BF16 round-trip regression passes with values outside F16 range
+1. real `Qwen3.5-35B-A3B-Q4_K_M.gguf` covers the shared helper via both server and C API paths
+2. hybrid no-op short-circuit path is exercised on the `Qwen3.5-35B-A3B-Q4_K_M.gguf` lane
+3. real `Qwen3.5-9B-Q4_K_M.gguf` proves the same hybrid contract on a smaller DeltaNet+attention model
+4. real Qwen3-30B-A3B GGUF proves dense-MoE parity and non-hybrid semantics remain intact
+5. real Qwen2.5-14B-Instruct GGUF proves dense Qwen parity and non-hybrid semantics remain intact
+6. real Qwen3-8B GGUF proves baseline dense semantics remain intact
+7. real `Falcon-H1-7B-Instruct-UD-Q4_K_XL.gguf`, if available and inside the support matrix at runtime, records explicit hybrid detection or explicit unsupported rejection
+8. real `granite-4.0-h-tiny-UD-Q4_K_XL.gguf`, if available and inside the support matrix at runtime, records explicit hybrid detection or explicit unsupported rejection
+9. real Llama-3.2-3B GGUF, if available in CI/local cache, proves dense non-Qwen semantics remain intact
+10. BF16 round-trip regression passes with values outside F16 range
 
 ---
 
