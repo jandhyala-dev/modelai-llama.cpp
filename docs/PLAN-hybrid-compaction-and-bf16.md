@@ -579,9 +579,9 @@ Required model-backed matrix:
 3. **Dense-MoE regression lane:** one real Qwen3-30B-A3B GGUF verifies server vs C API parity with `requested_target_tokens == effective_target_tokens`.
 4. **Dense Qwen regression lane:** one real Qwen2.5-14B-Instruct GGUF verifies no hybrid adjustment and no ratio drift.
 5. **Dense benchmark baseline lane:** one real Qwen3-8B GGUF verifies no hybrid adjustment and preserves current dense-model semantics. This is the best current compaction target and should stay in the default regression set.
-6. **Exploratory hybrid lane:** `Falcon-H1-7B-Instruct-UD-Q4_K_XL.gguf` verifies hybrid detection and budget behavior on a Mamba2+attention architecture, but only if live metadata confirms it stays inside the current support matrix.
-7. **Exploratory hybrid lane:** `granite-4.0-h-tiny-UD-Q4_K_XL.gguf` verifies hybrid detection and budget behavior on a GQA+Mamba2+MoE architecture, but only if live metadata confirms standard-RoPE attention layers and a valid compactable-prefix layout.
-8. **Dense non-Qwen control lane:** one real Llama-3.2-3B GGUF, if available in CI/local cache, verifies the same dense-model contract. Llama 3.x is a dense control here, not a hybrid architecture lane.
+6. **Required hybrid extension lane:** `Falcon-H1-7B-Instruct-UD-Q4_K_XL.gguf` verifies hybrid detection and budget behavior on a Mamba2+attention architecture. The test must record either supported hybrid behavior or an explicit unsupported rejection.
+7. **Required hybrid extension lane:** `granite-4.0-h-tiny-UD-Q4_K_XL.gguf` verifies hybrid detection and budget behavior on a GQA+Mamba2+MoE architecture. The test must record either supported hybrid behavior or an explicit unsupported rejection.
+8. **Dense non-Qwen control lane:** one real Llama-3.2-3B GGUF verifies the same dense-model contract. Llama 3.x is a dense control here, not a hybrid architecture lane.
 
 Minimum assertions on every real model-backed case:
 - server path and C API path resolve the same final compacted token budget
@@ -674,9 +674,9 @@ Expected on dense / non-hybrid controls such as Qwen3-8B, Qwen2.5-14B-Instruct, 
 - `requested_target_tokens == effective_target_tokens`
 - `requested_ratio == effective_ratio`
 
-Expected on exploratory hybrid controls such as `Falcon-H1-7B-Instruct-UD-Q4_K_XL.gguf` and `granite-4.0-h-tiny-UD-Q4_K_XL.gguf`:
-- only run if the loaded model exposes supported hybrid metadata at runtime
-- `hybrid.detected == true` if recurrent/attention split is present
+Expected on required hybrid extension controls such as `Falcon-H1-7B-Instruct-UD-Q4_K_XL.gguf` and `granite-4.0-h-tiny-UD-Q4_K_XL.gguf`:
+- the test must run on both models
+- `hybrid.detected == true` if recurrent/attention split is present and supported
 - any unsupported-architecture rejection must be explicit and logged, not silent
 
 ### Optional solver validation
@@ -696,9 +696,9 @@ Required before implementation is considered done:
 4. real Qwen3-30B-A3B GGUF proves dense-MoE parity and non-hybrid semantics remain intact
 5. real Qwen2.5-14B-Instruct GGUF proves dense Qwen parity and non-hybrid semantics remain intact
 6. real Qwen3-8B GGUF proves baseline dense semantics remain intact
-7. real `Falcon-H1-7B-Instruct-UD-Q4_K_XL.gguf`, if available and inside the support matrix at runtime, records explicit hybrid detection or explicit unsupported rejection
-8. real `granite-4.0-h-tiny-UD-Q4_K_XL.gguf`, if available and inside the support matrix at runtime, records explicit hybrid detection or explicit unsupported rejection
-9. real Llama-3.2-3B GGUF, if available in CI/local cache, proves dense non-Qwen semantics remain intact
+7. real `Falcon-H1-7B-Instruct-UD-Q4_K_XL.gguf` records explicit hybrid detection or explicit unsupported rejection
+8. real `granite-4.0-h-tiny-UD-Q4_K_XL.gguf` records explicit hybrid detection or explicit unsupported rejection
+9. real Llama-3.2-3B GGUF proves dense non-Qwen semantics remain intact
 10. BF16 round-trip regression passes with values outside F16 range
 
 ---
