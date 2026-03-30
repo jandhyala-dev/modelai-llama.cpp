@@ -453,6 +453,14 @@ int main() {
         check(q122b.n_attn_layers == 12, "Qwen3.5-122B: 12 attn layers");
         check(std::abs(q122b.compactable_fraction - 0.25f) < 1e-6f, "Qwen3.5-122B: fraction is 0.25");
 
+        // Falcon-H1-like: all layers have both recurrent state and attention KV.
+        auto falcon_h1 = llama_kv_compact_make_hybrid_info(44, 44, 44);
+        check(falcon_h1.is_hybrid, "Falcon-H1 is hybrid");
+        check(falcon_h1.n_attn_layers == 44, "Falcon-H1: 44 attn-bearing layers");
+        check(falcon_h1.n_compactable_layers == 44, "Falcon-H1: 44 compactable layers");
+        check(!falcon_h1.layout_count_mismatch, "Falcon-H1: no mismatch");
+        check(std::abs(falcon_h1.compactable_fraction - 1.0f) < 1e-6f, "Falcon-H1: fraction is 1.0");
+
         // Sparse hybrid: 52 total, 46 recurrent, 6 compactable.
         auto sparse = llama_kv_compact_make_hybrid_info(52, 46, 6);
         check(sparse.is_hybrid, "Sparse hybrid is hybrid");
@@ -537,6 +545,14 @@ int main() {
             check(std::abs(r.effective_ratio - 1.0) < 1e-6, "Hybrid r=4: effective_ratio == 1.0");
         }
 
+        // Case 4b: Hybrid with ratio just above 4 — not noop after truncation.
+        {
+            auto r = llama_kv_compact_resolve_budget(hybrid_info, 4096, 1023, false, 4.001);
+            check(r.hybrid_detected, "Hybrid r=4.001: hybrid detected");
+            check(!r.skipped_noop, "Hybrid r=4.001: not noop");
+            check(r.effective_target_tokens == 4092, "Hybrid r=4.001: effective == 4092");
+        }
+
         // Case 5: Sparse hybrid — scale capped at 4.0.
         llama_kv_compact_hybrid_info sparse_info = {};
         sparse_info.n_total_layers = 52;
@@ -550,6 +566,30 @@ int main() {
             auto r = llama_kv_compact_resolve_budget(sparse_info, 4096, 1024, false, 4.0);
             check(r.hybrid_detected, "Sparse hybrid: detected");
             check(std::abs(r.budget_scale - 4.0f) < 1e-6f, "Sparse hybrid: scale capped at 4.0");
+        }
+
+        // Case 6: Dense low-token boundary — target stays at the 2-token floor.
+        {
+            auto r = llama_kv_compact_resolve_budget(dense_info, 2, 2, false, 4.0);
+            check(!r.hybrid_detected, "Dense compactable=2: not hybrid");
+            check(!r.skipped_noop, "Dense compactable=2: helper does not mark noop");
+            check(r.effective_target_tokens == 2, "Dense compactable=2: effective == 2");
+        }
+
+        // Case 7: Falcon-H1-like hybrid — scale remains 1.0 when every layer has KV attention.
+        llama_kv_compact_hybrid_info falcon_h1_info = {};
+        falcon_h1_info.n_total_layers = 44;
+        falcon_h1_info.n_recurrent_layers = 44;
+        falcon_h1_info.n_attn_layers = 44;
+        falcon_h1_info.n_compactable_layers = 44;
+        falcon_h1_info.is_hybrid = true;
+        falcon_h1_info.compactable_fraction = 1.0f;
+        {
+            auto r = llama_kv_compact_resolve_budget(falcon_h1_info, 35, 8, false, 35.0 / 8.0);
+            check(r.hybrid_detected, "Falcon-H1: hybrid detected");
+            check(!r.skipped_noop, "Falcon-H1: not noop");
+            check(std::abs(r.budget_scale - 1.0f) < 1e-6f, "Falcon-H1: scale == 1.0");
+            check(r.effective_target_tokens == 8, "Falcon-H1: effective target remains 8");
         }
     }
 

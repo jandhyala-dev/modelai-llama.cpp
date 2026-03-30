@@ -10,7 +10,40 @@ def create_server():
     server = ServerPreset.tinyllama2()
     server.server_slots = True
     server.server_metrics = True
+    server.endpoint_compact = True
     server.temperature = 0.0
+
+
+def _find_two_token_prompt() -> tuple[str, ServerResponse]:
+    global server
+
+    candidates = [
+        "a",
+        "A",
+        ".",
+        ",",
+        "I",
+        "the",
+        "cat",
+        "dog",
+        "one",
+        "two",
+        "red",
+        "blue",
+    ]
+
+    for prompt in candidates:
+        res = server.make_request("POST", "/completion", data={
+            "prompt": prompt,
+            "id_slot": 0,
+            "cache_prompt": True,
+            "n_predict": 0,
+        })
+        assert res.status_code == 200
+        if res.body["tokens_evaluated"] == 2:
+            return prompt, res
+
+    raise AssertionError("failed to find a prompt that tokenizes to 2 tokens on tinyllama-2 preset")
 
 
 def test_compact_valid_request():
@@ -230,6 +263,74 @@ def test_compact_with_explicit_target_tokens():
     })
     assert res.status_code == 200
     assert res.body["compacted_tokens"] == 5
+
+
+def test_compact_dense_two_token_ratio_floor_is_noop_success():
+    """Ratio-flooring at compactable=2 returns a no-op success, not an error."""
+    global server
+    server.start()
+
+    _, res = _find_two_token_prompt()
+
+    res = server.make_request("POST", "/compact", data={
+        "id_slot": 0,
+        "method": "select",
+        "ratio": 4.0,
+    })
+    assert res.status_code == 200
+    body = res.body
+    assert body["compacted_tokens"] == 2
+    assert body["original_tokens"] == 2
+    assert body["compression_ratio"] == 1.0
+    assert body["compaction_time_ms"] == 0.0
+    assert body["active_n_kv_before"] == 2
+    assert body["active_n_kv_after"] == 2
+    assert body["reclaimed"] is False
+
+
+def test_compact_noop_after_prior_compaction_reports_compacted_prefix_coverage():
+    """Repeated no-op compaction keeps active_n_kv aligned with the compacted-prefix span."""
+    global server
+    server.start()
+
+    res = server.make_request("POST", "/completion", data={
+        "prompt": "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu",
+        "id_slot": 0,
+        "cache_prompt": True,
+        "n_predict": 0,
+    })
+    assert res.status_code == 200
+    prompt_tokens = res.body["tokens_evaluated"]
+    assert prompt_tokens > 6
+
+    first = server.make_request("POST", "/compact", data={
+        "id_slot": 0,
+        "method": "select",
+        "target_tokens": 6,
+    })
+    assert first.status_code == 200
+
+    second = server.make_request("POST", "/compact", data={
+        "id_slot": 0,
+        "method": "select",
+        "target_tokens": 100,
+    })
+    assert second.status_code == 200
+
+    body = second.body
+    assert body["compaction_time_ms"] == 0.0
+    assert body["compression_ratio"] == 1.0
+    assert body["compacted_tokens"] == prompt_tokens
+    assert body["original_tokens"] == prompt_tokens
+    assert body["active_n_kv_before"] == prompt_tokens
+    assert body["active_n_kv_after"] == prompt_tokens
+    assert body["reclaimed"] is False
+
+    slots = server.make_request("GET", "/slots")
+    assert slots.status_code == 200
+    slot0 = next(slot for slot in slots.body if slot["id"] == 0)
+    assert slot0["kv"]["active_n_kv"] == prompt_tokens
+    assert slot0["kv"]["active_n_kv_compacted"] == prompt_tokens
 
 
 def test_compact_prompt_and_continue():

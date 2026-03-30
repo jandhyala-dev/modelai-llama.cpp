@@ -133,6 +133,69 @@ static const llama_kv_cache * get_kv_cache_base(llama_context * ctx) {
     return get_kv_cache_base_mut(ctx);
 }
 
+// Server telemetry should report the logical prefix span represented by the
+// compacted prefix, not the compacted tensor width or the remaining live cells.
+static const llama_compacted_prefix_store::sequence_state * get_compacted_prefix_state(
+        const llama_kv_cache * kv,
+        llama_seq_id seq_id) {
+    if (kv == nullptr || !kv->compacted_prefix_execution_enabled(seq_id)) {
+        return nullptr;
+    }
+
+    const auto * store = kv->get_compacted_prefix();
+    const auto * state = store ? store->get_seq(seq_id) : nullptr;
+    if (state == nullptr || !state->enabled || !state->is_execution_enabled()) {
+        return nullptr;
+    }
+
+    return state;
+}
+
+static uint32_t get_compacted_prefix_logical_n_kv(const llama_kv_cache * kv, llama_seq_id seq_id) {
+    const auto * state = get_compacted_prefix_state(kv, seq_id);
+    if (state == nullptr) {
+        return 0;
+    }
+
+    return state->live_suffix_pos0 >= 0
+        ? (uint32_t) state->live_suffix_pos0
+        : state->logical_token_count;
+}
+
+static uint32_t get_server_active_n_kv(llama_context * ctx, llama_seq_id seq_id, uint32_t fallback_if_empty = 0) {
+    auto * mem = llama_get_memory(ctx);
+    const llama_pos pos_min = mem ? llama_memory_seq_pos_min(mem, seq_id) : -1;
+    const llama_pos pos_max = mem ? llama_memory_seq_pos_max(mem, seq_id) : -1;
+    const uint32_t live_n_kv = (pos_min >= 0 && pos_max >= pos_min)
+        ? (uint32_t) (pos_max - pos_min + 1)
+        : 0;
+
+    const auto * kv = get_kv_cache_base(ctx);
+    const auto * state = get_compacted_prefix_state(kv, seq_id);
+    if (state == nullptr) {
+        return live_n_kv > 0 ? live_n_kv : fallback_if_empty;
+    }
+
+    const uint32_t compacted_n_kv = get_compacted_prefix_logical_n_kv(kv, seq_id);
+    if (live_n_kv == 0) {
+        return compacted_n_kv;
+    }
+
+    // When the memory module reports positions below live_suffix_pos0 while a
+    // compacted prefix is active, those positions are the compacted tensor
+    // width, not an extra live suffix. Only add the live range when it starts
+    // at or beyond the retained suffix boundary.
+    if (state->live_suffix_pos0 >= 0 && pos_min >= state->live_suffix_pos0) {
+        return compacted_n_kv + live_n_kv;
+    }
+
+    if (compacted_n_kv == 0) {
+        return fallback_if_empty;
+    }
+
+    return std::max(compacted_n_kv, live_n_kv);
+}
+
 static json build_modelai_server_capabilities(const common_params & params, const server_context_meta & meta, bool is_router_server, bool compaction_enabled = false, bool compaction_flash_overridden = false) {
     const bool supports_embeddings = meta.pooling_type != LLAMA_POOLING_TYPE_NONE;
     const bool supports_reranking  = meta.pooling_type == LLAMA_POOLING_TYPE_RANK;
@@ -664,17 +727,8 @@ struct server_slot {
         auto * mem = llama_get_memory(ctx);
         const llama_pos pos_min = mem ? llama_memory_seq_pos_min(mem, id) : -1;
         const llama_pos pos_max = mem ? llama_memory_seq_pos_max(mem, id) : -1;
-        uint32_t n_kv_active = (pos_min >= 0 && pos_max >= pos_min)
-            ? (uint32_t) (pos_max - pos_min + 1)
-            : 0;
-
-        // Include compacted prefix tokens in the active count
-        uint32_t n_kv_compacted = 0;
-        const auto * kv_mem = get_kv_cache_base(ctx);
-        if (kv_mem && kv_mem->compacted_prefix_execution_enabled(id)) {
-            n_kv_compacted = kv_mem->compacted_prefix_active_n_kv(id);
-            n_kv_active += n_kv_compacted;
-        }
+        const uint32_t n_kv_compacted = get_compacted_prefix_logical_n_kv(get_kv_cache_base(ctx), id);
+        const uint32_t n_kv_active = get_server_active_n_kv(ctx, id);
 
         res["kv"] = {
             { "seq_pos_min",          pos_min },
@@ -2328,9 +2382,7 @@ private:
                     const llama_pos live_suffix_pos0 = (llama_pos) compactable;
 
                     // Capture active_n_kv before compaction (needed by both noop and normal paths).
-                    auto * mem = llama_get_memory(ctx);
-                    const llama_pos pos_max_before = mem ? llama_memory_seq_pos_max(mem, seq_id) : -1;
-                    const uint32_t n_kv_before = pos_max_before >= 0 ? (uint32_t)(pos_max_before + 1) : prompt_tokens;
+                    const uint32_t n_kv_before = get_server_active_n_kv(ctx, seq_id, prompt_tokens);
 
                     // Compute base requested target.
                     uint32_t requested_target_tokens;
@@ -2357,8 +2409,7 @@ private:
                         explicit_target,
                         explicit_target ? 0.0 : (double) cp.ratio);
 
-                    // Short-circuit near-no-op hybrid outcomes.
-                    if (!explicit_target && budget.skipped_noop) {
+                    auto send_noop_result = [&]() {
                         auto res = std::make_unique<server_task_result_compact>();
                         res->id                  = task.id;
                         res->id_slot             = id_slot;
@@ -2370,7 +2421,6 @@ private:
                         res->active_n_kv_before  = n_kv_before;
                         res->active_n_kv_after   = n_kv_before;
                         res->reclaimed           = false;
-                        // Copy hybrid metadata.
                         res->hybrid_detected             = budget.hybrid_detected;
                         res->hybrid_skipped_noop         = budget.skipped_noop;
                         res->hybrid_n_attn_layers        = budget.hybrid.n_attn_layers;
@@ -2378,18 +2428,22 @@ private:
                         res->hybrid_n_total_layers       = budget.hybrid.n_total_layers;
                         res->hybrid_budget_scale         = budget.budget_scale;
                         res->requested_target_tokens     = budget.requested_target_tokens;
-                        res->effective_target_tokens      = budget.effective_target_tokens;
+                        res->effective_target_tokens     = budget.effective_target_tokens;
                         res->requested_ratio             = budget.requested_ratio;
                         res->effective_ratio             = budget.effective_ratio;
                         clear_pending();
                         queue_results.send(std::move(res));
+                    };
+
+                    // Short-circuit near-no-op hybrid outcomes.
+                    if (!explicit_target && budget.skipped_noop) {
+                        send_noop_result();
                         break;
                     }
 
                     const uint32_t target_tokens = budget.effective_target_tokens;
                     if (target_tokens >= compactable) {
-                        clear_pending();
-                        send_error(task, "Target tokens must be less than compactable tokens", ERROR_TYPE_INVALID_REQUEST);
+                        send_noop_result();
                         break;
                     }
 
@@ -2528,13 +2582,7 @@ private:
                         SRV_WRN("compaction took %.0f ms (exceeds timeout %lld ms) — consider reducing compression ratio or using a faster method\n",
                                 t_compact_ms, (long long)timeout_ms);
                     }
-                    const llama_pos pos_max_after = mem ? llama_memory_seq_pos_max(mem, seq_id) : -1;
-                    uint32_t n_kv_after = pos_max_after >= 0 ? (uint32_t)(pos_max_after + 1) : 0;
-
-                    // Include compacted prefix tokens in the reported count
-                    if (kv->compacted_prefix_execution_enabled(seq_id)) {
-                        n_kv_after += kv->compacted_prefix_active_n_kv(seq_id);
-                    }
+                    const uint32_t n_kv_after = get_server_active_n_kv(ctx, seq_id);
 
                     auto res = std::make_unique<server_task_result_compact>();
                     res->id                = task.id;
@@ -2555,7 +2603,7 @@ private:
                     res->hybrid_n_total_layers       = budget.hybrid.n_total_layers;
                     res->hybrid_budget_scale         = budget.budget_scale;
                     res->requested_target_tokens     = budget.requested_target_tokens;
-                    res->effective_target_tokens      = budget.effective_target_tokens;
+                    res->effective_target_tokens     = budget.effective_target_tokens;
                     res->requested_ratio             = budget.requested_ratio;
                     res->effective_ratio             = budget.effective_ratio;
                     clear_pending();

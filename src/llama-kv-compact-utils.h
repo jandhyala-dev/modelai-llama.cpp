@@ -42,11 +42,18 @@ static inline llama_kv_compact_hybrid_info llama_kv_compact_make_hybrid_info(
         uint32_t n_recurrent_layers,
         uint32_t n_compactable_layers) {
     llama_kv_compact_hybrid_info info;
+    const uint32_t exclusive_attn_layers = n_total_layers >= n_recurrent_layers
+        ? (n_total_layers - n_recurrent_layers)
+        : 0;
+
     info.n_total_layers       = n_total_layers;
     info.n_recurrent_layers   = n_recurrent_layers;
-    info.n_attn_layers        = n_total_layers >= n_recurrent_layers
-                              ? (n_total_layers - n_recurrent_layers)
-                              : 0;
+    // Some hybrids (for example Falcon-H1) combine recurrent state and
+    // attention in the same layer. The compactable-layout count is therefore
+    // the minimum reliable count of attention-bearing layers.
+    info.n_attn_layers        = std::min(
+        n_total_layers,
+        std::max(exclusive_attn_layers, n_compactable_layers));
     info.n_compactable_layers = n_compactable_layers;
     info.is_hybrid            = (info.n_recurrent_layers > 0);
     info.layout_count_mismatch = (info.n_compactable_layers != info.n_attn_layers);
