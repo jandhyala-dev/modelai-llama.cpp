@@ -102,20 +102,21 @@ int32_t llama_kv_cache_compact(
         explicit_target,
         explicit_target ? 0.0 : (double) params.ratio);
 
+    const auto active_prefix = llama_kv_compact_get_active_prefix_counts(kv, seq_id);
+    if (active_prefix.compacted_tokens > 0) {
+        LLAMA_LOG_INFO("%s: compacted prefix already active for seq %d, keeping %u / %u compacted tokens\n",
+                       __func__, seq_id,
+                       active_prefix.compacted_tokens,
+                       active_prefix.logical_tokens);
+        return (int32_t) active_prefix.compacted_tokens;
+    }
+
     if (!explicit_target && budget.skipped_noop) {
         LLAMA_LOG_INFO("%s: hybrid no-op (seq %d: %u -> %u, scale=%.2f)\n",
                        __func__, seq_id,
                        budget.requested_target_tokens,
                        budget.effective_target_tokens,
                        budget.budget_scale);
-        return (int32_t)compactable;
-    }
-
-    // If a compacted prefix is already active for this sequence,
-    // the live KV was reclaimed — return existing count as no-op.
-    if (kv->compacted_prefix_execution_enabled(seq_id)) {
-        LLAMA_LOG_INFO("%s: compacted prefix already active for seq %d, nothing to re-compact\n",
-                       __func__, seq_id);
         return (int32_t)compactable;
     }
 

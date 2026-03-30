@@ -2410,14 +2410,17 @@ private:
                         explicit_target,
                         explicit_target ? 0.0 : (double) cp.ratio);
 
-                    auto send_noop_result = [&]() {
+                    auto send_noop_result = [&](uint32_t noop_compacted_tokens,
+                                                uint32_t noop_original_tokens) {
                         auto res = std::make_unique<server_task_result_compact>();
                         res->id                  = task.id;
                         res->id_slot             = id_slot;
                         res->method              = method;
-                        res->compacted_tokens    = compactable;
-                        res->original_tokens     = compactable;
-                        res->compression_ratio   = 1.0;
+                        res->compacted_tokens    = noop_compacted_tokens;
+                        res->original_tokens     = noop_original_tokens;
+                        res->compression_ratio   = noop_compacted_tokens > 0
+                            ? (double) noop_original_tokens / (double) noop_compacted_tokens
+                            : 1.0;
                         res->compaction_time_ms  = 0.0;
                         res->active_n_kv_before  = n_kv_before;
                         res->active_n_kv_after   = n_kv_before;
@@ -2438,20 +2441,23 @@ private:
 
                     // If a compacted prefix is already active for this sequence,
                     // the live KV was reclaimed — re-compaction is a no-op.
-                    if (kv->compacted_prefix_execution_enabled(seq_id)) {
-                        send_noop_result();
+                    const auto active_prefix = llama_kv_compact_get_active_prefix_counts(kv, seq_id);
+                    if (active_prefix.compacted_tokens > 0) {
+                        send_noop_result(
+                            active_prefix.compacted_tokens,
+                            std::max(active_prefix.compacted_tokens, active_prefix.logical_tokens));
                         break;
                     }
 
                     // Short-circuit near-no-op hybrid outcomes.
                     if (!explicit_target && budget.skipped_noop) {
-                        send_noop_result();
+                        send_noop_result(compactable, compactable);
                         break;
                     }
 
                     const uint32_t target_tokens = budget.effective_target_tokens;
                     if (target_tokens >= compactable) {
-                        send_noop_result();
+                        send_noop_result(compactable, compactable);
                         break;
                     }
 

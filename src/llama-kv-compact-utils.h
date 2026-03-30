@@ -24,6 +24,32 @@ static inline llama_kv_cache * llama_kv_compact_get_cache(llama_memory_i * mem) 
     return nullptr;
 }
 
+struct llama_kv_compact_active_prefix_counts {
+    uint32_t compacted_tokens = 0;
+    uint32_t logical_tokens   = 0;
+};
+
+static inline llama_kv_compact_active_prefix_counts llama_kv_compact_get_active_prefix_counts(
+        const llama_kv_cache * kv,
+        llama_seq_id seq_id) {
+    if (kv == nullptr || !kv->compacted_prefix_execution_enabled(seq_id)) {
+        return {};
+    }
+
+    const auto * store = kv->get_compacted_prefix();
+    const auto * state = store ? store->get_seq(seq_id) : nullptr;
+    if (state == nullptr || !state->enabled || !state->is_execution_enabled()) {
+        return {};
+    }
+
+    llama_kv_compact_active_prefix_counts out;
+    out.compacted_tokens = state->compacted_token_count();
+    out.logical_tokens   = state->live_suffix_pos0 >= 0
+        ? (uint32_t) state->live_suffix_pos0
+        : state->logical_token_count;
+    return out;
+}
+
 // --- Hybrid architecture detection ---
 
 struct llama_kv_compact_hybrid_info {

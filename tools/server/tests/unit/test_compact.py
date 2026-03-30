@@ -309,6 +309,7 @@ def test_compact_noop_after_prior_compaction_reports_compacted_prefix_coverage()
         "target_tokens": 6,
     })
     assert first.status_code == 200
+    first_compacted = first.body["compacted_tokens"]
 
     second = server.make_request("POST", "/compact", data={
         "id_slot": 0,
@@ -319,9 +320,9 @@ def test_compact_noop_after_prior_compaction_reports_compacted_prefix_coverage()
 
     body = second.body
     assert body["compaction_time_ms"] == 0.0
-    assert body["compression_ratio"] == 1.0
-    assert body["compacted_tokens"] == prompt_tokens
+    assert body["compacted_tokens"] == first_compacted
     assert body["original_tokens"] == prompt_tokens
+    assert body["compression_ratio"] == pytest.approx(prompt_tokens / first_compacted)
     assert body["active_n_kv_before"] == prompt_tokens
     assert body["active_n_kv_after"] == prompt_tokens
     assert body["reclaimed"] is False
