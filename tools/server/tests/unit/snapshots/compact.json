@@ -11,11 +11,29 @@
   ],
   "properties": {
     "success":           { "type": "boolean" },
+    "id_slot":           { "type": "integer" },
     "method":            { "type": "string" },
     "compacted_tokens":  { "type": "integer" },
     "original_tokens":   { "type": "integer" },
     "compression_ratio": { "type": "number" },
     "compaction_time_ms":{ "type": "number" },
-    "reclaimed":         { "type": "boolean" }
+    "active_n_kv_before":{ "type": "integer" },
+    "active_n_kv_after": { "type": "integer" },
+    "reclaimed":         { "type": "boolean" },
+    "hybrid": {
+      "type": "object",
+      "properties": {
+        "detected":               { "type": "boolean" },
+        "skipped_noop":           { "type": "boolean" },
+        "n_attn_layers":          { "type": "integer" },
+        "n_compactable_layers":   { "type": "integer" },
+        "n_total_layers":         { "type": "integer" },
+        "budget_scale":           { "type": "number" },
+        "requested_target_tokens": { "type": "integer" },
+        "effective_target_tokens": { "type": "integer" },
+        "requested_ratio":         { "type": "number" },
+        "effective_ratio":         { "type": "number" }
+      }
+    }
   }
 }

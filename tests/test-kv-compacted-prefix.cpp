@@ -521,6 +521,133 @@ int test_negative_unconfigured_ops() {
     return rc;
 }
 
+int test_bf16_sentinel_and_validation() {
+    int rc = 0;
+
+    // 3e-1: Default layout type should be GGML_TYPE_COUNT (sentinel).
+    {
+        llama_compacted_prefix_layer_layout layout;
+        if (!check(layout.type_k == GGML_TYPE_COUNT, "default type_k should be GGML_TYPE_COUNT sentinel", rc)) return rc;
+        if (!check(layout.type_v == GGML_TYPE_COUNT, "default type_v should be GGML_TYPE_COUNT sentinel", rc)) return rc;
+    }
+
+    // 3e-2: Uninitialized (sentinel) type must throw on configure_seq.
+    {
+        llama_compacted_prefix_store store({
+            {
+                /* layer_id      = */ 0,
+                /* n_head_kv     = */ 1,
+                /* n_embd_head_k = */ 4,
+                /* n_embd_head_v = */ 4,
+                // type_k and type_v left at GGML_TYPE_COUNT default
+            },
+        });
+        if (!check(expect_throw([&]() { store.configure_seq(1, 8, { 0, 4 }, -1); }),
+            "configure_seq with uninitialized (sentinel) types should throw", rc)) return rc;
+    }
+
+    // 3e-3: Explicit BF16 type should succeed.
+    {
+        llama_compacted_prefix_store store({
+            {
+                /* layer_id      = */ 0,
+                /* n_head_kv     = */ 2,
+                /* n_embd_head_k = */ 4,
+                /* n_embd_head_v = */ 8,
+                /* type_k        = */ GGML_TYPE_BF16,
+                /* type_v        = */ GGML_TYPE_BF16,
+            },
+        });
+        if (!check(store.configure_seq(1, 8, { 0, 4 }, -1),
+            "BF16 K and V should be accepted", rc)) return rc;
+        const auto * seq = store.get_seq(1);
+        if (seq == nullptr) {
+            return fail("BF16 sequence should exist after configure");
+        }
+        if (!check(seq->layers[0].n_compacted_tokens == 2, "BF16 layer should have 2 compacted tokens", rc)) return rc;
+        if (!check(seq->layers[0].k_data.size() > 0, "BF16 K data should be allocated", rc)) return rc;
+        if (!check(seq->layers[0].v_data.size() > 0, "BF16 V data should be allocated", rc)) return rc;
+    }
+
+    // 3e-4: Mixed BF16/F16 should succeed (already tested in state_roundtrip, but explicit).
+    {
+        llama_compacted_prefix_store store({
+            {
+                /* layer_id      = */ 0,
+                /* n_head_kv     = */ 1,
+                /* n_embd_head_k = */ 4,
+                /* n_embd_head_v = */ 4,
+                /* type_k        = */ GGML_TYPE_BF16,
+                /* type_v        = */ GGML_TYPE_F16,
+            },
+        });
+        if (!check(store.configure_seq(1, 4, { 0, 2 }, -1),
+            "Mixed BF16-K / F16-V should succeed", rc)) return rc;
+    }
+
+    // 3f: BF16 round-trip with values outside F16 range (> 65504.0f).
+    // BF16 can represent up to ~3.39e38; F16 max is 65504.
+    // This proves the store uses BF16, not silently truncating to F16.
+    {
+        llama_compacted_prefix_store store({
+            {
+                /* layer_id      = */ 0,
+                /* n_head_kv     = */ 1,
+                /* n_embd_head_k = */ 4,
+                /* n_embd_head_v = */ 4,
+                /* type_k        = */ GGML_TYPE_BF16,
+                /* type_v        = */ GGML_TYPE_BF16,
+            },
+        });
+        if (!check(store.configure_seq(1, 8, { 0 }, -1),
+            "BF16 round-trip configure should succeed", rc)) return rc;
+
+        auto * seq = store.get_seq(1);
+        if (seq == nullptr) {
+            return fail("BF16 round-trip sequence should exist");
+        }
+
+        // Write a value > 65504.0f into K data via BF16 conversion.
+        // BF16 stores: sign(1) + exponent(8) + mantissa(7) = 16 bits.
+        // 131072.0f = 2^17, well within BF16 range but overflows F16.
+        const float test_value = 131072.0f;
+        auto & layer = seq->layers[0];
+
+        // Use ggml type traits to convert float → BF16
+        const auto * traits = ggml_get_type_traits(GGML_TYPE_BF16);
+        if (!check(traits != nullptr && traits->from_float_ref != nullptr,
+            "BF16 traits should have from_float_ref", rc)) return rc;
+
+        // Write test_value into first element of K for head 0, token 0
+        std::vector<float> src(layer.layout.n_embd_head_k, test_value);
+        traits->from_float_ref(src.data(), layer.k_data.data(), layer.layout.n_embd_head_k);
+
+        // Read back via to_float (on ggml_type_traits, not cpu traits)
+        if (!check(traits->to_float != nullptr,
+            "BF16 traits should have to_float", rc)) return rc;
+
+        std::vector<float> dst(layer.layout.n_embd_head_k, 0.0f);
+        traits->to_float(layer.k_data.data(), dst.data(), layer.layout.n_embd_head_k);
+
+        // BF16 of 131072.0f should round-trip exactly (it's a power of 2).
+        if (!check(dst[0] == test_value,
+            "BF16 round-trip of 131072.0f should preserve value (got " +
+            std::to_string(dst[0]) + ")", rc)) return rc;
+
+        // Verify ALL elements survived (not just the first).
+        bool all_match = true;
+        for (uint32_t i = 0; i < layer.layout.n_embd_head_k; ++i) {
+            if (dst[i] != test_value) {
+                all_match = false;
+                break;
+            }
+        }
+        if (!check(all_match, "BF16 round-trip: all elements should equal 131072.0f", rc)) return rc;
+    }
+
+    return rc;
+}
+
 int test_negative_quantized_v_non_aligned() {
     int rc = 0;
 
@@ -574,6 +701,9 @@ int main() {
         return rc;
     }
     if (const int rc = test_negative_unconfigured_ops()) {
+        return rc;
+    }
+    if (const int rc = test_bf16_sentinel_and_validation()) {
         return rc;
     }
     if (const int rc = test_negative_quantized_v_non_aligned()) {

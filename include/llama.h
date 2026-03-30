@@ -810,8 +810,10 @@ extern "C" {
     //
 
     // Compact the KV cache for a sequence using Attention Matching.
-    // Reduces the KV cache from its current size to target_tokens (or n/ratio).
-    // Returns the number of tokens in the compacted prefix, or -1 on failure.
+    // For explicit target_tokens, compaction aims for that exact target.
+    // For ratio-driven requests, hybrid architectures may resolve to a larger
+    // effective target to preserve attention-layer context. The return value is
+    // the authoritative final compacted-prefix token count, or -1 on failure.
     // After compaction, subsequent llama_decode calls use the compacted prefix.
     LLAMA_API int32_t llama_kv_cache_compact(
             struct llama_context * ctx,

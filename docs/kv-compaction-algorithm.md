@@ -125,6 +125,19 @@ When flash attention is requested but non-zero beta is active, the graph constru
 
 A future FlashBias-style kernel, or equivalent upstream graph change, would remove this restriction and allow flash attention with non-zero beta.
 
+## Type Precision
+
+Compacted-prefix payloads inherit the KV cache type from the model configuration. Supported types:
+
+- **F16** (default for most models): 16-bit IEEE half precision, range up to 65504.
+- **BF16**: 16-bit brain floating point, same exponent range as F32 (~3.4e38) but only 7 mantissa bits. Used by some models (e.g., Falcon-H1) and preserved end-to-end through compaction.
+- **F32**: full precision, used internally by the solver but not typically stored.
+- **Quantized types** (Q8_0, Q4_K, etc.): supported when head dimensions are multiples of the quantization block size.
+
+The solver performs all fitting in F32. Results are converted to the configured cache type when writing K/V payloads to the compacted-prefix store. Beta values are always stored in F32.
+
+Layout types default to `GGML_TYPE_COUNT` (sentinel) and must be explicitly initialized before use. Attempting to configure a sequence with uninitialized types raises a runtime error.
+
 ## Current Limits
 
 The implementation does not currently provide:

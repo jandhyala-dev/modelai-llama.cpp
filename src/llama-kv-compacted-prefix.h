@@ -15,8 +15,8 @@ struct llama_compacted_prefix_layer_layout {
     uint32_t n_head_kv = 0;
     uint32_t n_embd_head_k = 0;
     uint32_t n_embd_head_v = 0;
-    ggml_type type_k = GGML_TYPE_F16;
-    ggml_type type_v = GGML_TYPE_F16;
+    ggml_type type_k = GGML_TYPE_COUNT;
+    ggml_type type_v = GGML_TYPE_COUNT;
 };
 
 class llama_compacted_prefix_store {

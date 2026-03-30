@@ -12,6 +12,7 @@
 #include "mtmd.h"
 #include "mtmd-helper.h"
 #include "src/llama-context.h"
+#include "src/llama-model.h"
 #include "src/llama-kv-cache.h"
 #include "src/llama-kv-compact-utils.h"
 #include "src/llama-kv-compact-pipeline.h"
@@ -2326,27 +2327,71 @@ private:
                     const uint32_t compactable = prompt_tokens - live_suffix;
                     const llama_pos live_suffix_pos0 = (llama_pos) compactable;
 
-                    uint32_t target_tokens;
+                    // Capture active_n_kv before compaction (needed by both noop and normal paths).
+                    auto * mem = llama_get_memory(ctx);
+                    const llama_pos pos_max_before = mem ? llama_memory_seq_pos_max(mem, seq_id) : -1;
+                    const uint32_t n_kv_before = pos_max_before >= 0 ? (uint32_t)(pos_max_before + 1) : prompt_tokens;
+
+                    // Compute base requested target.
+                    uint32_t requested_target_tokens;
+                    bool explicit_target = false;
                     if (cp.target_tokens > 0) {
-                        target_tokens = (uint32_t) cp.target_tokens;
+                        explicit_target = true;
+                        requested_target_tokens = (uint32_t) cp.target_tokens;
                     } else {
                         if (cp.ratio < 1.0f) {
                             clear_pending();
                             send_error(task, "Compression ratio must be >= 1.0", ERROR_TYPE_INVALID_REQUEST);
                             break;
                         }
-                        target_tokens = std::max(1u, (uint32_t)(compactable / cp.ratio));
+                        requested_target_tokens = std::max(2u, (uint32_t)(compactable / cp.ratio));
                     }
+
+                    // Resolve hybrid-aware effective budget using the shared helper.
+                    const auto hybrid_info = llama_kv_compact_detect_hybrid(
+                        model->hparams, kv->get_compacted_prefix());
+                    const auto budget = llama_kv_compact_resolve_budget(
+                        hybrid_info,
+                        compactable,
+                        requested_target_tokens,
+                        explicit_target,
+                        explicit_target ? 0.0 : (double) cp.ratio);
+
+                    // Short-circuit near-no-op hybrid outcomes.
+                    if (!explicit_target && budget.skipped_noop) {
+                        auto res = std::make_unique<server_task_result_compact>();
+                        res->id                  = task.id;
+                        res->id_slot             = id_slot;
+                        res->method              = method;
+                        res->compacted_tokens    = compactable;
+                        res->original_tokens     = compactable;
+                        res->compression_ratio   = 1.0;
+                        res->compaction_time_ms  = 0.0;
+                        res->active_n_kv_before  = n_kv_before;
+                        res->active_n_kv_after   = n_kv_before;
+                        res->reclaimed           = false;
+                        // Copy hybrid metadata.
+                        res->hybrid_detected             = budget.hybrid_detected;
+                        res->hybrid_skipped_noop         = budget.skipped_noop;
+                        res->hybrid_n_attn_layers        = budget.hybrid.n_attn_layers;
+                        res->hybrid_n_compactable_layers = budget.hybrid.n_compactable_layers;
+                        res->hybrid_n_total_layers       = budget.hybrid.n_total_layers;
+                        res->hybrid_budget_scale         = budget.budget_scale;
+                        res->requested_target_tokens     = budget.requested_target_tokens;
+                        res->effective_target_tokens      = budget.effective_target_tokens;
+                        res->requested_ratio             = budget.requested_ratio;
+                        res->effective_ratio             = budget.effective_ratio;
+                        clear_pending();
+                        queue_results.send(std::move(res));
+                        break;
+                    }
+
+                    const uint32_t target_tokens = budget.effective_target_tokens;
                     if (target_tokens >= compactable) {
                         clear_pending();
                         send_error(task, "Target tokens must be less than compactable tokens", ERROR_TYPE_INVALID_REQUEST);
                         break;
                     }
-
-                    // Capture active_n_kv before compaction
-                    auto * mem = llama_get_memory(ctx);
-                    const llama_pos pos_max_before = mem ? llama_memory_seq_pos_max(mem, seq_id) : -1;
-                    const uint32_t n_kv_before = pos_max_before >= 0 ? (uint32_t)(pos_max_before + 1) : prompt_tokens;
 
                     // Phase 8: Resolve auto-tuning sentinels based on compression ratio.
                     const bool high_compression = (cp.ratio >= 10.0f);
@@ -2502,6 +2547,17 @@ private:
                     res->active_n_kv_before = n_kv_before;
                     res->active_n_kv_after  = n_kv_after;
                     res->reclaimed          = reclaimed;
+                    // Copy hybrid budget resolution metadata.
+                    res->hybrid_detected             = budget.hybrid_detected;
+                    res->hybrid_skipped_noop         = budget.skipped_noop;
+                    res->hybrid_n_attn_layers        = budget.hybrid.n_attn_layers;
+                    res->hybrid_n_compactable_layers = budget.hybrid.n_compactable_layers;
+                    res->hybrid_n_total_layers       = budget.hybrid.n_total_layers;
+                    res->hybrid_budget_scale         = budget.budget_scale;
+                    res->requested_target_tokens     = budget.requested_target_tokens;
+                    res->effective_target_tokens      = budget.effective_target_tokens;
+                    res->requested_ratio             = budget.requested_ratio;
+                    res->effective_ratio             = budget.effective_ratio;
                     clear_pending();
                     queue_results.send(std::move(res));
                 } break;

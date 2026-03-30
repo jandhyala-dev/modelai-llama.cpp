@@ -8,6 +8,7 @@
 #include "src/llama-kv-compact-select.h"
 #include "src/llama-kv-compact-solver.h"
 #include "src/llama-kv-compact-budget.h"
+#include "src/llama-kv-compact-utils.h"
 
 #include <cmath>
 #include <cstdio>
@@ -423,6 +424,133 @@ int main() {
         // Uniform attention entropy should be near ln(4) ≈ 1.386.
         check(std::abs(ent_uniform - std::log(4.0f)) < 0.01f,
               "Uniform attention entropy is approximately ln(n_keys)");
+    }
+
+    // -----------------------------------------------------------------------
+    // 10. Hybrid detection pure helper
+    // -----------------------------------------------------------------------
+    std::printf("\n=== Hybrid Detection ===\n");
+    {
+        // Dense: 32 total, 0 recurrent, 32 compactable.
+        auto dense = llama_kv_compact_make_hybrid_info(32, 0, 32);
+        check(!dense.is_hybrid, "Dense model is not hybrid");
+        check(dense.n_attn_layers == 32, "Dense: 32 attn layers");
+        check(dense.n_compactable_layers == 32, "Dense: 32 compactable layers");
+        check(!dense.layout_count_mismatch, "Dense: no mismatch");
+        check(std::abs(dense.compactable_fraction - 1.0f) < 1e-6f, "Dense: fraction is 1.0");
+
+        // Qwen3.5-35B-like: 40 total, 30 recurrent, 10 compactable.
+        auto q35b = llama_kv_compact_make_hybrid_info(40, 30, 10);
+        check(q35b.is_hybrid, "Qwen3.5-35B is hybrid");
+        check(q35b.n_attn_layers == 10, "Qwen3.5-35B: 10 attn layers");
+        check(q35b.n_compactable_layers == 10, "Qwen3.5-35B: 10 compactable layers");
+        check(!q35b.layout_count_mismatch, "Qwen3.5-35B: no mismatch");
+        check(std::abs(q35b.compactable_fraction - 0.25f) < 1e-6f, "Qwen3.5-35B: fraction is 0.25");
+
+        // Qwen3.5-122B-like: 48 total, 36 recurrent, 12 compactable.
+        auto q122b = llama_kv_compact_make_hybrid_info(48, 36, 12);
+        check(q122b.is_hybrid, "Qwen3.5-122B is hybrid");
+        check(q122b.n_attn_layers == 12, "Qwen3.5-122B: 12 attn layers");
+        check(std::abs(q122b.compactable_fraction - 0.25f) < 1e-6f, "Qwen3.5-122B: fraction is 0.25");
+
+        // Sparse hybrid: 52 total, 46 recurrent, 6 compactable.
+        auto sparse = llama_kv_compact_make_hybrid_info(52, 46, 6);
+        check(sparse.is_hybrid, "Sparse hybrid is hybrid");
+        check(sparse.n_attn_layers == 6, "Sparse: 6 attn layers");
+        check(sparse.n_compactable_layers == 6, "Sparse: 6 compactable layers");
+        check(!sparse.layout_count_mismatch, "Sparse: no mismatch");
+        check(std::abs(sparse.compactable_fraction - 6.0f/52.0f) < 1e-6f, "Sparse: fraction is 6/52");
+
+        // Mismatch case: 52 total, 46 recurrent, 4 compactable (not 6).
+        auto mismatch = llama_kv_compact_make_hybrid_info(52, 46, 4);
+        check(mismatch.is_hybrid, "Mismatch is hybrid");
+        check(mismatch.layout_count_mismatch, "Mismatch: layout_count_mismatch is true");
+
+        // Zero total layers.
+        auto zero = llama_kv_compact_make_hybrid_info(0, 0, 0);
+        check(!zero.is_hybrid, "Zero layers is not hybrid");
+        check(zero.compactable_fraction == 0.0f, "Zero layers: fraction is 0.0");
+    }
+
+    // -----------------------------------------------------------------------
+    // 11. Shared budget resolution
+    // -----------------------------------------------------------------------
+    std::printf("\n=== Budget Resolution ===\n");
+    {
+        // Dense model, no hybrid info.
+        llama_kv_compact_hybrid_info dense_info = {};
+        dense_info.n_total_layers = 32;
+        dense_info.n_attn_layers = 32;
+        dense_info.n_compactable_layers = 32;
+        dense_info.compactable_fraction = 1.0f;
+
+        // Case 1: Dense ratio path — effective == requested.
+        {
+            auto r = llama_kv_compact_resolve_budget(dense_info, 4096, 1024, false, 4.0);
+            check(r.requested_target_tokens == 1024, "Dense ratio: requested == 1024");
+            check(r.effective_target_tokens == 1024, "Dense ratio: effective == 1024");
+            check(std::abs(r.requested_ratio - 4.0) < 1e-6, "Dense ratio: requested_ratio == 4.0");
+            check(std::abs(r.effective_ratio - 4.0) < 1e-6, "Dense ratio: effective_ratio == 4.0");
+            check(!r.hybrid_detected, "Dense ratio: not hybrid");
+            check(!r.skipped_noop, "Dense ratio: not noop");
+            check(std::abs(r.budget_scale - 1.0f) < 1e-6f, "Dense ratio: scale == 1.0");
+        }
+
+        // Case 2: Explicit target path — no scaling.
+        {
+            auto r = llama_kv_compact_resolve_budget(dense_info, 4096, 500, true, 0.0);
+            check(r.requested_target_tokens == 500, "Explicit target: requested == 500");
+            check(r.effective_target_tokens == 500, "Explicit target: effective == 500");
+            check(r.explicit_target, "Explicit target: flag set");
+            check(std::abs(r.requested_ratio) < 1e-6, "Explicit target: requested_ratio == 0.0");
+            check(std::abs(r.effective_ratio) < 1e-6, "Explicit target: effective_ratio == 0.0");
+            check(!r.skipped_noop, "Explicit target: not noop");
+        }
+
+        // Qwen3.5-like hybrid info.
+        llama_kv_compact_hybrid_info hybrid_info = {};
+        hybrid_info.n_total_layers = 40;
+        hybrid_info.n_recurrent_layers = 30;
+        hybrid_info.n_attn_layers = 10;
+        hybrid_info.n_compactable_layers = 10;
+        hybrid_info.is_hybrid = true;
+        hybrid_info.compactable_fraction = 0.25f;
+
+        // Case 3: Hybrid with ratio=8 — scaling applied, no noop.
+        {
+            auto r = llama_kv_compact_resolve_budget(hybrid_info, 4096, 512, false, 8.0);
+            check(r.hybrid_detected, "Hybrid r=8: hybrid detected");
+            check(!r.skipped_noop, "Hybrid r=8: not noop");
+            check(r.requested_target_tokens == 512, "Hybrid r=8: requested == 512");
+            check(r.effective_target_tokens == 2048, "Hybrid r=8: effective == 2048 (512 * 4.0)");
+            check(std::abs(r.requested_ratio - 8.0) < 1e-6, "Hybrid r=8: requested_ratio == 8.0");
+            check(std::abs(r.effective_ratio - 2.0) < 1e-6, "Hybrid r=8: effective_ratio == 2.0");
+            check(std::abs(r.budget_scale - 4.0f) < 1e-6f, "Hybrid r=8: scale == 4.0");
+        }
+
+        // Case 4: Hybrid with ratio=4 — noop (scaled target >= compactable-1).
+        {
+            auto r = llama_kv_compact_resolve_budget(hybrid_info, 4096, 1024, false, 4.0);
+            check(r.hybrid_detected, "Hybrid r=4: hybrid detected");
+            check(r.skipped_noop, "Hybrid r=4: is noop");
+            check(r.effective_target_tokens == 4096, "Hybrid r=4: effective == compactable");
+            check(std::abs(r.effective_ratio - 1.0) < 1e-6, "Hybrid r=4: effective_ratio == 1.0");
+        }
+
+        // Case 5: Sparse hybrid — scale capped at 4.0.
+        llama_kv_compact_hybrid_info sparse_info = {};
+        sparse_info.n_total_layers = 52;
+        sparse_info.n_recurrent_layers = 46;
+        sparse_info.n_attn_layers = 6;
+        sparse_info.n_compactable_layers = 6;
+        sparse_info.is_hybrid = true;
+        sparse_info.compactable_fraction = 6.0f / 52.0f;  // ~0.115
+        {
+            // 1/0.115 = 8.67 but capped at 4.0
+            auto r = llama_kv_compact_resolve_budget(sparse_info, 4096, 1024, false, 4.0);
+            check(r.hybrid_detected, "Sparse hybrid: detected");
+            check(std::abs(r.budget_scale - 4.0f) < 1e-6f, "Sparse hybrid: scale capped at 4.0");
+        }
     }
 
     // -----------------------------------------------------------------------

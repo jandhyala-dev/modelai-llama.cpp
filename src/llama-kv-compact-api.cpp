@@ -6,6 +6,7 @@
 #include "llama.h"
 #include "llama-impl.h"
 #include "llama-context.h"
+#include "llama-model.h"
 #include "llama-kv-cache.h"
 #include "llama-kv-compact-utils.h"
 #include "llama-kv-compact-pipeline.h"
@@ -76,17 +77,40 @@ int32_t llama_kv_cache_compact(
     }
     const uint32_t compactable = (uint32_t)(live_suffix_pos0 - params.p0);
 
-    // Determine target.
-    uint32_t target_tokens;
+    // Compute base requested target.
+    uint32_t requested_target_tokens;
+    bool explicit_target = false;
     if (params.target_tokens > 0) {
-        target_tokens = (uint32_t)params.target_tokens;
+        explicit_target = true;
+        requested_target_tokens = (uint32_t)params.target_tokens;
     } else {
         if (params.ratio < 1.0f) {
             LLAMA_LOG_ERROR("%s: ratio must be >= 1.0 (got %.2f)\n", __func__, params.ratio);
             return -1;
         }
-        target_tokens = std::max(2u, (uint32_t)(compactable / params.ratio));
+        requested_target_tokens = std::max(2u, (uint32_t)(compactable / params.ratio));
     }
+
+    // Resolve hybrid-aware effective budget using the shared helper.
+    const auto & hparams = ctx->get_model().hparams;
+    const auto hybrid_info = llama_kv_compact_detect_hybrid(hparams, kv->get_compacted_prefix());
+    const auto budget = llama_kv_compact_resolve_budget(
+        hybrid_info,
+        compactable,
+        requested_target_tokens,
+        explicit_target,
+        explicit_target ? 0.0 : (double) params.ratio);
+
+    if (!explicit_target && budget.skipped_noop) {
+        LLAMA_LOG_INFO("%s: hybrid no-op (seq %d: %u -> %u, scale=%.2f)\n",
+                       __func__, seq_id,
+                       budget.requested_target_tokens,
+                       budget.effective_target_tokens,
+                       budget.budget_scale);
+        return (int32_t)compactable;
+    }
+
+    const uint32_t target_tokens = budget.effective_target_tokens;
     if (target_tokens >= compactable) {
         LLAMA_LOG_WARN("%s: target_tokens=%u >= compactable=%u, nothing to compact\n",
                        __func__, target_tokens, compactable);

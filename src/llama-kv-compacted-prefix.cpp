@@ -202,9 +202,23 @@ void io_read_floats(llama_io_read_i & io, std::vector<float> & data) {
 } // namespace
 
 void llama_compacted_prefix_store::layer_storage::configure(uint32_t n_tokens) {
+    // Sentinel check: types must be explicitly initialized before use.
+    if (layout.type_k >= GGML_TYPE_COUNT || layout.type_v >= GGML_TYPE_COUNT) {
+        throw std::runtime_error("compacted-prefix layout has uninitialized type");
+    }
+
     if (!is_supported_compacted_type(layout.type_k, layout.n_embd_head_k, layout.n_embd_head_v) ||
         !is_supported_compacted_type(layout.type_v, layout.n_embd_head_k, layout.n_embd_head_v)) {
         throw std::runtime_error(k_quantized_cache_error);
+    }
+
+    // BF16 trait validation: ensure conversion functions are available.
+    if (layout.type_k == GGML_TYPE_BF16 || layout.type_v == GGML_TYPE_BF16) {
+        const auto * traits_k = ggml_get_type_traits(layout.type_k);
+        const auto * traits_v = ggml_get_type_traits(layout.type_v);
+        if (traits_k->from_float_ref == nullptr || traits_v->from_float_ref == nullptr) {
+            throw std::runtime_error("compacted-prefix BF16 layout missing from_float_ref conversion");
+        }
     }
 
     n_compacted_tokens = n_tokens;

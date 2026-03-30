@@ -571,8 +571,20 @@ struct server_task_result_compact : server_task_result {
     uint32_t    active_n_kv_after    = 0;
     bool        reclaimed            = false;
 
+    // Hybrid budget resolution metadata
+    bool        hybrid_detected              = false;
+    bool        hybrid_skipped_noop          = false;
+    uint32_t    hybrid_n_attn_layers         = 0;
+    uint32_t    hybrid_n_compactable_layers  = 0;
+    uint32_t    hybrid_n_total_layers        = 0;
+    float       hybrid_budget_scale          = 1.0f;
+    uint32_t    requested_target_tokens      = 0;
+    uint32_t    effective_target_tokens       = 0;
+    double      requested_ratio              = 0.0;
+    double      effective_ratio              = 0.0;
+
     virtual json to_json() override {
-        return json {
+        json j = {
             { "success",             true },
             { "id_slot",             id_slot },
             { "method",              method },
@@ -584,6 +596,22 @@ struct server_task_result_compact : server_task_result {
             { "active_n_kv_after",   active_n_kv_after },
             { "reclaimed",           reclaimed },
         };
+
+        if (hybrid_detected) {
+            j["hybrid"] = {
+                {"detected",               true},
+                {"skipped_noop",           hybrid_skipped_noop},
+                {"n_attn_layers",          hybrid_n_attn_layers},
+                {"n_compactable_layers",   hybrid_n_compactable_layers},
+                {"n_total_layers",         hybrid_n_total_layers},
+                {"budget_scale",           hybrid_budget_scale},
+                {"requested_target_tokens", requested_target_tokens},
+                {"effective_target_tokens", effective_target_tokens},
+                {"requested_ratio",         requested_ratio},
+                {"effective_ratio",         effective_ratio},
+            };
+        }
+        return j;
     }
 };
 
