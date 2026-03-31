@@ -29,6 +29,14 @@ ctest --test-dir build -L main --output-on-failure
 
 All code entering this repo is reviewed using an adversarial, failure-seeking review protocol. The reviewer's job is to try to break the code, not confirm it looks reasonable. If there is any plausible correctness bug, the review must FAIL.
 
+### Review Discipline
+
+- Review the full diff, not just the edited lines.
+- Review surrounding code, direct callers/callees, persistence paths, logging paths, and the tests that claim to cover the slice.
+- If something looks suspicious, inconsistent, or "probably conventional," treat it as a bug until disproven with a concrete trace.
+- Do not treat "tests pass", "the parameter is wired through", or "the happy path works" as evidence of correctness.
+- If you did not explicitly try to break the change, you did not finish the review.
+
 ### Mandatory Sections (all 13 required)
 
 1. **Scope Gate** — What is in/out of scope. Flag scope leaks.
@@ -39,17 +47,27 @@ All code entering this repo is reviewed using an adversarial, failure-seeking re
    - Boundary trace (smallest/threshold inputs)
    - Adversarial trace (hostile case designed to break the code)
    - Integer arithmetic trace (every division, modulo, stride)
+   - Output payload trace (when returning/emitting/persisting values)
+   - Cross-layer value trace (when values cross API/service/adapter/store boundaries)
    - Security trace (when applicable)
    - Concurrency trace (when applicable)
 5. **Multi-Variant Model Trace** — Trace through different architectures (GQA, iSWA, hybrid).
-6. **State-Machine Trace** — Before/after/failure/rollback states for persistent mutations.
+6. **State-Machine Trace** — Before/after/failure/rollback states for persistent mutations, plus restart/resume trace for durable or sessioned behavior.
 7. **Unsupported / Precondition Audit** — Every assumption listed: enforced, documented, or undocumented.
-8. **Test Reality Check** — Tests cover production + boundary cases and would catch identified failures.
+8. **Test Reality Check** — Tests cover production + boundary cases, would catch identified failures, and every Critical or Major finding gets a regression test.
 9. **Disprove-It Pass** — Assume one bug exists. Systematically try to find it. Mandatory before PASS.
 10. **Dependency Check** — License, CVEs, version pinning.
 11. **Performance Regression Check** — Before/after for hot path changes.
 12. **Cross-Repo Contract Check** — Producer/consumer match for shared interfaces.
 13. **Pass Bar** — PASS only if no plausible production bug remains after all traces.
+
+### Pre-Commit Requirement
+
+Before any meaningful code or behavior change is committed:
+1. the implementing session MUST complete a hostile self-review using this repo's adversarial review standard
+2. all Critical and Major findings from that self-review MUST be fixed
+3. validation MUST be rerun after those fixes
+4. for risky, stateful, async, protocol, persistence, cross-repo, or security-sensitive slices, external hostile review is required before the next slice proceeds
 
 ### Severities
 
