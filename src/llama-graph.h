@@ -340,6 +340,10 @@ public:
     ggml_tensor * compacted_kq_mask = nullptr; // F32 [n_prefix, n_batch/n_stream, 1, n_stream]
     std::vector<compacted_prefix_layer_input> compacted_prefix_layers;
 
+    // note: assumes v_rot^ == I
+    ggml_tensor * self_k_rot = nullptr;
+    ggml_tensor * self_v_rot = nullptr;
+
     // note: these have to be copies because in order to be able to reuse a graph, its inputs
     //       need to carry these parameters with them. otherwise, they can point to freed
     //       llm_graph_params from a previous batch, causing stack-use-after-return
@@ -442,6 +446,10 @@ public:
 
     ggml_tensor * compacted_kq_mask = nullptr;
     std::vector<compacted_prefix_layer_input> compacted_prefix_layers;
+
+    // note: using same rotation matrices for both base and swa cache
+    ggml_tensor * self_k_rot = nullptr;
+    ggml_tensor * self_v_rot = nullptr;
 
     const llama_hparams hparams;
     const llama_cparams cparams;

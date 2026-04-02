@@ -101,6 +101,8 @@ __pycache__/
 # Server Web UI temporary files
 /tools/server/webui/node_modules
 /tools/server/webui/dist
+# we no longer use gz for index.html
+/tools/server/public/index.html.gz
 
 # Python
 

@@ -298,6 +298,9 @@ public:
     bool compacted_prefix_layer_zero_beta(llama_seq_id seq_id, int32_t il) const;
 #endif // LLAMA_KV_COMPACTION
 
+    ggml_type type_k() const;
+    ggml_type type_v() const;
+
     //
     // graph_build API
     //
@@ -337,6 +340,9 @@ public:
     ggml_tensor * build_input_k_idxs(ggml_context * ctx, const llama_ubatch & ubatch) const;
     ggml_tensor * build_input_v_idxs(ggml_context * ctx, const llama_ubatch & ubatch) const;
 
+    ggml_tensor * build_input_k_rot(ggml_context * ctx) const;
+    ggml_tensor * build_input_v_rot(ggml_context * ctx) const;
+
     void set_input_k_idxs(ggml_tensor * dst, const llama_ubatch * ubatch, const slot_info & sinfo) const;
     void set_input_v_idxs(ggml_tensor * dst, const llama_ubatch * ubatch, const slot_info & sinfo) const;
 
@@ -362,6 +368,9 @@ public:
     // the next decode.
     void compacted_prefix_bump_version() { ++compacted_prefix_version_counter; cp_cache.invalidate(); }
 #endif // LLAMA_KV_COMPACTION
+
+    void set_input_k_rot(ggml_tensor * dst) const;
+    void set_input_v_rot(ggml_tensor * dst) const;
 
 private:
 #ifdef LLAMA_KV_COMPACTION
@@ -484,6 +493,13 @@ private:
     // SWA
     const uint32_t n_swa = 0;
 
+    // env: LLAMA_ATTN_ROT_DISABLE
+    bool attn_rot_k = false;
+    bool attn_rot_v = false;
+
+    // pre-computed hadamard martrices
+    std::unordered_map<int64_t, std::vector<float>> attn_rot_hadamard;
+
     // env: LLAMA_KV_CACHE_DEBUG
     int debug = 0;
 
@@ -524,6 +540,7 @@ private:
                    ggml_context * ctx,
                     ggml_tensor * cur,
                     ggml_tensor * shift,
+                    ggml_tensor * rot,
                     ggml_tensor * factors,
                           float   freq_base,
                           float   freq_scale,
@@ -590,12 +607,15 @@ public:
 
     uint32_t get_n_kv() const;
 
+    ggml_type type_k() const;
+    ggml_type type_v() const;
+
     // get views of the current state of the cache
     ggml_tensor * get_k(ggml_context * ctx, int32_t il) const;
     ggml_tensor * get_v(ggml_context * ctx, int32_t il) const;
 
     // store k_cur and v_cur in the cache based on the provided head location
-    // note: the heads in k_cur and v_cur should be layed out contiguously in memory
+    // note: the heads in k_cur and v_cur should be laid out contiguously in memory
     //   - k_cur  [n_embd_head_k, n_head_k, n_tokens]
     //   - k_idxs [n_tokens]
     //   - v_cur  [n_embd_head_v, n_head_v, n_tokens]
@@ -608,6 +628,9 @@ public:
     //   helps understand the implementation logic of cpy_k and cpy_v
     ggml_tensor * build_input_k_idxs(ggml_context * ctx, const llama_ubatch & ubatch) const;
     ggml_tensor * build_input_v_idxs(ggml_context * ctx, const llama_ubatch & ubatch) const;
+
+    ggml_tensor * build_input_k_rot(ggml_context * ctx) const;
+    ggml_tensor * build_input_v_rot(ggml_context * ctx) const;
 
     void set_input_k_idxs(ggml_tensor * dst, const llama_ubatch * ubatch) const;
     void set_input_v_idxs(ggml_tensor * dst, const llama_ubatch * ubatch) const;
@@ -628,6 +651,9 @@ public:
     void set_input_compacted_prefix_v   (ggml_tensor * dst, int32_t il) const;
     void set_input_compacted_prefix_kq_b(ggml_tensor * dst, int32_t il) const;
 #endif // LLAMA_KV_COMPACTION
+
+    void set_input_k_rot(ggml_tensor * dst) const;
+    void set_input_v_rot(ggml_tensor * dst) const;
 
 private:
     llama_memory_status status;
