@@ -340,7 +340,7 @@ public:
     ggml_tensor * compacted_kq_mask = nullptr; // F32 [n_prefix, n_batch/n_stream, 1, n_stream]
     std::vector<compacted_prefix_layer_input> compacted_prefix_layers;
 
-    // note: assumes v_rot^ == I
+    // note: assumes v_rot^2 == I
     ggml_tensor * self_k_rot = nullptr;
     ggml_tensor * self_v_rot = nullptr;
 
@@ -447,9 +447,11 @@ public:
     ggml_tensor * compacted_kq_mask = nullptr;
     std::vector<compacted_prefix_layer_input> compacted_prefix_layers;
 
-    // note: using same rotation matrices for both base and swa cache
     ggml_tensor * self_k_rot = nullptr;
     ggml_tensor * self_v_rot = nullptr;
+
+    ggml_tensor * self_k_rot_swa = nullptr;
+    ggml_tensor * self_v_rot_swa = nullptr;
 
     const llama_hparams hparams;
     const llama_cparams cparams;
