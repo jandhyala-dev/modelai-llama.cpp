@@ -164,8 +164,12 @@
       </div>
       <div class="card">
         <div class="label">Engineering process</div>
-        <div class="detail">29 documented bug fixes, adversarial review, active CI, and weekly upstream sync are all part of the public repo history.</div>
+        <div class="detail">34 documented bug fixes, adversarial review, active CI, and an upstream-sync lane with local compatibility fixes are all part of the public repo history.</div>
       </div>
+    </div>
+
+    <div class="section-note">
+      Recent runtime compatibility fixes in the fork include Qwen/Gemma tool-call parser hardening, the Qwen3.5 long-input tokenizer crash fix, short-session checkpoint reuse for hybrid/SWA server turns, and Metal mixed <code>q8_0/q4-q5</code> Flash-Attention KV support. Those upstream issue numbers are still open; the fixes ship in this fork now and are documented in <a href="qa.html">QA</a>.
     </div>
 
     <h2>Using the fork</h2>

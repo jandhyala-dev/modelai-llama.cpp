@@ -37,18 +37,18 @@
     <div class="cards cards-4">
       <div class="card">
         <div class="label">Documented bug fixes</div>
-        <div class="value">29</div>
-        <div class="detail">29 distinct fixes documented in <code>docs/BUGS-AND-FIXES.md</code>.</div>
+        <div class="value">34</div>
+        <div class="detail">34 distinct fixes documented in <code>docs/BUGS-AND-FIXES.md</code>.</div>
       </div>
       <div class="card card-problem">
         <div class="label">Critical / major fixes</div>
-        <div class="value">18</div>
+        <div class="value">23</div>
         <div class="detail">Crashes, quality collapse, stale-state, and performance faults caught and fixed.</div>
       </div>
       <div class="card">
         <div class="label">C++ tests</div>
-        <div class="value">53</div>
-        <div class="detail">53 CI-gated C++ tests, 66 total tests listed in <code>docs/HIGHLIGHTS.md</code>.</div>
+        <div class="value">54</div>
+        <div class="detail">54 main-label CTest entries and 74 total CTest entries in the current Metal build.</div>
       </div>
       <div class="card">
         <div class="label">Test tiers</div>
@@ -118,6 +118,8 @@
           <tr><td style="text-align:left"><code>modelai-ci-windows</code></td><td style="text-align:left">Windows MSVC validation.</td></tr>
           <tr><td style="text-align:left"><code>modelai-dashboard</code></td><td style="text-align:left">Benchmark aggregation/reporting path.</td></tr>
           <tr><td style="text-align:left"><code>modelai-upstream-sync</code></td><td style="text-align:left">Scheduled upstream merge flow with gating.</td></tr>
+          <tr><td style="text-align:left"><code>modelai-upstream-watch</code></td><td style="text-align:left">Weekly upstream issue and KV-watch reporting lane.</td></tr>
+          <tr><td style="text-align:left"><code>modelai-stale</code></td><td style="text-align:left">Repository hygiene for long-lived issues.</td></tr>
           <tr><td style="text-align:left"><code>modelai-auto-label</code></td><td style="text-align:left">Repository hygiene and routing support.</td></tr>
         </tbody>
       </table>
@@ -136,6 +138,28 @@
       </div>
     </div>
 
+    <h2>Recent upstream issues fixed locally</h2>
+    <p>The site wording here follows fork status, not upstream issue closure. As of 2026-04-14, the issue numbers below are still open upstream, but the fixes ship in modelai-llama.cpp and are documented with local commit SHAs.</p>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th style="text-align:left">Upstream issue</th>
+            <th style="text-align:left">Local status</th>
+            <th style="text-align:left">Fork commit</th>
+            <th style="text-align:left">What changed in the fork</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr><td style="text-align:left"><a href="https://github.com/ggml-org/llama.cpp/issues/20260" target="_blank" rel="noopener noreferrer">#20260</a></td><td style="text-align:left">Fixed locally, open upstream</td><td style="text-align:left"><code>edba5ae49</code></td><td style="text-align:left">Required-tool PEG parses now tolerate short bridge text before the first <code>&lt;tool_call&gt;</code>.</td></tr>
+          <tr><td style="text-align:left"><a href="https://github.com/ggml-org/llama.cpp/issues/21384" target="_blank" rel="noopener noreferrer">#21384</a></td><td style="text-align:left">Fixed locally, open upstream</td><td style="text-align:left"><code>edba5ae49</code></td><td style="text-align:left">Schema-declared arrays and objects are coerced back from stringified JSON on completed PEG parses.</td></tr>
+          <tr><td style="text-align:left"><a href="https://github.com/ggml-org/llama.cpp/issues/21450" target="_blank" rel="noopener noreferrer">#21450</a></td><td style="text-align:left">Fixed locally on Metal FA path, open upstream</td><td style="text-align:left"><code>d9fa2c6ff</code></td><td style="text-align:left">Practical mixed <code>q8_0</code> with <code>q4_0/q4_1/q5_0/q5_1</code> K/V pairs now run on Metal <code>FLASH_ATTN_EXT</code>.</td></tr>
+          <tr><td style="text-align:left"><a href="https://github.com/ggml-org/llama.cpp/issues/21919" target="_blank" rel="noopener noreferrer">#21919</a></td><td style="text-align:left">Fixed locally, open upstream</td><td style="text-align:left"><code>edba5ae49</code></td><td style="text-align:left">Qwen3.5 long-input tokenization no longer falls through to the stack-overflowing <code>std::regex</code> path.</td></tr>
+          <tr><td style="text-align:left"><a href="https://github.com/ggml-org/llama.cpp/issues/21831" target="_blank" rel="noopener noreferrer">#21831</a> / <a href="https://github.com/ggml-org/llama.cpp/issues/21903" target="_blank" rel="noopener noreferrer">#21903</a></td><td style="text-align:left">Fixed locally, open upstream</td><td style="text-align:left"><code>edba5ae49</code></td><td style="text-align:left">Short hybrid/SWA sessions now retain reusable checkpoints instead of forcing full prompt re-processing on the next turn.</td></tr>
+        </tbody>
+      </table>
+    </div>
+
     <h2>Why this matters</h2>
     <p>Compaction can fail in ways users do not immediately see. A bad reclaim step can look like amnesia one request later. A bad state counter can make metrics lie about what is active. A host/device mismatch can turn into decode stalls at longer contexts. That is why the QA story here needs to be operational, not decorative.</p>
 
@@ -148,9 +172,9 @@
           </tr>
         </thead>
         <tbody>
-          <tr><td style="text-align:left">29 distinct bug fixes</td><td style="text-align:left"><a href="https://github.com/jandhyala-dev/modelai-llama.cpp/blob/modelai-main/docs/BUGS-AND-FIXES.md" target="_blank" rel="noopener noreferrer">docs/BUGS-AND-FIXES.md</a></td></tr>
+          <tr><td style="text-align:left">34 distinct bug fixes</td><td style="text-align:left"><a href="https://github.com/jandhyala-dev/modelai-llama.cpp/blob/modelai-main/docs/BUGS-AND-FIXES.md" target="_blank" rel="noopener noreferrer">docs/BUGS-AND-FIXES.md</a></td></tr>
           <tr><td style="text-align:left">Benchmark summary and test counts</td><td style="text-align:left"><a href="https://github.com/jandhyala-dev/modelai-llama.cpp/blob/modelai-main/docs/HIGHLIGHTS.md" target="_blank" rel="noopener noreferrer">docs/HIGHLIGHTS.md</a></td></tr>
-          <tr><td style="text-align:left">Sync workflow and manual gate</td><td style="text-align:left"><a href="https://github.com/jandhyala-dev/modelai-llama.cpp/blob/modelai-main/docs/UPSTREAM-SYNC.md" target="_blank" rel="noopener noreferrer">docs/UPSTREAM-SYNC.md</a></td></tr>
+          <tr><td style="text-align:left">Sync workflow, local compatibility fixes, and manual gate</td><td style="text-align:left"><a href="https://github.com/jandhyala-dev/modelai-llama.cpp/blob/modelai-main/docs/UPSTREAM-SYNC.md" target="_blank" rel="noopener noreferrer">docs/UPSTREAM-SYNC.md</a></td></tr>
         </tbody>
       </table>
     </div>

@@ -4,7 +4,7 @@ This document tracks every bug discovered, investigated, and fixed in modelai-ll
 
 We believe transparency about bugs is a quality signal, not a weakness. Every entry below was found through adversarial testing, fixed with a root-cause analysis, and verified with regression tests.
 
-**Total: 29 fix commits across 29 distinct bugs (18 Critical/Major, 11 Minor/Infra).**
+**Total: 31 fix commits across 34 distinct bugs (23 Critical/Major, 11 Minor/Infra).**
 
 ---
 
@@ -279,6 +279,81 @@ We believe transparency about bugs is a quality signal, not a weakness. Every en
 **What happened:** Forking llama.cpp inherited 21+ GitHub Actions workflows. These ran on every push, consuming CI minutes and attempting to queue on self-hosted runners that don't exist in the fork. A second wave of 14 more workflows arrived when upstream split `build.yml` into per-platform files.
 
 **Fix:** Renamed all inherited workflows to `.disabled`. Only `modelai-ci`, `modelai-server-smoke`, and `modelai-perf-smoke` remain active.
+
+---
+
+### BUG-U05: Qwen3.5 Required-Tool Parser Failed on Text Before `<tool_call>`
+
+| Field | Value |
+|-------|-------|
+| **Severity** | Major |
+| **Status** | Fixed locally (`upstream issue open`: [#20260](https://github.com/ggml-org/llama.cpp/issues/20260)) |
+| **Affected** | `peg-native` required-tool flows on Qwen3.5 thinking/tool-calling turns |
+| **Commit** | `edba5ae49` |
+
+**What happened:** The post-generation PEG parser required the full assistant output to begin at `<tool_call>`. Qwen3.5 often emits a short natural-language bridge sentence between reasoning text and the first tool call, so the parser rejected an otherwise valid tool call and returned HTTP 500.
+
+**Fix:** Required-tool PEG parsers now allow a short text transition before the first tool call instead of hard-failing on any pre-tool content. Regression coverage was added in `tests/test-chat.cpp`.
+
+---
+
+### BUG-U06: Gemma 4 Tool Arrays Could Collapse Into Stringified JSON
+
+| Field | Value |
+|-------|-------|
+| **Severity** | Major |
+| **Status** | Fixed locally (`upstream issue open`: [#21384](https://github.com/ggml-org/llama.cpp/issues/21384)) |
+| **Affected** | Gemma 4 PEG tool calling when schema-declared arrays/objects contain `{` or `}` in string values |
+| **Commit** | `edba5ae49` |
+
+**What happened:** Completed PEG parses preserved some schema-declared array/object arguments as JSON-encoded strings when the values themselves contained braces. Strict clients then saw a type mismatch between the tool schema and the returned arguments.
+
+**Fix:** Completed PEG parses now coerce stringified JSON back into schema-declared arrays and objects, with a guard that avoids rewriting union types that still legitimately allow `string`.
+
+---
+
+### BUG-U07: Qwen3.5 Long-Input Tokenization Could Stack-Overflow
+
+| Field | Value |
+|-------|-------|
+| **Severity** | Critical (crash) |
+| **Status** | Fixed locally (`upstream issue open`: [#21919](https://github.com/ggml-org/llama.cpp/issues/21919)) |
+| **Affected** | Long tokenization requests on all `LLAMA_VOCAB_PRE_TYPE_QWEN35` tokenizers |
+| **Commit** | `edba5ae49` |
+
+**What happened:** The Qwen3.5 combining-mark split regex missed the custom unicode splitter and fell through to the `std::regex` backtracking path. Sufficiently long inputs could recurse deeply enough to overflow the stack and crash the process.
+
+**Fix:** Added a custom splitter path for the Qwen3.5 combining-mark regex in `src/unicode.cpp` and a regression test in `tests/test-unicode-split.cpp`.
+
+---
+
+### BUG-U08: Short Hybrid / SWA Sessions Forced Full Prompt Re-Processing
+
+| Field | Value |
+|-------|-------|
+| **Severity** | Major |
+| **Status** | Fixed locally (`upstream issues open`: [#21831](https://github.com/ggml-org/llama.cpp/issues/21831), [#21903](https://github.com/ggml-org/llama.cpp/issues/21903)) |
+| **Affected** | `llama-server` follow-up turns on short hybrid/SWA/recurrent sessions, including tool loops |
+| **Commit** | `edba5ae49` |
+
+**What happened:** Server checkpoint creation depended on hard `64`-token thresholds. Short prompts on hybrid/SWA models often failed to retain any reusable checkpoint, so the next turn forced full prompt re-processing and the model appeared to forget the prior turn.
+
+**Fix:** Checkpoint creation now uses actual reusable-span policy instead of the old hard `64`-token cutoff. Regression coverage was added in `tests/test-server-checkpoint-policy.cpp`.
+
+---
+
+### BUG-U09: Metal Flash Attention Rejected Practical Mixed Quantized K/V
+
+| Field | Value |
+|-------|-------|
+| **Severity** | Major |
+| **Status** | Fixed locally (`upstream issue open`: [#21450](https://github.com/ggml-org/llama.cpp/issues/21450)) |
+| **Affected** | Apple Metal `FLASH_ATTN_EXT` with practical mixed K/V layouts such as `K=q8_0`, `V=q4_0` |
+| **Commit** | `d9fa2c6ff` |
+
+**What happened:** Metal Flash Attention support gating, pipeline lookup, and kernel instantiation all assumed K and V had the same type. Practical mixed-cache layouts like `q8_0/q4_0` were rejected even on the FA path.
+
+**Fix:** Added explicit mixed-type support for `q8_0` paired with `q4_0`, `q4_1`, `q5_0`, and `q5_1` on the Metal FA path, plus runtime validation and a new `test-metal-flash-attn-types` regression. The non-Flash-Attention fallback path is still unsupported.
 
 ---
 
