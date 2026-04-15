@@ -19,8 +19,15 @@
 #include <windows.h>
 #endif
 
+#if defined(__clang__)
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wtautological-constant-out-of-range-compare"
+#endif
 #define JSON_ASSERT GGML_ASSERT
 #include <nlohmann/json.hpp>
+#if defined(__clang__)
+#pragma clang diagnostic pop
+#endif
 
 #include <algorithm>
 #include <cinttypes>

@@ -96,11 +96,12 @@ Zero regression from compaction code. MoE model (30B-A3B) is 13% faster than Oll
 
 ## Quality Assurance
 
-- **29 fix commits** addressing 29 distinct bugs (18 Critical/Major)
+- **31 fix commits** addressing 34 distinct bugs (23 Critical/Major)
 - **17 models tested** — 15 pass the 0.95 cosine quality gate
-- **53 CI-gated C++ tests**, 66 total (49 main-label + 4 model-label + 13 server pytests)
+- **54 main-label CTest entries**, 74 total CTest entries in the current Metal build
 - **8 engine test tiers** — pytests, API snapshots, perf regression, quality gate, Windows CI, stress tests, contract tests, live dashboard
 - **6 upstream KV cache changes** verified compatible before shipping
+- **5 current upstream/runtime issue clusters fixed locally in the fork** — `#20260`, `#21384`, `#21450`, `#21919`, `#21831/#21903`
 - **RPC RCE security patch** synced same-day from upstream
 - **Weekly upstream sync** — automated Saturday 2PM PDT via CI, 3-branch model
 - **Every merge gated** by 13-section adversarial review with concrete traces
@@ -123,7 +124,7 @@ Gemma3-12B (upstream SWA bug), Qwen2-VL (M-RoPE spatial), GLM4 (M-RoPE), Mamba/R
 |----------|-------------|
 | [CHANGELOG](CHANGELOG.md) | Full implementation history: V0 → V1 → V2 → V5 → Phase 8 |
 | [DESIGN-DECISIONS](DESIGN-DECISIONS.md) | 13 architecture decisions with rationale |
-| [BUGS-AND-FIXES](BUGS-AND-FIXES.md) | All 29 bugs: root cause, fix, commit SHA |
+| [BUGS-AND-FIXES](BUGS-AND-FIXES.md) | All 34 documented bugs: root cause, fix, commit SHA |
 | [UPSTREAM-SYNC](UPSTREAM-SYNC.md) | Sync process, CI workflows, test tiers |
 | [kv-compaction-algorithm](kv-compaction-algorithm.md) | Algorithm stages: selection, fitting, execution |
 | [kv-compaction-integration](kv-compaction-integration.md) | File map and architecture support matrix |

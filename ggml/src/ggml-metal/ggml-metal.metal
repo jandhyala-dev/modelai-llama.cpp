@@ -6591,6 +6591,40 @@ template [[host_name("kernel_flash_attn_ext_q8_0_dk320_dv256")]] kernel flash_at
 template [[host_name("kernel_flash_attn_ext_q8_0_dk512_dv512")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES,    block_q8_0, 2, dequantize_q8_0, block_q8_0, 2, dequantize_q8_0, 512, 512>;
 template [[host_name("kernel_flash_attn_ext_q8_0_dk576_dv512")]] kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES,    block_q8_0, 2, dequantize_q8_0, block_q8_0, 2, dequantize_q8_0, 576, 512>;
 
+#define FA_EXT_MIXED_TEMPLATE(KNAME, KTYPE, KNL, KDEQ, VNAME, VTYPE, VNL, VDEQ, DK, DV) \
+template [[host_name("kernel_flash_attn_ext_" #KNAME "_" #VNAME "_dk" #DK "_dv" #DV)]] \
+kernel flash_attn_ext_t kernel_flash_attn_ext<FA_TYPES, KTYPE, KNL, KDEQ, VTYPE, VNL, VDEQ, DK, DV>;
+
+#define FA_EXT_MIXED_DIMS(M, KNAME, KTYPE, KNL, KDEQ, VNAME, VTYPE, VNL, VDEQ) \
+M(KNAME, KTYPE, KNL, KDEQ, VNAME, VTYPE, VNL, VDEQ, 32, 32) \
+M(KNAME, KTYPE, KNL, KDEQ, VNAME, VTYPE, VNL, VDEQ, 40, 40) \
+M(KNAME, KTYPE, KNL, KDEQ, VNAME, VTYPE, VNL, VDEQ, 48, 48) \
+M(KNAME, KTYPE, KNL, KDEQ, VNAME, VTYPE, VNL, VDEQ, 64, 64) \
+M(KNAME, KTYPE, KNL, KDEQ, VNAME, VTYPE, VNL, VDEQ, 72, 72) \
+M(KNAME, KTYPE, KNL, KDEQ, VNAME, VTYPE, VNL, VDEQ, 80, 80) \
+M(KNAME, KTYPE, KNL, KDEQ, VNAME, VTYPE, VNL, VDEQ, 96, 96) \
+M(KNAME, KTYPE, KNL, KDEQ, VNAME, VTYPE, VNL, VDEQ, 112, 112) \
+M(KNAME, KTYPE, KNL, KDEQ, VNAME, VTYPE, VNL, VDEQ, 128, 128) \
+M(KNAME, KTYPE, KNL, KDEQ, VNAME, VTYPE, VNL, VDEQ, 192, 192) \
+M(KNAME, KTYPE, KNL, KDEQ, VNAME, VTYPE, VNL, VDEQ, 192, 128) \
+M(KNAME, KTYPE, KNL, KDEQ, VNAME, VTYPE, VNL, VDEQ, 256, 256) \
+M(KNAME, KTYPE, KNL, KDEQ, VNAME, VTYPE, VNL, VDEQ, 320, 256) \
+M(KNAME, KTYPE, KNL, KDEQ, VNAME, VTYPE, VNL, VDEQ, 512, 512) \
+M(KNAME, KTYPE, KNL, KDEQ, VNAME, VTYPE, VNL, VDEQ, 576, 512)
+
+// Mixed q8_0 + q4/q5 pairs preserve the practical "high-K, smaller-V" cache configurations on Metal.
+FA_EXT_MIXED_DIMS(FA_EXT_MIXED_TEMPLATE, q8_0, block_q8_0, 2, dequantize_q8_0, q4_0, block_q4_0, 2, dequantize_q4_0)
+FA_EXT_MIXED_DIMS(FA_EXT_MIXED_TEMPLATE, q4_0, block_q4_0, 2, dequantize_q4_0, q8_0, block_q8_0, 2, dequantize_q8_0)
+FA_EXT_MIXED_DIMS(FA_EXT_MIXED_TEMPLATE, q8_0, block_q8_0, 2, dequantize_q8_0, q4_1, block_q4_1, 2, dequantize_q4_1)
+FA_EXT_MIXED_DIMS(FA_EXT_MIXED_TEMPLATE, q4_1, block_q4_1, 2, dequantize_q4_1, q8_0, block_q8_0, 2, dequantize_q8_0)
+FA_EXT_MIXED_DIMS(FA_EXT_MIXED_TEMPLATE, q8_0, block_q8_0, 2, dequantize_q8_0, q5_0, block_q5_0, 2, dequantize_q5_0)
+FA_EXT_MIXED_DIMS(FA_EXT_MIXED_TEMPLATE, q5_0, block_q5_0, 2, dequantize_q5_0, q8_0, block_q8_0, 2, dequantize_q8_0)
+FA_EXT_MIXED_DIMS(FA_EXT_MIXED_TEMPLATE, q8_0, block_q8_0, 2, dequantize_q8_0, q5_1, block_q5_1, 2, dequantize_q5_1)
+FA_EXT_MIXED_DIMS(FA_EXT_MIXED_TEMPLATE, q5_1, block_q5_1, 2, dequantize_q5_1, q8_0, block_q8_0, 2, dequantize_q8_0)
+
+#undef FA_EXT_MIXED_DIMS
+#undef FA_EXT_MIXED_TEMPLATE
+
 #undef FA_TYPES
 #undef FA_TYPES_BF
 #undef FA_TYPES_F32
@@ -7191,6 +7225,34 @@ template [[host_name("kernel_flash_attn_ext_vec_q4_1_dk576_dv512")]] kernel flas
 template [[host_name("kernel_flash_attn_ext_vec_q5_0_dk576_dv512")]] kernel flash_attn_ext_vec_t kernel_flash_attn_ext_vec<FA_TYPES,     block_q5_0, 8, dequantize_q5_0_t4, block_q5_0,  8, dequantize_q5_0_t4, 576, 512, 2>;
 template [[host_name("kernel_flash_attn_ext_vec_q5_1_dk576_dv512")]] kernel flash_attn_ext_vec_t kernel_flash_attn_ext_vec<FA_TYPES,     block_q5_1, 8, dequantize_q5_1_t4, block_q5_1,  8, dequantize_q5_1_t4, 576, 512, 2>;
 template [[host_name("kernel_flash_attn_ext_vec_q8_0_dk576_dv512")]] kernel flash_attn_ext_vec_t kernel_flash_attn_ext_vec<FA_TYPES,     block_q8_0, 8, dequantize_q8_0_t4, block_q8_0,  8, dequantize_q8_0_t4, 576, 512, 2>;
+
+#define FA_EXT_VEC_MIXED_TEMPLATE(KNAME, KTYPE, KNL, KDEQ, VNAME, VTYPE, VNL, VDEQ, DK, DV, NWG) \
+template [[host_name("kernel_flash_attn_ext_vec_" #KNAME "_" #VNAME "_dk" #DK "_dv" #DV)]] \
+kernel flash_attn_ext_vec_t kernel_flash_attn_ext_vec<FA_TYPES, KTYPE, KNL, KDEQ, VTYPE, VNL, VDEQ, DK, DV, NWG>;
+
+#define FA_EXT_VEC_MIXED_DIMS(M, KNAME, KTYPE, KNL, KDEQ, VNAME, VTYPE, VNL, VDEQ) \
+M(KNAME, KTYPE, KNL, KDEQ, VNAME, VTYPE, VNL, VDEQ, 32, 32, 4) \
+M(KNAME, KTYPE, KNL, KDEQ, VNAME, VTYPE, VNL, VDEQ, 64, 64, 2) \
+M(KNAME, KTYPE, KNL, KDEQ, VNAME, VTYPE, VNL, VDEQ, 96, 96, 4) \
+M(KNAME, KTYPE, KNL, KDEQ, VNAME, VTYPE, VNL, VDEQ, 128, 128, 1) \
+M(KNAME, KTYPE, KNL, KDEQ, VNAME, VTYPE, VNL, VDEQ, 192, 192, 2) \
+M(KNAME, KTYPE, KNL, KDEQ, VNAME, VTYPE, VNL, VDEQ, 192, 128, 2) \
+M(KNAME, KTYPE, KNL, KDEQ, VNAME, VTYPE, VNL, VDEQ, 256, 256, 1) \
+M(KNAME, KTYPE, KNL, KDEQ, VNAME, VTYPE, VNL, VDEQ, 320, 256, 2) \
+M(KNAME, KTYPE, KNL, KDEQ, VNAME, VTYPE, VNL, VDEQ, 512, 512, 1) \
+M(KNAME, KTYPE, KNL, KDEQ, VNAME, VTYPE, VNL, VDEQ, 576, 512, 2)
+
+FA_EXT_VEC_MIXED_DIMS(FA_EXT_VEC_MIXED_TEMPLATE, q8_0, block_q8_0, 8, dequantize_q8_0_t4, q4_0, block_q4_0, 8, dequantize_q4_0_t4)
+FA_EXT_VEC_MIXED_DIMS(FA_EXT_VEC_MIXED_TEMPLATE, q4_0, block_q4_0, 8, dequantize_q4_0_t4, q8_0, block_q8_0, 8, dequantize_q8_0_t4)
+FA_EXT_VEC_MIXED_DIMS(FA_EXT_VEC_MIXED_TEMPLATE, q8_0, block_q8_0, 8, dequantize_q8_0_t4, q4_1, block_q4_1, 8, dequantize_q4_1_t4)
+FA_EXT_VEC_MIXED_DIMS(FA_EXT_VEC_MIXED_TEMPLATE, q4_1, block_q4_1, 8, dequantize_q4_1_t4, q8_0, block_q8_0, 8, dequantize_q8_0_t4)
+FA_EXT_VEC_MIXED_DIMS(FA_EXT_VEC_MIXED_TEMPLATE, q8_0, block_q8_0, 8, dequantize_q8_0_t4, q5_0, block_q5_0, 8, dequantize_q5_0_t4)
+FA_EXT_VEC_MIXED_DIMS(FA_EXT_VEC_MIXED_TEMPLATE, q5_0, block_q5_0, 8, dequantize_q5_0_t4, q8_0, block_q8_0, 8, dequantize_q8_0_t4)
+FA_EXT_VEC_MIXED_DIMS(FA_EXT_VEC_MIXED_TEMPLATE, q8_0, block_q8_0, 8, dequantize_q8_0_t4, q5_1, block_q5_1, 8, dequantize_q5_1_t4)
+FA_EXT_VEC_MIXED_DIMS(FA_EXT_VEC_MIXED_TEMPLATE, q5_1, block_q5_1, 8, dequantize_q5_1_t4, q8_0, block_q8_0, 8, dequantize_q8_0_t4)
+
+#undef FA_EXT_VEC_MIXED_DIMS
+#undef FA_EXT_VEC_MIXED_TEMPLATE
 
 #undef FA_TYPES
 #undef FA_TYPES_F32

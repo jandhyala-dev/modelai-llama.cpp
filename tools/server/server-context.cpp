@@ -1,4 +1,5 @@
 #include "server-context.h"
+#include "server-checkpoint-utils.h"
 #include "server-common.h"
 #include "server-http.h"
 #include "server-task.h"
@@ -3335,14 +3336,19 @@ private:
                     const auto pos_min = llama_memory_seq_pos_min(llama_get_memory(ctx), slot.id);
                     const auto pos_max = llama_memory_seq_pos_max(llama_get_memory(ctx), slot.id);
 
-                    // no need for empty or small checkpoints
-                    do_checkpoint = do_checkpoint && (pos_min >= 0 && slot.prompt.n_tokens() >= 64);
+                    const int64_t last_checkpoint_n_tokens = slot.prompt.checkpoints.empty() ?
+                        -1 :
+                        slot.prompt.checkpoints.back().n_tokens;
 
-                    // do not checkpoint after mtmd chunks
-                    do_checkpoint = do_checkpoint && !has_mtmd;
-
-                    // no need to create checkpoints that are too close together
-                    do_checkpoint = do_checkpoint && (slot.prompt.checkpoints.empty() || slot.prompt.n_tokens() - n_tokens_cur > slot.prompt.checkpoints.back().n_tokens + 64);
+                    // Only keep checkpoints that snapshot already-processed tokens and advance past the
+                    // previous snapshot. This preserves short-prompt recurrent / SWA reuse without
+                    // accumulating redundant zero-token checkpoints.
+                    do_checkpoint = do_checkpoint && server_should_create_context_checkpoint(
+                        pos_min,
+                        slot.prompt.n_tokens(),
+                        n_tokens_cur,
+                        last_checkpoint_n_tokens,
+                        has_mtmd);
 
                     // note: we create the checkpoint before calling llama_decode(), so the current batch is not
                     //       yet processed and therefore it is not part of the checkpoint.

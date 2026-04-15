@@ -178,6 +178,7 @@ struct common_chat_params {
     common_chat_format                  format = COMMON_CHAT_FORMAT_CONTENT_ONLY;
     std::string                         prompt;
     std::string                         grammar;
+    std::vector<common_chat_tool>       tools;
     bool                                grammar_lazy         = false;
     std::string                         generation_prompt;
     bool                                supports_thinking    = false;
@@ -195,14 +196,16 @@ struct common_chat_parser_params {
     common_chat_format      format               = COMMON_CHAT_FORMAT_CONTENT_ONLY;
     common_reasoning_format reasoning_format     = COMMON_REASONING_FORMAT_NONE; // TODO: refactor this to "bool parse_reasoning"
     // Whether reasoning_content should be inlined in the content (e.g. for reasoning_format=deepseek in stream mode)
-    bool                    reasoning_in_content = false;
-    std::string             generation_prompt;
-    bool                    parse_tool_calls     = true;
-    bool                    debug                = false;  // Enable debug output for PEG parser
-    common_peg_arena        parser               = {};
+    bool                           reasoning_in_content = false;
+    std::vector<common_chat_tool>  tools;
+    std::string                    generation_prompt;
+    bool                           parse_tool_calls     = true;
+    bool                           debug                = false;  // Enable debug output for PEG parser
+    common_peg_arena               parser               = {};
     common_chat_parser_params() = default;
     common_chat_parser_params(const common_chat_params & chat_params) {
         format  = chat_params.format;
+        tools = chat_params.tools;
         generation_prompt = chat_params.generation_prompt;
     }
 };
