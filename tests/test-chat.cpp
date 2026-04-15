@@ -794,6 +794,21 @@ static common_chat_tool quoted_unquoted_tool{
     })",
 };
 
+static common_chat_tool execute_command_tool{
+    /* .name = */ "exec",
+    /* .description = */ "Execute shell command",
+    /* .parameters = */ R"({
+        "type": "object",
+        "properties": {
+            "command": {
+                "type": "string",
+                "description": "Shell command to execute"
+            }
+        },
+        "required": ["command"]
+    })",
+};
+
 
 static common_chat_tool tool_2req_4opt{
     /* .name = */ "tool_2req_4opt",
@@ -1654,6 +1669,37 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .expect_content("Let me inspect one more file first.")
             .expect_tool_calls({
                 { "special_function", R"({"arg1": 1})", {} },
+            })
+            .run();
+
+        // #21495 / OpenClaw: tolerate multiple XML tool calls in one turn
+        // even when parallel_tool_calls was not explicitly enabled.
+        tst.test(
+               "I'm\nthinking\n</think>\n"
+               "I'll execute both now.\n"
+               "<tool_call>\n"
+               "<function=exec>\n"
+               "<parameter=command>\n"
+               "openclaw security audit\n"
+               "</parameter>\n"
+               "</function>\n"
+               "</tool_call>\n"
+               "<tool_call>\n"
+               "<function=exec>\n"
+               "<parameter=command>\n"
+               "openclaw update status\n"
+               "</parameter>\n"
+               "</function>\n"
+               "</tool_call>")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .enable_thinking(true)
+            .tool_choice(COMMON_CHAT_TOOL_CHOICE_REQUIRED)
+            .tools({ execute_command_tool })
+            .expect_reasoning("I'm\nthinking")
+            .expect_content("I'll execute both now.")
+            .expect_tool_calls({
+                { "exec", R"({"command": "openclaw security audit"})", {} },
+                { "exec", R"({"command": "openclaw update status"})", {} },
             })
             .run();
 

@@ -2439,16 +2439,35 @@ common_chat_msg common_chat_peg_parse(const common_peg_arena &          src_pars
         // During partial parsing, return partial results if any AST nodes were captured
         // This allows streaming to work correctly for formats like FUNC_MARKDOWN_CODE_BLOCK
         if (is_partial && result.end > 0) {
-            // Try to extract any partial results from what was successfully parsed
+            auto map_result = [&](const common_peg_ast_arena & ast, const common_peg_parse_result & parse_result) {
+                common_chat_msg msg;
+                msg.role = "assistant";
+                std::unique_ptr<common_chat_peg_mapper> mapper;
+                if (params.format == COMMON_CHAT_FORMAT_PEG_GEMMA4) {
+                    mapper = std::make_unique<common_chat_peg_gemma4_mapper>(msg);
+                } else {
+                    mapper = std::make_unique<common_chat_peg_mapper>(msg);
+                }
+                mapper->from_ast(ast, parse_result);
+                return msg;
+            };
+
+            // The failed AST may have backtracked past already-complete tool calls.
+            // Reparse the longest matched prefix first so streaming remains monotonic.
             common_chat_msg msg;
-            msg.role = "assistant";
-            std::unique_ptr<common_chat_peg_mapper> mapper;
-            if (params.format == COMMON_CHAT_FORMAT_PEG_GEMMA4) {
-                mapper = std::make_unique<common_chat_peg_gemma4_mapper>(msg);
+            std::string     matched_prefix = effective_input.substr(0, result.end);
+            common_peg_parse_context prefix_ctx(matched_prefix, flags);
+            auto prefix_result = parser.parse(prefix_ctx);
+
+            if (!prefix_result.fail()) {
+                msg = map_result(prefix_ctx.ast, prefix_result);
+            } else if (prefix_result.end > 0 && prefix_result.end < matched_prefix.size()) {
+                common_peg_parse_context shorter_ctx(matched_prefix.substr(0, prefix_result.end), flags);
+                auto shorter_result = parser.parse(shorter_ctx);
+                msg = map_result(shorter_ctx.ast, shorter_result);
             } else {
-                mapper = std::make_unique<common_chat_peg_mapper>(msg);
+                msg = map_result(ctx.ast, result);
             }
-            mapper->from_ast(ctx.ast, result);
 
             if (ctx.is_debug()) {
                 fprintf(stderr, "\nAST for partial parse (fail):\n%s\n", ctx.ast.dump().c_str());

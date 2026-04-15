@@ -428,11 +428,10 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
 
     if (!format.per_call_start.empty()) {
         auto wrapped_call = format.per_call_start + p.space() + tool_choice + p.space() + format.per_call_end;
-        if (inputs.parallel_tool_calls) {
-            tool_calls = p.trigger_rule("tool-call", wrapped_call + p.zero_or_more(p.space() + wrapped_call));
-        } else {
-            tool_calls = p.trigger_rule("tool-call", wrapped_call);
-        }
+        // Be tolerant on parse: some models emit multiple tagged tool calls in one turn
+        // even when parallel_tool_calls was not explicitly requested. Accepting the
+        // repeated calls here avoids hard parser failures in agent workflows.
+        tool_calls = p.trigger_rule("tool-call", wrapped_call + p.zero_or_more(p.space() + wrapped_call));
         if (!format.section_start.empty()) {
             tool_calls = p.trigger_rule("tool-calls",
                                         p.literal(format.section_start) + p.space() + tool_calls + p.space() +
