@@ -1223,6 +1223,24 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_top_k_merge(ggml
     return res;
 }
 
+static void ggml_metal_flash_attn_ext_base_name(
+        char * base,
+        size_t base_size,
+        const char * kernel_name,
+        const struct ggml_tensor * op) {
+    const int32_t dk = (int32_t) op->src[1]->ne[0];
+    const int32_t dv = (int32_t) op->src[2]->ne[0];
+
+    const char * type_k = ggml_type_name(op->src[1]->type);
+    const char * type_v = ggml_type_name(op->src[2]->type);
+
+    if (op->src[1]->type == op->src[2]->type) {
+        snprintf(base, base_size, "kernel_%s_%s_dk%d_dv%d", kernel_name, type_k, dk, dv);
+    } else {
+        snprintf(base, base_size, "kernel_%s_%s_%s_dk%d_dv%d", kernel_name, type_k, type_v, dk, dv);
+    }
+}
+
 ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext_pad(
         ggml_metal_library_t lib,
         const struct ggml_tensor * op,
@@ -1323,20 +1341,13 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext(
     char base[256];
     char name[256];
 
-    const int32_t dk = (int32_t) op->src[1]->ne[0];
-    const int32_t dv = (int32_t) op->src[2]->ne[0];
-
     const int32_t ns10 = op->src[1]->nb[1]/op->src[1]->nb[0];
     const int32_t ns20 = op->src[2]->nb[1]/op->src[2]->nb[0];
 
     // do bounds checks for the mask?
     const bool bc_mask = op->src[3] && (op->src[3]->ne[1] % 8 != 0);
 
-    snprintf(base, 256, "kernel_%s_%s_dk%d_dv%d",
-            "flash_attn_ext",
-            ggml_type_name(op->src[1]->type),
-            dk,
-            dv);
+    ggml_metal_flash_attn_ext_base_name(base, sizeof(base), "flash_attn_ext", op);
 
     snprintf(name, 256, "%s_mask=%d_sinks=%d_bias=%d_scap=%d_kvpad=%d_bcm=%d_ns10=%d_ns20=%d_nsg=%d",
             base,
@@ -1389,17 +1400,10 @@ ggml_metal_pipeline_with_params ggml_metal_library_get_pipeline_flash_attn_ext_v
     char base[256];
     char name[256];
 
-    const int32_t dk = (int32_t) op->src[1]->ne[0];
-    const int32_t dv = (int32_t) op->src[2]->ne[0];
-
     const int32_t ns10 = op->src[1]->nb[1]/op->src[1]->nb[0];
     const int32_t ns20 = op->src[2]->nb[1]/op->src[2]->nb[0];
 
-    snprintf(base, 256, "kernel_%s_%s_dk%d_dv%d",
-            "flash_attn_ext_vec",
-            ggml_type_name(op->src[1]->type),
-            dk,
-            dv);
+    ggml_metal_flash_attn_ext_base_name(base, sizeof(base), "flash_attn_ext_vec", op);
 
     snprintf(name, 256, "%s_mask=%d_sink=%d_bias=%d_scap=%d_kvpad=%d_ns10=%d_ns20=%d_nsg=%d_nwg=%d",
             base,
