@@ -357,6 +357,21 @@ We believe transparency about bugs is a quality signal, not a weakness. Every en
 
 ---
 
+### BUG-U10: Qwen3.5 / OpenClaw Could Fail on Repeated XML Tool Calls
+
+| Field | Value |
+|-------|-------|
+| **Severity** | Major |
+| **Status** | Fixed locally (`upstream issue open`: [#21495](https://github.com/ggml-org/llama.cpp/issues/21495)) |
+| **Affected** | `peg-native` tagged XML tool-calling on Qwen3.5 / OpenClaw-style turns with multiple `<tool_call>` blocks |
+| **Commit** | `14600dfbe` |
+
+**What happened:** Qwen3.5 can emit multiple tagged XML tool calls in one assistant turn even when `parallel_tool_calls` was not explicitly enabled. The tagged PEG parser only accepted a single `<tool_call>...</tool_call>` block in that mode, and the partial parse path could backtrack far enough to "forget" the first completed call while the second one was still streaming. In practice this showed up as OpenClaw parse failures or `Invalid diff: now finding less tool calls!`.
+
+**Fix:** The tagged XML PEG parser now tolerates repeated `<tool_call>` blocks during parse, and partial parse recovery reparses the longest matched prefix so streaming tool-call diffs remain monotonic. Regression coverage was added in `tests/test-chat.cpp` using the exact OpenClaw-style `exec(command)` shape.
+
+---
+
 ## Minor Bugs
 
 ### BUG-R01: Exception Safety in Tensor Staging

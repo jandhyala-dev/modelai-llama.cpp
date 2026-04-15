@@ -48,6 +48,7 @@ If either check finds results, the workflow creates a GitHub Issue tagged `upstr
 
 | Date | Commits Synced | Notable Changes | Merge Commit |
 |------|---------------|-----------------|-------------|
+| 2026-04-15 | 1 local compatibility fix | Qwen3.5 / OpenClaw repeated XML tool-call parsing and streaming diff recovery | `14600dfbe` |
 | 2026-04-14 | 34 upstream commits + 2 local compatibility fixes | Qwen/Gemma tool-call parser hardening, Qwen3.5 tokenizer crash fix, short-session checkpoint reuse, Metal mixed `q8_0/q4-q5` FA K/V support | `d9fa2c6ff` |
 | 2026-03-23 | 223 | Metal mul_mv_ext, CUDA bf16 flash attention, grammar fixes | `356b23be3` |
 | 2026-03-23 | 2 (emergency) | **RPC RCE security patch** (#20908), PR template | `6618b8889` |
@@ -56,10 +57,11 @@ If either check finds results, the workflow creates a GitHub Issue tagged `upstr
 
 ## Upstream Issues Fixed Locally in This Fork
 
-These issues remain open upstream as of 2026-04-14, but the fork carries local fixes because they hit ModelAI / COT hot paths.
+These issues remain open upstream as of 2026-04-15, but the fork carries local fixes because they hit ModelAI / COT hot paths.
 
 | Upstream Issue | Local Commit | Local Status | Notes |
 |----------------|--------------|--------------|-------|
+| [#21495](https://github.com/ggml-org/llama.cpp/issues/21495) | `14600dfbe` | Fixed locally | Qwen3.5 tagged XML parser now accepts repeated `<tool_call>` blocks and preserves monotonic streaming diffs for OpenClaw-style `exec(command)` turns |
 | [#20260](https://github.com/ggml-org/llama.cpp/issues/20260) | `edba5ae49` | Fixed locally | Required-tool PEG parsers now tolerate short bridge text before the first `<tool_call>` |
 | [#21384](https://github.com/ggml-org/llama.cpp/issues/21384) | `edba5ae49` | Fixed locally | Schema-declared arrays / objects are coerced back from stringified JSON on completed PEG parses |
 | [#21450](https://github.com/ggml-org/llama.cpp/issues/21450) | `d9fa2c6ff` | Fixed locally on Metal FA path | Practical mixed `q8_0` with `q4_0/q4_1/q5_0/q5_1` K/V pairs now work on `FLASH_ATTN_EXT` |
