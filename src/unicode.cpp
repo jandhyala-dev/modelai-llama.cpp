@@ -471,7 +471,11 @@ static std::vector<size_t> unicode_regex_split_custom_llama3(const std::string &
 }
 
 // Qwen2 system regex: "(?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+"
-static std::vector<size_t> unicode_regex_split_custom_qwen2(const std::string & text, const std::vector<size_t> & offsets) {
+// Qwen3.5 differs only in that letter runs include combining marks: [\\p{L}\\p{M}]+
+static std::vector<size_t> unicode_regex_split_custom_qwen_wordlike(
+        const std::string & text,
+        const std::vector<size_t> & offsets,
+        bool include_accent_marks) {
     std::vector<size_t> bpe_offsets; // store the offset of each word
     bpe_offsets.reserve(offsets.size()); // Reserve memory for the approximate size
 
@@ -491,6 +495,10 @@ static std::vector<size_t> unicode_regex_split_custom_qwen2(const std::string & 
 
         auto _get_flags = [&] (const size_t pos) -> unicode_cpt_flags {
             return (offset_ini <= pos && pos < offset_end) ? unicode_cpt_flags_from_cpt(cpts[pos]) : unicode_cpt_flags{};
+        };
+
+        auto _is_wordlike = [&] (const unicode_cpt_flags & flags) -> bool {
+            return flags.is_letter || (include_accent_marks && flags.is_accent_mark);
         };
 
         size_t _prev_end = offset_ini;
@@ -532,11 +540,12 @@ static std::vector<size_t> unicode_regex_split_custom_qwen2(const std::string & 
                 }
             }
 
-            // regex: [^\r\n\p{L}\p{N}]?\p{L}+
+            // regex: [^\r\n\p{L}\p{N}]?\p{L}+ (Qwen2)
+            // regex: [^\r\n\p{L}\p{N}]?[\p{L}\p{M}]+ (Qwen3.5)
             if (!(cpt == '\r' || cpt == '\n' || flags.is_number)) {
-                if (flags.is_letter || _get_flags(pos+1).is_letter) {  // one or more letters
+                if (_is_wordlike(flags) || _is_wordlike(_get_flags(pos+1))) {  // one or more letters / combining marks
                     pos++;
-                    while (_get_flags(pos).is_letter) {
+                    while (_is_wordlike(_get_flags(pos))) {
                         pos++;
                     }
                     _add_token(pos);
@@ -552,10 +561,11 @@ static std::vector<size_t> unicode_regex_split_custom_qwen2(const std::string & 
             }
 
             // regex: <space>?[^\s\p{L}\p{N}]+[\r\n]*
+            // regex: <space>?[^\s\p{L}\p{M}\p{N}]+[\r\n]*
             auto flags2 = (cpt == ' ' ? _get_flags(pos+1) : flags);
-            if (!(flags2.is_whitespace | flags2.is_letter | flags2.is_number) && flags.as_uint()) {
+            if (!(flags2.is_whitespace | flags2.is_letter | flags2.is_number | (include_accent_marks && flags2.is_accent_mark)) && flags.as_uint()) {
                 pos += (cpt == ' ');
-                while (!(flags2.is_whitespace | flags2.is_letter | flags2.is_number) && flags2.as_uint()) {
+                while (!(flags2.is_whitespace | flags2.is_letter | flags2.is_number | (include_accent_marks && flags2.is_accent_mark)) && flags2.as_uint()) {
                     flags2 = _get_flags(++pos);
                 }
                 uint32_t cpt2 = _get_cpt(pos);
@@ -603,6 +613,14 @@ static std::vector<size_t> unicode_regex_split_custom_qwen2(const std::string & 
     }
 
     return bpe_offsets;
+}
+
+static std::vector<size_t> unicode_regex_split_custom_qwen2(const std::string & text, const std::vector<size_t> & offsets) {
+    return unicode_regex_split_custom_qwen_wordlike(text, offsets, false);
+}
+
+static std::vector<size_t> unicode_regex_split_custom_qwen35(const std::string & text, const std::vector<size_t> & offsets) {
+    return unicode_regex_split_custom_qwen_wordlike(text, offsets, true);
 }
 
 template <typename CharT>
@@ -929,6 +947,9 @@ static std::vector<size_t> unicode_regex_split_custom(const std::string & text, 
     } else if (
            regex_expr == "(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])|[^\\r\\n\\p{L}\\p{N}]?\\p{L}+|\\p{N}| ?[^\\s\\p{L}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+") {
         bpe_offsets = unicode_regex_split_custom_qwen2(text, offsets);
+    } else if (
+           regex_expr == "(?:'[sS]|'[tT]|'[rR][eE]|'[vV][eE]|'[mM]|'[lL][lL]|'[dD])|[^\\r\\n\\p{L}\\p{N}]?[\\p{L}\\p{M}]+|\\p{N}| ?[^\\s\\p{L}\\p{M}\\p{N}]+[\\r\\n]*|\\s*[\\r\\n]+|\\s+(?!\\S)|\\s+") {
+        bpe_offsets = unicode_regex_split_custom_qwen35(text, offsets);
     } else if (regex_expr == "\\p{Han}+") {
         // K2's first pattern - handle all K2 patterns together
         bpe_offsets = unicode_regex_split_custom_kimi_k2(text, offsets);

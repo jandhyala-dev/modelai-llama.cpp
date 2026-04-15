@@ -541,6 +541,49 @@ static common_chat_tool edit_tool{
     })",
 };
 
+static common_chat_tool edit_batch_tool{
+    /* .name = */ "edit",
+    /* .description = */ "Edit file with a list of replacements",
+    /* .parameters = */ R"({
+        "type": "object",
+        "properties": {
+            "path": {
+                "type": "string",
+                "description": "Path of file to edit"
+            },
+            "edits": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "oldText": { "type": "string" },
+                        "newText": { "type": "string" }
+                    },
+                    "required": ["oldText", "newText"]
+                }
+            }
+        },
+        "required": ["path", "edits"]
+    })",
+};
+
+static common_chat_tool union_payload_tool{
+    /* .name = */ "set_payload",
+    /* .description = */ "Accepts either a string or an array payload",
+    /* .parameters = */ R"({
+        "type": "object",
+        "properties": {
+            "payload": {
+                "type": ["string", "array"],
+                "items": {
+                    "type": "integer"
+                }
+            }
+        },
+        "required": ["payload"]
+    })",
+};
+
 static common_chat_tool magic_tool{
     /* .name = */ "magic",
     /* .description = */ "Magic tool that takes a hash",
@@ -922,6 +965,8 @@ struct peg_test_case {
     common_chat_msg              expect;
     bool                         is_partial            = false;
     bool                         expect_reconstruction = false;
+    bool                         expect_incremental_diffs = true;
+    bool                         expect_grammar_match = true;
 };
 
 struct make_peg_parser {
@@ -1012,36 +1057,39 @@ static void test_peg_parser(common_chat_templates *                      tmpls,
         std::string     prefix      = tc.input.substr(0, safe_len);
         common_chat_msg msg_current = parser.parse(prefix, is_partial);
 
-        for (const auto & diff : common_chat_msg_diff::compute_diffs(msg_prev, msg_current)) {
-            if (!diff.reasoning_content_delta.empty()) {
-                msg_accum.reasoning_content += diff.reasoning_content_delta;
+        if (tc.expect_incremental_diffs) {
+            for (const auto & diff : common_chat_msg_diff::compute_diffs(msg_prev, msg_current)) {
+                if (!diff.reasoning_content_delta.empty()) {
+                    msg_accum.reasoning_content += diff.reasoning_content_delta;
+                }
+                if (!diff.content_delta.empty()) {
+                    msg_accum.content += diff.content_delta;
+                }
+                if (diff.tool_call_index != std::string::npos) {
+                    // During partial parsing, a new tool call may appear with empty name initially
+                    // The name gets filled in as more input is parsed
+                    while (msg_accum.tool_calls.size() <= diff.tool_call_index) {
+                        msg_accum.tool_calls.push_back({ "", "", "" });
+                    }
+                    // Always update name and id from diff (may change during incremental parsing), but only if the delta
+                    // actually contains them
+                    if (!diff.tool_call_delta.name.empty()) {
+                        msg_accum.tool_calls[diff.tool_call_index].name = diff.tool_call_delta.name;
+                    }
+                    if (!diff.tool_call_delta.id.empty()) {
+                        msg_accum.tool_calls[diff.tool_call_index].id = diff.tool_call_delta.id;
+                    }
+                    if (!diff.tool_call_delta.arguments.empty()) {
+                        msg_accum.tool_calls[diff.tool_call_index].arguments += diff.tool_call_delta.arguments;
+                    }
+                }
             }
-            if (!diff.content_delta.empty()) {
-                msg_accum.content += diff.content_delta;
+
+            try {
+                assert_msg_equals(msg_current, msg_accum, true);
+            } catch (std::exception & e) {
+                throw std::runtime_error((std::string("Error comparing accumulated message to current: ") + e.what()).c_str());
             }
-            if (diff.tool_call_index != std::string::npos) {
-                // During partial parsing, a new tool call may appear with empty name initially
-                // The name gets filled in as more input is parsed
-                while (msg_accum.tool_calls.size() <= diff.tool_call_index) {
-                    msg_accum.tool_calls.push_back({ "", "", "" });
-                }
-                // Always update name and id from diff (may change during incremental parsing), but only if the delta
-                // actually contains them
-                if (!diff.tool_call_delta.name.empty()) {
-                    msg_accum.tool_calls[diff.tool_call_index].name = diff.tool_call_delta.name;
-                }
-                if (!diff.tool_call_delta.id.empty()) {
-                    msg_accum.tool_calls[diff.tool_call_index].id = diff.tool_call_delta.id;
-                }
-                if (!diff.tool_call_delta.arguments.empty()) {
-                    msg_accum.tool_calls[diff.tool_call_index].arguments += diff.tool_call_delta.arguments;
-                }
-            }
-        }
-        try {
-            assert_msg_equals(msg_current, msg_accum, true);
-        } catch (std::exception & e) {
-            throw std::runtime_error((std::string("Error comparing accumulated message to current: ") + e.what()).c_str());
         }
 
         msg_prev = msg_current;
@@ -1050,10 +1098,12 @@ static void test_peg_parser(common_chat_templates *                      tmpls,
     if (!tc.is_partial) {
         assert_msg_equals(tc.expect, parser.parse(tc.input, false), true);
     }
-    assert_msg_equals(tc.expect, msg_accum, true);
+    if (tc.expect_incremental_diffs) {
+        assert_msg_equals(tc.expect, msg_accum, true);
+    }
 
     // Test grammar if present in params
-    if (!parser.params_.grammar.empty()) {
+    if (tc.expect_grammar_match && !parser.params_.grammar.empty()) {
         auto grammar = build_grammar(parser.params_.grammar);
         if (!grammar) {
             throw std::runtime_error("Failed to build grammar: " + parser.params_.grammar);
@@ -1342,6 +1392,11 @@ class peg_test_builder {
         return *this;
     }
 
+    peg_test_builder & tool_choice(common_chat_tool_choice choice) {
+        tc_.params.tool_choice = choice;
+        return *this;
+    }
+
     peg_test_builder & json_schema(const std::string & schema) {
         tc_.params.json_schema = schema;
         return *this;
@@ -1354,6 +1409,16 @@ class peg_test_builder {
 
     peg_test_builder & expect_reconstruction(bool val = true) {
         tc_.expect_reconstruction = val;
+        return *this;
+    }
+
+    peg_test_builder & expect_incremental_diffs(bool val = true) {
+        tc_.expect_incremental_diffs = val;
+        return *this;
+    }
+
+    peg_test_builder & expect_grammar_match(bool val = true) {
+        tc_.expect_grammar_match = val;
         return *this;
     }
 
@@ -1570,6 +1635,26 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
             .tools({ special_function_tool })
             .expect(message_assist_call_thoughts)
+            .run();
+
+        // Required tool calls may still have a short content transition before the tool call.
+        tst.test(
+               "I'm\nthinking\n</think>\n"
+               "Let me inspect one more file first.\n"
+               "<tool_call>\n"
+               "<function=special_function>\n"
+               "<parameter=arg1>\n1\n</parameter>\n"
+               "</function>\n"
+               "</tool_call>")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .enable_thinking(true)
+            .tool_choice(COMMON_CHAT_TOOL_CHOICE_REQUIRED)
+            .tools({ special_function_tool })
+            .expect_reasoning("I'm\nthinking")
+            .expect_content("Let me inspect one more file first.")
+            .expect_tool_calls({
+                { "special_function", R"({"arg1": 1})", {} },
+            })
             .run();
 
         tst.test(
@@ -2103,6 +2188,28 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
                 "<|tool_call>call:todo_list{todos:[]}<tool_call|>")
             .tools({ todo_list })
             .expect(message_with_tool_calls("todo_list", R"({"todos":[]})"))
+            .run();
+
+        // Some Gemma 4 runs stringify structured params inside a string. Coerce them back to the
+        // schema-declared container when the string contains valid JSON.
+        tst.test(
+                "<|tool_call>call:edit{path:<|\"|>/tmp/foo.js<|\"|>,edits:<|\"|>[{\"newText\":\"const x = { \\\"color\\\": 0xff0000 };\",\"oldText\":\"const x = { \\\"color\\\": 0x3366ff };\"}]<|\"|>}<tool_call|>")
+            .tool_choice(COMMON_CHAT_TOOL_CHOICE_REQUIRED)
+            .tools({ edit_batch_tool })
+            .expect_incremental_diffs(false)
+            .expect_grammar_match(false)
+            .expect_tool_calls({
+                { "edit", R"({"path":"/tmp/foo.js","edits":[{"newText":"const x = { \"color\": 0xff0000 };","oldText":"const x = { \"color\": 0x3366ff };"}]})", {} },
+            })
+            .run();
+
+        // Do not coerce JSON-looking strings when the schema still explicitly allows strings.
+        tst.test(
+                "<|tool_call>call:set_payload{payload:<|\"|>[1,2,3]<|\"|>}<tool_call|>")
+            .tools({ union_payload_tool })
+            .expect_tool_calls({
+                { "set_payload", R"({"payload":"[1,2,3]"})", {} },
+            })
             .run();
 
         // Tool call with empty dict

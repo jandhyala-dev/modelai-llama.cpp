@@ -2051,6 +2051,95 @@ static json common_chat_extra_context() {
     return ctx;
 }
 
+static bool schema_includes_type(const json & schema, const char * type_name) {
+    if (!schema.is_object() || !schema.contains("type")) {
+        return false;
+    }
+
+    const auto & type = schema.at("type");
+    if (type.is_string()) {
+        return type == type_name;
+    }
+
+    if (type.is_array()) {
+        for (const auto & item : type) {
+            if (item == type_name) {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+static bool coerce_stringified_tool_argument(const json & schema, json & value) {
+    bool changed = false;
+    const bool wants_object = schema_includes_type(schema, "object");
+    const bool wants_array  = schema_includes_type(schema, "array");
+    const bool wants_string = schema_includes_type(schema, "string");
+
+    if (value.is_string() && !wants_string && (wants_object || wants_array)) {
+        try {
+            json parsed = json::parse(value.get<std::string>());
+            if ((wants_object && parsed.is_object()) || (wants_array && parsed.is_array())) {
+                value = std::move(parsed);
+                changed = true;
+            }
+        } catch (const std::exception &) {
+        }
+    }
+
+    if (wants_object && value.is_object() && schema.contains("properties") && schema.at("properties").is_object()) {
+        for (auto & [key, child_value] : value.items()) {
+            const auto & properties = schema.at("properties");
+            if (properties.contains(key)) {
+                changed = coerce_stringified_tool_argument(properties.at(key), child_value) || changed;
+            }
+        }
+        return changed;
+    }
+
+    if (wants_array && value.is_array() && schema.contains("items") && schema.at("items").is_object()) {
+        for (auto & item : value) {
+            changed = coerce_stringified_tool_argument(schema.at("items"), item) || changed;
+        }
+    }
+
+    return changed;
+}
+
+static void normalize_tool_call_arguments_with_schema(const std::vector<common_chat_tool> & tools, common_chat_msg & msg) {
+    if (tools.empty() || msg.tool_calls.empty()) {
+        return;
+    }
+
+    for (auto & tool_call : msg.tool_calls) {
+        auto tool_it = std::find_if(tools.begin(), tools.end(), [&](const common_chat_tool & tool) {
+            return tool.name == tool_call.name;
+        });
+
+        if (tool_it == tools.end() || tool_it->parameters.empty()) {
+            continue;
+        }
+
+        try {
+            json args = json::parse(tool_call.arguments);
+            if (!args.is_object()) {
+                continue;
+            }
+
+            json schema = json::parse(tool_it->parameters);
+            common_schema_info schema_info;
+            schema_info.resolve_refs(schema);
+
+            if (coerce_stringified_tool_argument(schema, args)) {
+                tool_call.arguments = args.dump();
+            }
+        } catch (const std::exception &) {
+        }
+    }
+}
+
 std::optional<common_chat_params> common_chat_try_specialized_template(
         const common_chat_template &          tmpl,
         const std::string &                   src,
@@ -2308,8 +2397,10 @@ static common_chat_params common_chat_templates_apply_legacy(const struct common
 common_chat_params common_chat_templates_apply(const struct common_chat_templates *        tmpls,
                                                const struct common_chat_templates_inputs & inputs) {
     GGML_ASSERT(tmpls != nullptr);
-    return inputs.use_jinja ? common_chat_templates_apply_jinja(tmpls, inputs) :
-                              common_chat_templates_apply_legacy(tmpls, inputs);
+    common_chat_params params = inputs.use_jinja ? common_chat_templates_apply_jinja(tmpls, inputs) :
+                                                   common_chat_templates_apply_legacy(tmpls, inputs);
+    params.tools = inputs.tools;
+    return params;
 }
 
 common_chat_msg common_chat_parse(const std::string &               input,
@@ -2363,6 +2454,9 @@ common_chat_msg common_chat_peg_parse(const common_peg_arena &          src_pars
                 fprintf(stderr, "\nAST for partial parse (fail):\n%s\n", ctx.ast.dump().c_str());
                 fflush(stderr);
             }
+            if (!is_partial) {
+                normalize_tool_call_arguments_with_schema(params.tools, msg);
+            }
             return msg;
         }
         throw std::runtime_error(std::string("Failed to parse input at pos ") + std::to_string(result.end) + ": " +
@@ -2379,6 +2473,9 @@ common_chat_msg common_chat_peg_parse(const common_peg_arena &          src_pars
         mapper = std::make_unique<common_chat_peg_mapper>(msg);
     }
     mapper->from_ast(ctx.ast, result);
+    if (!is_partial) {
+        normalize_tool_call_arguments_with_schema(params.tools, msg);
+    }
 
     if (ctx.is_debug()) {
         fprintf(stderr, "\nAST for %s parse:\n%s\n", is_partial ? "partial" : "full", ctx.ast.dump().c_str());
@@ -2396,4 +2493,3 @@ std::map<std::string, bool> common_chat_templates_get_caps(const common_chat_tem
     GGML_ASSERT(chat_templates->template_default != nullptr);
     return chat_templates->template_default->caps.to_map();
 }
-
