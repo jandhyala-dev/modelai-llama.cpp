@@ -16,16 +16,36 @@ Three long-lived branches, no sprawl. Feature work uses short-lived branches off
 
 ## Sync Cadence
 
-- **Weekly:** Automated CI sync every Saturday 2PM PDT (`modelai-upstream-sync.yml`). Updates `upstream-master` tracking branch, merges `upstream/master` into `upstream-sync`, builds, tests, and auto-merges into `modelai-main`. Opens a GitHub Issue on failure.
+- **Weekly:** Automated CI sync every Saturday 2PM PDT (`modelai-upstream-sync.yml`). Updates `upstream-master`, merges `upstream/master` into `upstream-sync`, builds and tests the merge, fast-forwards `modelai-main`, then rebuilds `modelai-main` and verifies `build/bin/llama-server --version` carries the current `HEAD` SHA before pushing. Opens a GitHub Issue on failure.
 - **Emergency:** Security patches (e.g., RCE fixes) are synced and merged same-day via `workflow_dispatch`.
 
 ## What Gets Validated on Each Merge
 
-1. **Build:** `cmake -B build -DGGML_METAL=ON && cmake --build build --config Release`
-2. **Tests:** `ctest --test-dir build -L main --output-on-failure` — all CI-gated tests must pass
-3. **Conflict resolution:** Merge conflicts in compaction files are resolved manually and re-tested
-4. **CI workflow audit:** New upstream workflows are disabled to prevent billing drain on the fork (only `modelai-ci`, `modelai-server-smoke`, `modelai-perf-smoke` are active)
-5. **Upstream KV cache watch:** Check for open PRs or merged changes that touch KV cache internals (see Weekly Upstream Watch below)
+1. **Build on `upstream-sync`:** `cmake -B build -DGGML_METAL=ON && cmake --build build --config Release`
+2. **Tests on `upstream-sync`:** `ctest --test-dir build -L main --output-on-failure` — all CI-gated tests must pass
+3. **Fast-forward `modelai-main`:** The validated `upstream-sync` commit is promoted without a new merge commit
+4. **Rebuild on `modelai-main`:** CI reruns configure + build after the fast-forward so generated build metadata is refreshed on the stable branch
+5. **Binary stamp verification:** `./build/bin/llama-server --version` must report the current `modelai-main` `HEAD` SHA
+6. **Conflict resolution:** Merge conflicts in compaction files are resolved manually and re-tested
+7. **CI workflow audit:** New upstream workflows are disabled to prevent billing drain on the fork (only `modelai-ci`, `modelai-server-smoke`, `modelai-perf-smoke` are active)
+8. **Upstream KV cache watch:** Check for open PRs or merged changes that touch KV cache internals (see Weekly Upstream Watch below)
+
+## Local Developer Rebuild
+
+GitHub Actions can verify that the workflow's `modelai-main` build matches the branch `HEAD`, but it cannot update a developer's already-built local binary. After pulling a synced `modelai-main`, rebuild locally if you will launch `./build/bin/llama-server` from your workstation:
+
+```bash
+git checkout modelai-main
+git pull --ff-only
+cmake -B build \
+  -DCMAKE_BUILD_RPATH='@loader_path' \
+  -DGGML_METAL=ON \
+  -DLLAMA_BUILD_TESTS=ON \
+  -DLLAMA_BUILD_EXAMPLES=ON \
+  -DLLAMA_FATAL_WARNINGS=ON
+cmake --build build --config Release -j $(sysctl -n hw.logicalcpu)
+./build/bin/llama-server --version
+```
 
 ## Weekly Upstream Watch
 
