@@ -1249,6 +1249,7 @@ private:
                 /* reasoning_budget      */ params_base.reasoning_budget,
                 /* reasoning_budget_msg  */ params_base.reasoning_budget_message,
                 /* media_path            */ params_base.media_path,
+                /* parallel_tool_calls   */ params_base.parallel_tool_calls,
                 /* force_pure_content    */ params_base.force_pure_content_parser
             };
         }
@@ -2747,6 +2748,12 @@ private:
                 }
 
                 slot.truncated = true;
+
+                // Context shifts rewrite the visible token history, so speculative
+                // decoding must restart from the shifted prompt tokens.
+                if (slot.can_speculate()) {
+                    common_speculative_begin(slot.spec, slot.prompt.tokens.get_text_tokens());
+                }
             }
         }
 

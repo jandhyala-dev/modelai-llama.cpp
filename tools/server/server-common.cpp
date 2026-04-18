@@ -1024,7 +1024,7 @@ json oaicompat_chat_params_parse(
     inputs.json_schema           = json_schema.is_null() ? "" : json_schema.dump();
     inputs.grammar               = grammar;
     inputs.use_jinja             = opt.use_jinja;
-    inputs.parallel_tool_calls   = json_value(body, "parallel_tool_calls", false);
+    inputs.parallel_tool_calls   = json_value(body, "parallel_tool_calls", opt.parallel_tool_calls);
     inputs.add_generation_prompt = json_value(body, "add_generation_prompt", true);
     inputs.reasoning_format      = opt.reasoning_format;
     if (body.contains("reasoning_format")) {
@@ -1499,6 +1499,30 @@ json convert_transcriptions_to_chatcmpl(
     return chatcmpl_body;
 }
 
+// Reformat an x-anthropic-billing-header prompt so its per-request cch stamp
+// does not defeat prompt-prefix caching.
+static void normalize_anthropic_billing_header(std::string & system_text) {
+    if (system_text.rfind("x-anthropic-billing-header:", 0) != 0) {
+        return;
+    }
+
+    const size_t header_prefix_length = sizeof("x-anthropic-billing-header:") - 1;
+    const size_t cch_length = 5;
+    const size_t index_cch = system_text.find("cch=", header_prefix_length);
+    if (index_cch == std::string::npos) {
+        return;
+    }
+
+    const size_t index_replace = index_cch + 4;
+    if (index_replace + cch_length < system_text.length() && system_text[index_replace + cch_length] == ';') {
+        for (size_t i = 0; i < cch_length; ++i) {
+            system_text[index_replace + i] = 'f';
+        }
+    } else {
+        LOG_ERR("anthropic string not as expected: %s", system_text.c_str());
+    }
+}
+
 json convert_anthropic_to_oai(const json & body) {
     json oai_body;
 
@@ -1510,10 +1534,13 @@ json convert_anthropic_to_oai(const json & body) {
 
         if (system_param.is_string()) {
             system_content = system_param.get<std::string>();
+            normalize_anthropic_billing_header(system_content);
         } else if (system_param.is_array()) {
             for (const auto & block : system_param) {
                 if (json_value(block, "type", std::string()) == "text") {
-                    system_content += json_value(block, "text", std::string());
+                    auto system_text = json_value(block, "text", std::string());
+                    normalize_anthropic_billing_header(system_text);
+                    system_content += system_text;
                 }
             }
         }
