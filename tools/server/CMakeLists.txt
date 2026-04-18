@@ -23,7 +23,7 @@ endif()
 
 target_include_directories(${TARGET} PRIVATE ../mtmd)
 target_include_directories(${TARGET} PRIVATE ${CMAKE_SOURCE_DIR})
-target_link_libraries(${TARGET} PUBLIC common mtmd llama ${CMAKE_THREAD_LIBS_INIT})
+target_link_libraries(${TARGET} PUBLIC llama-common mtmd ${CMAKE_THREAD_LIBS_INIT})
 
 
 # llama-server executable
@@ -68,11 +68,5 @@ install(TARGETS ${TARGET} RUNTIME)
 
 target_include_directories(${TARGET} PRIVATE ../mtmd)
 target_include_directories(${TARGET} PRIVATE ${CMAKE_SOURCE_DIR})
+target_link_libraries(${TARGET} PRIVATE server-context PUBLIC llama-common cpp-httplib ${CMAKE_THREAD_LIBS_INIT})
 target_compile_features(${TARGET} PRIVATE cxx_std_17)
-
-# MSVC single-pass linker needs WHOLE_ARCHIVE to resolve transitive symbols from llama
-if(MSVC)
-    target_link_libraries(${TARGET} PRIVATE server-context PUBLIC common $<LINK_LIBRARY:WHOLE_ARCHIVE,llama> cpp-httplib ${CMAKE_THREAD_LIBS_INIT})
-else()
-    target_link_libraries(${TARGET} PRIVATE server-context PUBLIC common cpp-httplib ${CMAKE_THREAD_LIBS_INIT})
-endif()
