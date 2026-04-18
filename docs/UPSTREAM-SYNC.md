@@ -26,9 +26,10 @@ Three long-lived branches, no sprawl. Feature work uses short-lived branches off
 3. **Fast-forward `modelai-main`:** The validated `upstream-sync` commit is promoted without a new merge commit
 4. **Rebuild on `modelai-main`:** CI reruns configure + build after the fast-forward so generated build metadata is refreshed on the stable branch
 5. **Binary stamp verification:** `./build/bin/llama-server --version` must report the current `modelai-main` `HEAD` SHA
-6. **Conflict resolution:** Merge conflicts in compaction files are resolved manually and re-tested
-7. **CI workflow audit:** New upstream workflows are disabled to prevent billing drain on the fork (only `modelai-ci`, `modelai-server-smoke`, `modelai-perf-smoke` are active)
-8. **Upstream KV cache watch:** Check for open PRs or merged changes that touch KV cache internals (see Weekly Upstream Watch below)
+6. **COT resolver verification:** CI clones the `cot` repo as a sibling checkout and verifies `InferenceServer.find_binary()` auto-resolves the freshly rebuilt sibling `modelai-llama.cpp/build/bin/llama-server` with no env var and no `engines.yaml` override
+7. **Conflict resolution:** Merge conflicts in compaction files are resolved manually and re-tested
+8. **CI workflow audit:** New upstream workflows are disabled to prevent billing drain on the fork (only `modelai-ci`, `modelai-server-smoke`, `modelai-perf-smoke` are active)
+9. **Upstream KV cache watch:** Check for open PRs or merged changes that touch KV cache internals (see Weekly Upstream Watch below)
 
 ## Local Developer Rebuild
 
