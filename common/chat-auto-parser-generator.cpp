@@ -440,11 +440,11 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
         // Be tolerant on parse: some models emit multiple tagged tool calls in one turn
         // even when parallel_tool_calls was not explicitly requested. Accepting the
         // repeated calls here avoids hard parser failures in agent workflows.
-        tool_calls = p.trigger_rule("tool-call", wrapped_call + p.zero_or_more(p.space() + wrapped_call));
+        tool_calls = p.trigger_rule("tool-call", wrapped_call + p.zero_or_more(p.space() + wrapped_call) + p.space());
         if (!format.section_start.empty()) {
             tool_calls = p.trigger_rule("tool-calls",
                                         p.literal(format.section_start) + p.space() + tool_calls + p.space() +
-                                            (format.section_end.empty() ? p.end() : p.literal(format.section_end)));
+                                            (format.section_end.empty() ? p.end() : p.literal(format.section_end) + p.space()));
         }
     } else {
         std::string separator = ", ";  // Default

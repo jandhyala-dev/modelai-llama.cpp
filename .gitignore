@@ -151,3 +151,5 @@ poetry.toml
 /.windsurf/
 # emscripten
 a.out.*
+
+AGENTS.local.md

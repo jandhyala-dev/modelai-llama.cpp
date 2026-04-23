@@ -1,4 +1,5 @@
 #include "../tools/server/server-common.h"
+#include "../tools/server/server-chat.h"
 #include "testing.h"
 
 #include <fstream>
@@ -26,7 +27,7 @@ static std::string read_template(const std::string & path) {
     return buffer.str();
 }
 
-static server_chat_params make_chat_params(bool parallel_tool_calls) {
+static server_chat_params make_chat_params() {
     return {
         /* use_jinja             */ true,
         /* prefill_assistant     */ true,
@@ -39,7 +40,7 @@ static server_chat_params make_chat_params(bool parallel_tool_calls) {
         /* reasoning_budget      */ -1,
         /* reasoning_budget_msg  */ "",
         /* media_path            */ "",
-        /* parallel_tool_calls   */ parallel_tool_calls,
+        /* parallel_tool_calls   */ false,
         /* force_pure_content    */ false,
     };
 }
@@ -64,13 +65,13 @@ int main(int argc, char ** argv) {
             })},
         };
 
-        json out = convert_anthropic_to_oai(body);
+        json out = server_chat_convert_anthropic_to_oai(body);
         t.assert_equal("system header cch is normalized",
             "x-anthropic-billing-header: cc_version=2.1.101.e51; cc_entrypoint=cli; cch=fffff;You are Claude Code.",
             out.at("messages").at(0).at("content").get<std::string>());
     });
 
-    t.test("oaicompat_chat_params_parse defaults parallel tool calls from server config", [](testing & t) {
+    t.test("oaicompat_chat_params_parse honors explicit parallel tool calls setting", [](testing & t) {
         json body = {
             {"messages", json::array({
                 {
@@ -84,14 +85,19 @@ int main(int argc, char ** argv) {
             })},
         };
 
+        json serial_body = body;
+        json parallel_body = body;
+        serial_body["parallel_tool_calls"] = false;
+        parallel_body["parallel_tool_calls"] = true;
+
         std::vector<raw_buffer> out_files_serial;
         std::vector<raw_buffer> out_files_parallel;
-        auto serial = oaicompat_chat_params_parse(body, make_chat_params(false), out_files_serial);
-        auto parallel = oaicompat_chat_params_parse(body, make_chat_params(true), out_files_parallel);
+        auto serial = oaicompat_chat_params_parse(serial_body, make_chat_params(), out_files_serial);
+        auto parallel = oaicompat_chat_params_parse(parallel_body, make_chat_params(), out_files_parallel);
 
         t.assert_true("serial grammar exists", serial.contains("grammar"));
         t.assert_true("parallel grammar exists", parallel.contains("grammar"));
-        t.assert_true("default parallel tool-calls changes the generated grammar",
+        t.assert_true("explicit parallel tool-calls changes the generated grammar",
             serial.at("grammar").get<std::string>() != parallel.at("grammar").get<std::string>());
     });
 
