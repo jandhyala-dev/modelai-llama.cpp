@@ -155,7 +155,7 @@ void io_write_pod(llama_io_write_i & io, const T & value) {
 
 template<typename T>
 void io_read_pod(llama_io_read_i & io, T & value) {
-    io.read_to(&value, sizeof(value));
+    io.read(&value, sizeof(value));
 }
 
 void io_write_bytes(llama_io_write_i & io, const std::vector<uint8_t> & data) {
@@ -176,7 +176,7 @@ void io_read_bytes(llama_io_read_i & io, std::vector<uint8_t> & data) {
     }
     data.resize((size_t) n_bytes);
     if (n_bytes > 0) {
-        io.read_to(data.data(), (size_t) n_bytes);
+        io.read(data.data(), (size_t) n_bytes);
     }
 }
 
@@ -196,7 +196,7 @@ void io_read_floats(llama_io_read_i & io, std::vector<float> & data) {
     }
     data.resize((size_t) n_elem);
     if (n_elem > 0) {
-        io.read_to(data.data(), (size_t) n_elem * sizeof(float));
+        io.read(data.data(), (size_t) n_elem * sizeof(float));
     }
 }
 } // namespace
@@ -738,7 +738,7 @@ bool llama_compacted_prefix_store::state_read(llama_io_read_i & io, llama_seq_id
 
         std::vector<llama_pos> logical_positions(n_positions);
         if (n_positions > 0) {
-            io.read_to(logical_positions.data(), size_t(n_positions) * sizeof(llama_pos));
+            io.read(logical_positions.data(), size_t(n_positions) * sizeof(llama_pos));
         }
 
         io_read_pod(io, n_layers);

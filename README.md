@@ -133,6 +133,12 @@ This project is maintained on a **best-effort basis with no SLA**. Bug reports a
 **Scope:** This fork focuses on KV cache compaction. Features unrelated to compaction should be contributed upstream to [ggml-org/llama.cpp](https://github.com/ggml-org/llama.cpp).
 
 ## Documentation
+- [How to build](docs/build.md)
+- [Running on Docker](docs/docker.md)
+- [Build on Android](docs/android.md)
+- [Multi-GPU usage](docs/multi-gpu.md)
+- [Performance troubleshooting](docs/development/token_generation_performance_tips.md)
+- [GGML tips & tricks](https://github.com/ggml-org/llama.cpp/wiki/GGML-Tips-&-Tricks)
 
 - [HIGHLIGHTS.md](docs/HIGHLIGHTS.md) -- Full benchmark tables and feature summary
 - [BUGS-AND-FIXES.md](docs/BUGS-AND-FIXES.md) -- All bugs found and fixed

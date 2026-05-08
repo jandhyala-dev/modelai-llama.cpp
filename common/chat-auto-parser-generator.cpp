@@ -136,10 +136,10 @@ common_peg_parser analyze_reasoning::build_parser(parser_build_context & ctx) co
         if (!end.empty()) {
             if (!start.empty()) {
                 // Standard tag-based: optional(<think>reasoning</think>)
-                return p.optional(start + p.reasoning(p.until(end)) + end + p.space());
+                return p.optional(p.optspace(start) + p.reasoning(p.until(trim_whitespace(end))) + p.optspace(end));
             }
             // Delimiter-style (empty start)
-            return p.optional(p.reasoning(p.until(end)) + end + p.space());
+            return p.optional(p.reasoning(p.until(trim_whitespace(end))) + p.optspace(end));
         }
     }
 

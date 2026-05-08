@@ -102,7 +102,7 @@ public:
         buf.insert(buf.end(), bytes, bytes + size);
     }
 
-    void write_tensor(const ggml_tensor * /* tensor */, size_t /* offset */, size_t /* size */) override {
+    void write_tensor(ggml_tensor * /* tensor */, size_t /* offset */, size_t /* size */) override {
         throw std::runtime_error("tensor writes are not used in compacted-prefix store tests");
     }
 
@@ -117,17 +117,16 @@ class test_io_read_buffer : public llama_io_read_i {
 public:
     explicit test_io_read_buffer(const std::vector<uint8_t> & src) : buf(src) {}
 
-    const uint8_t * read(size_t size) override {
+    void read(void * dst, size_t size) override {
         if (off + size > buf.size()) {
             throw std::runtime_error("unexpected end of compacted-prefix test buffer");
         }
-        const uint8_t * ptr = buf.data() + off;
+        std::memcpy(dst, buf.data() + off, size);
         off += size;
-        return ptr;
     }
 
-    void read_to(void * dst, size_t size) override {
-        std::memcpy(dst, read(size), size);
+    void read_tensor(ggml_tensor * /* tensor */, size_t /* offset */, size_t /* size */) override {
+        throw std::runtime_error("tensor reads are not used in compacted-prefix store tests");
     }
 
     size_t n_bytes() override {
