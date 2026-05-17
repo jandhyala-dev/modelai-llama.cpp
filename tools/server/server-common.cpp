@@ -1041,11 +1041,25 @@ json oaicompat_chat_params_parse(
     const bool default_parallel_tool_calls = opt.parallel_tool_calls || json_value(caps, "supports_parallel_tool_calls", false);
     inputs.parallel_tool_calls   = json_value(body, "parallel_tool_calls", default_parallel_tool_calls);
     inputs.add_generation_prompt = json_value(body, "add_generation_prompt", true);
+    inputs.continue_final_message = body.contains("continue_final_message") ?
+        common_chat_continuation_parse(body.at("continue_final_message")) :
+        COMMON_CHAT_CONTINUATION_NONE;
+    if (inputs.continue_final_message == COMMON_CHAT_CONTINUATION_NONE && opt.prefill_assistant
+        && !inputs.messages.empty() && inputs.messages.back().role == "assistant") {
+        if (inputs.messages.size() >= 2 && inputs.messages[inputs.messages.size() - 2].role == "assistant") {
+            throw std::invalid_argument("Cannot have 2 or more assistant messages at the end of the list.");
+        }
+        inputs.continue_final_message = COMMON_CHAT_CONTINUATION_AUTO;
+        inputs.add_generation_prompt  = false;
+    }
+    if (inputs.continue_final_message != COMMON_CHAT_CONTINUATION_NONE && inputs.add_generation_prompt) {
+        throw std::invalid_argument("Cannot set both add_generation_prompt and continue_final_message to true.");
+    }
     inputs.reasoning_format      = opt.reasoning_format;
     if (body.contains("reasoning_format")) {
         inputs.reasoning_format = common_reasoning_format_from_name(body.at("reasoning_format").get<std::string>());
     }
-    inputs.enable_thinking       = opt.enable_thinking;
+    inputs.enable_thinking = opt.enable_thinking;
     if (!inputs.tools.empty() && inputs.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE) {
         if (body.contains("grammar")) {
             throw std::invalid_argument("Cannot use custom grammar constraints with tools.");
@@ -1070,43 +1084,10 @@ json oaicompat_chat_params_parse(
         throw std::invalid_argument("invalid type for \"enable_thinking\" (expected boolean, got string)");
     }
 
-    // if the assistant message appears at the end of list, we do not add end-of-turn token
-    // for ex. this can be useful to modify the reasoning process in reasoning models
-    bool prefill_assistant_message = !inputs.messages.empty() && inputs.messages.back().role == "assistant" && opt.prefill_assistant;
-    common_chat_msg last_message;
-    if (prefill_assistant_message) {
-        last_message = inputs.messages.back();
-        inputs.messages.pop_back();
-
-        /* sanity check, max one assistant message at the end of the list */
-        if (!inputs.messages.empty() && inputs.messages.back().role == "assistant"){
-            throw std::invalid_argument("Cannot have 2 or more assistant messages at the end of the list.");
-        }
-
-        /* TODO: test this properly */
-        inputs.reasoning_format = COMMON_REASONING_FORMAT_NONE;
-
-        if ( inputs.enable_thinking ) {
-            throw std::invalid_argument("Assistant response prefill is incompatible with enable_thinking.");
-        }
-
-        inputs.add_generation_prompt = true;
-    }
     inputs.force_pure_content = opt.force_pure_content;
 
     // Apply chat template to the list of messages
     auto chat_params = common_chat_templates_apply(opt.tmpls.get(), inputs);
-
-    /* Append assistant prefilled message */
-    if (prefill_assistant_message) {
-        if (!last_message.content_parts.empty()) {
-            for (auto & p : last_message.content_parts) {
-                chat_params.prompt += p.text;
-            }
-        } else {
-            chat_params.prompt += last_message.content;
-        }
-    }
 
     llama_params["chat_format"] = static_cast<int>(chat_params.format);
     llama_params["prompt"]      = chat_params.prompt;

@@ -109,6 +109,7 @@ class ServerProcess:
     log_path: str | None = None
     webui_mcp_proxy: bool = False
     endpoint_compact: bool | None = False
+    backend_sampling: bool = False
     gcp_compat: bool = False
 
     # session variables
@@ -255,6 +256,8 @@ class ServerProcess:
             server_args.append("--webui-mcp-proxy")
         if self.endpoint_compact:
             server_args.append("--endpoint-compact")
+        if self.backend_sampling:
+            server_args.append("--backend_sampling")
         if self.gcp_compat:
             env["AIP_MODE"] = "PREDICTION"
 
