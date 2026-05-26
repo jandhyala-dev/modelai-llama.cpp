@@ -1,4 +1,4 @@
-name: CI (UI)
+name: UI
 
 on:
   workflow_dispatch:
@@ -11,14 +11,16 @@ on:
     branches:
       - master
     paths: [
-      '.github/workflows/ui-ci.yml',
+      '.github/workflows/ui.yml',
+      '.github/workflows/ui-build.yml',
       'tools/ui/**.*',
       'tools/server/tests/**.*'
     ]
   pull_request:
     types: [opened, synchronize, reopened]
     paths: [
-      '.github/workflows/ui-ci.yml',
+      '.github/workflows/ui.yml',
+      '.github/workflows/ui-build.yml',
       'tools/ui/**.*',
       'tools/server/tests/**.*'
     ]
@@ -39,7 +41,7 @@ jobs:
     uses: ./.github/workflows/ui-build.yml
 
   ui-checks:
-    name: UI Checks
+    name: Checks
     needs: ui-build
     runs-on: ubuntu-latest
     continue-on-error: true
