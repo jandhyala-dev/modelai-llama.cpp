@@ -102,7 +102,7 @@ public:
         buf.insert(buf.end(), bytes, bytes + size);
     }
 
-    void write_tensor(ggml_tensor * /* tensor */, size_t /* offset */, size_t /* size */) override {
+    [[noreturn]] void write_tensor(ggml_tensor * /* tensor */, size_t /* offset */, size_t /* size */) override {
         throw std::runtime_error("tensor writes are not used in compacted-prefix store tests");
     }
 
@@ -125,7 +125,7 @@ public:
         off += size;
     }
 
-    void read_tensor(ggml_tensor * /* tensor */, size_t /* offset */, size_t /* size */) override {
+    [[noreturn]] void read_tensor(ggml_tensor * /* tensor */, size_t /* offset */, size_t /* size */) override {
         throw std::runtime_error("tensor reads are not used in compacted-prefix store tests");
     }
 
