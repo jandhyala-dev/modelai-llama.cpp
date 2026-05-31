@@ -72,7 +72,17 @@ static compacted_prefix_concat_result build_compacted_prefix_concat(
 
     v = ggml_concat(ctx0, compacted->v, v, 2);
 
-    ggml_tensor * kq_mask_combined = ggml_concat(ctx0, inp->get_compacted_kq_mask(), kq_mask, 0);
+    // Upstream (#23764) now creates the live self mask as F16 whenever flash_attn is enabled,
+    // while the compacted-prefix mask is always built F32. ggml_concat requires matching types,
+    // so normalize the live mask to the compacted mask's type before concatenating. The combined
+    // F32 mask is cast back to F16 below when flash attention will actually be used.
+    ggml_tensor * compacted_kq_mask = inp->get_compacted_kq_mask();
+    ggml_tensor * live_kq_mask = kq_mask;
+    if (live_kq_mask->type != compacted_kq_mask->type) {
+        live_kq_mask = ggml_cast(ctx0, live_kq_mask, compacted_kq_mask->type);
+    }
+
+    ggml_tensor * kq_mask_combined = ggml_concat(ctx0, compacted_kq_mask, live_kq_mask, 0);
     ggml_tensor * kq_b_combined = kq_b;
 
     if (zero_beta) {
