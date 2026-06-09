@@ -34,7 +34,7 @@ void llama_kv_compact_prepare_q_capture(
         struct llama_context * ctx,
         llama_q_capture_state & q_state_out) {
     const auto & hparams = ctx->get_model().hparams;
-    const uint32_t n_layer     = hparams.n_layer;
+    const uint32_t n_layer     = hparams.n_layer_all;
     const uint32_t n_embd_head = hparams.n_embd_head_k(0);
     const uint32_t n_head_q    = hparams.n_head(0);
 
@@ -64,7 +64,7 @@ bool llama_kv_compact_prefill_q_from_live_kv(
 
     // Phase 1: Repeat-prefill with Q-capture.
     const auto & hparams = ctx->get_model().hparams;
-    const uint32_t n_layer     = hparams.n_layer;
+    const uint32_t n_layer     = hparams.n_layer_all;
     const uint32_t n_embd_head = hparams.n_embd_head_k(0);
     const uint32_t n_head_q    = hparams.n_head(0);
 

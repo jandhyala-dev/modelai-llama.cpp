@@ -92,7 +92,7 @@ bool llama_kv_compact_iterative_on_policy_from_live_kv(
 
     // On-policy passes.
     const auto & hparams = ctx->get_model().hparams;
-    const uint32_t n_layer     = hparams.n_layer;
+    const uint32_t n_layer     = hparams.n_layer_all;
     const uint32_t n_embd_head = hparams.n_embd_head_k(0);
     const uint32_t n_head_q    = hparams.n_head(0);
 
@@ -212,7 +212,7 @@ bool llama_kv_compact_sequential_on_policy_from_live_kv(
     const auto & layouts = store->get_layouts();
 
     const auto & hparams = ctx->get_model().hparams;
-    const uint32_t n_layer     = hparams.n_layer;
+    const uint32_t n_layer     = hparams.n_layer_all;
     const uint32_t n_embd_head = hparams.n_embd_head_k(0);
     const uint32_t n_head_q    = hparams.n_head(0);
 

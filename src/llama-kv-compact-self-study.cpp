@@ -475,7 +475,7 @@ bool llama_kv_compact_self_study_from_live_kv(
 
     // --- Phase 1: Multi-round Q-capture generation (V2 — GAP-03) ---
     const auto & model_hparams = ctx->get_model().hparams;
-    const uint32_t n_layer     = model_hparams.n_layer;
+    const uint32_t n_layer     = model_hparams.n_layer_all;
     const uint32_t n_embd_head = model_hparams.n_embd_head_k(0);
     const uint32_t n_head_q    = model_hparams.n_head(0);
 
@@ -921,7 +921,7 @@ bool llama_kv_compact_chunked_self_study_from_live_kv(
 
     // ===== Phase 1: Multi-round Q-capture generation =====
     const auto & model_hparams = ctx->get_model().hparams;
-    const uint32_t n_layer     = model_hparams.n_layer;
+    const uint32_t n_layer     = model_hparams.n_layer_all;
     const uint32_t n_embd_head = model_hparams.n_embd_head_k(0);
     const uint32_t n_head_q    = model_hparams.n_head(0);
 

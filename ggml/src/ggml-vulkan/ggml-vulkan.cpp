@@ -62,8 +62,10 @@ typedef struct VkPhysicalDeviceCooperativeMatrixDecodeVectorFeaturesNV {
 #include <map>
 #include <set>
 #include <unordered_map>
+#include <shared_mutex>
 #include <mutex>
 #include <future>
+#include <condition_variable>
 #include <thread>
 
 #if defined(_MSC_VER)
@@ -158,8 +160,9 @@ struct vk_pipeline_struct {
     uint32_t align;
     // true if fields have been set by ggml_vk_create_pipeline
     bool initialized {};
-    // set to true to request the pipeline is compiled
-    std::atomic<bool> needed {};
+    // true while a compile is in flight, used to dedupe concurrent claims.
+    // Protected by device->compile_mutex.
+    bool compile_pending {};
     // set to true when the shader has been compiled
     std::atomic<bool> compiled {};
     // number of registers used, extracted from pipeline executable properties
@@ -618,6 +621,14 @@ static constexpr std::initializer_list<std::array<int, 3>> rms_norm_mul_rope_vie
 
 struct vk_device_struct {
     std::recursive_mutex mutex;
+    mutable std::shared_mutex pinned_memory_mutex;
+
+    // Guards compile_pending, all_pipelines, and the dynamic pipeline maps
+    // (flash_attn, fa_mask_opt, solve_tri, conv2d, etc). The actual compile
+    // runs with no lock held, so different pipelines can compile in parallel.
+    // Lock order is device->mutex -> compile_mutex, never the reverse.
+    std::mutex compile_mutex;
+    std::condition_variable compile_cv;
 
     vk::PhysicalDevice physical_device;
     vk::PhysicalDeviceProperties properties;
@@ -1727,7 +1738,7 @@ struct ggml_vk_garbage_collector {
 };
 
 static void ggml_vk_preallocate_buffers(ggml_backend_vk_context * ctx, vk_context subctx);
-static void ggml_vk_load_shaders(vk_device& device);
+static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested = nullptr);
 static void ggml_pipeline_allocate_descriptor_sets(ggml_backend_vk_context * ctx);
 
 static bool vk_memory_logger_enabled = false;
@@ -1965,6 +1976,9 @@ struct ggml_backend_vk_context {
     // Cache most recent tensor that was converted into prealloc_y, and what pipeline it used to convert.
     vk_pipeline_struct * prealloc_y_last_pipeline_used {};
     const ggml_tensor * prealloc_y_last_tensor_used {};
+    // True when prealloc_y holds the padded fp16 layout used by the coopmat2 B decode-vector callback.
+    // If false, then it's contiguous.
+    bool prealloc_y_last_decode_vector_staging {};
 
     // Track which nodes have been used since the last sync, and whether they were written to
     std::vector<const ggml_tensor *> unsynced_nodes_written;
@@ -2193,11 +2207,6 @@ static void ggml_vk_wait_for_fence(ggml_backend_vk_context * ctx) {
     }
     ctx->device->device.resetFences({ ctx->fence });
 }
-
-// variables to track number of compiles in progress
-static uint32_t compile_count = 0;
-static std::mutex compile_count_mutex;
-static std::condition_variable compile_count_cond;
 
 static constexpr uint32_t kSpvOpCooperativeMatrixLoadTensorNV = 5367;
 static constexpr uint32_t kSpvCapabilityCooperativeMatrixDecodeVectorNV = 5447;
@@ -2493,7 +2502,6 @@ static void ggml_vk_create_pipeline_func(vk_device& device, vk_pipeline& pipelin
         std::cerr << "ggml_vulkan: " << e.what() << std::endl;
         throw e;
     }
-    pipeline->compiled = true;
 
     if (vk_instance.debug_utils_support) {
         vk::DebugUtilsObjectNameInfoEXT duoni;
@@ -2542,14 +2550,13 @@ static void ggml_vk_create_pipeline_func(vk_device& device, vk_pipeline& pipelin
         }
     }
 
-    device->all_pipelines.push_back(pipeline);
-
     {
-        std::lock_guard<std::mutex> guard(compile_count_mutex);
-        assert(compile_count > 0);
-        compile_count--;
+        std::lock_guard<std::mutex> guard(device->compile_mutex);
+        device->all_pipelines.push_back(pipeline);
+        pipeline->compiled = true;
+        pipeline->compile_pending = false;
     }
-    compile_count_cond.notify_all();
+    device->compile_cv.notify_all();
 }
 
 static void ggml_vk_destroy_pipeline(vk::Device& device, vk_pipeline& pipeline) {
@@ -2565,8 +2572,7 @@ static void ggml_pipeline_request_descriptor_sets(ggml_backend_vk_context *ctx, 
     VK_LOG_DEBUG("ggml_pipeline_request_descriptor_sets(" << pipeline->name << ", " << n << ")");
     ctx->pipeline_descriptor_set_requirements += n;
     if (!pipeline->compiled) {
-        pipeline->needed = true;
-        ggml_vk_load_shaders(ctx->device);
+        ggml_vk_load_shaders(ctx->device, pipeline);
     }
     ggml_pipeline_allocate_descriptor_sets(ctx);
 }
@@ -3565,10 +3571,26 @@ static bool ggml_vk_fa_scalar_uses_mmq(const vk_device& device, ggml_type k_type
 #endif
 }
 
-static void ggml_vk_load_shaders(vk_device& device) {
+// load_shaders walks the pipeline list under compile_mutex and either claims
+// the requested pipeline for compilation or, if another thread is already
+// compiling it, drops the lock and waits on compile_cv. Compiles themselves
+// run unlocked.
+struct CompileTask {
+    vk_pipeline pipeline;
+    size_t spv_size;
+    const void * spv_data;
+    std::string entrypoint;
+    uint32_t parameter_count;
+    std::array<uint32_t, 3> wg_denoms;
+    std::vector<uint32_t> specialization_constants;
+    bool disable_robustness;
+    bool require_full_subgroups;
+    uint32_t required_subgroup_size;
+};
+
+static void ggml_vk_load_shaders(vk_device& device, vk_pipeline requested) {
     VK_LOG_DEBUG("ggml_vk_load_shaders(" << device->name << ")");
 
-    std::lock_guard<std::recursive_mutex> guard(device->mutex);
     // some shaders have a minimum subgroup size
     const uint32_t subgroup_size_8 = std::max(device->subgroup_size, 8u);
     const uint32_t subgroup_size_16 = std::max(device->subgroup_size, 16u);
@@ -3598,6 +3620,15 @@ static void ggml_vk_load_shaders(vk_device& device) {
                             l_mmqid_wg_denoms, m_mmqid_wg_denoms, s_mmqid_wg_denoms;
 
     uint32_t l_align, m_align, s_align;
+
+    vk_pipeline wait_pipeline;
+    CompileTask claimed_task {};
+    bool has_claimed_task = false;
+
+    // The rest of the walk reads and writes shared device state, so hold the
+    // lock until we're done deciding what to compile.
+    std::unique_lock<std::mutex> compile_lock(device->compile_mutex);
+
     if (device->coopmat2) {
         // spec constants and tile sizes for non-quant matmul/matmul_id
         l_warptile = { 256, 128, 256, 64, 1 };
@@ -3624,9 +3655,10 @@ static void ggml_vk_load_shaders(vk_device& device) {
         s_mmq_wg_denoms_k = { 32,  64,  1 };
 
         // spec constants and tile sizes for quant matmul_id
-        l_warptile_mmqid = { 256, 128, 128, 32, 1, device->subgroup_size };
-        m_warptile_mmqid = { 256, 128, 64, 32, 0, device->subgroup_size };
-        s_warptile_mmqid = { 256, 128, 64, 32, 0, device->subgroup_size };
+        const uint32_t mmqid_bk = device->coopmat2_decode_vector ? 64u : 32u;
+        l_warptile_mmqid = { 256, 128, 128, mmqid_bk, 1, device->subgroup_size };
+        m_warptile_mmqid = { 256, 128, 64,  mmqid_bk, 0, device->subgroup_size };
+        s_warptile_mmqid = { 256, 128, 64,  mmqid_bk, 0, device->subgroup_size };
         l_mmqid_wg_denoms = { 128, 128, 1 };
         m_mmqid_wg_denoms = { 128, 64, 1 };
         s_mmqid_wg_denoms = { 128, 64, 1 };
@@ -3783,7 +3815,6 @@ static void ggml_vk_load_shaders(vk_device& device) {
         device->pipeline_matmul_id_bf16 = std::make_shared<vk_matmul_pipeline_struct>();
     }
 
-    std::vector<std::future<void>> compiles;
     auto const &ggml_vk_create_pipeline = [&](vk_device& device, vk_pipeline& base_pipeline, const char *name, size_t spv_size, const void* spv_data, const char *entrypoint,
                                               uint32_t parameter_count, uint32_t push_constant_size, std::array<uint32_t, 3> wg_denoms, const std::vector<uint32_t>& specialization_constants,
                                               uint32_t align, bool disable_robustness = false, bool require_full_subgroups = false, uint32_t required_subgroup_size = 0) {
@@ -3817,23 +3848,33 @@ static void ggml_vk_load_shaders(vk_device& device) {
 #endif
             }
 
-            if (!pipeline->needed || pipeline->compiled) {
+            // We only care about the pipeline this call asked for; the rest
+            // (including the 64-bit indexing variant) are handled by their
+            // own request_descriptor_sets / load_shaders calls.
+            if (pipeline.get() != requested.get()) {
                 continue;
             }
-            // TODO: We're no longer benefitting from the async compiles (shaders are
-            // compiled individually, as needed) and this complexity can be removed.
-            {
-                // wait until fewer than N compiles are in progress
-                uint32_t N = std::max(1u, std::thread::hardware_concurrency());
-                std::unique_lock<std::mutex> guard(compile_count_mutex);
-                while (compile_count >= N) {
-                    compile_count_cond.wait(guard);
-                }
-                compile_count++;
+
+            if (pipeline->compiled) {
+                continue;
             }
 
-            compiles.push_back(std::async(ggml_vk_create_pipeline_func, std::ref(device), std::ref(pipeline), spv_size, spv_data, entrypoint,
-                                          parameter_count, wg_denoms, specialization_constants, disable_robustness, require_full_subgroups, required_subgroup_size));
+            wait_pipeline = pipeline;
+
+            if (!pipeline->compile_pending) {
+                pipeline->compile_pending = true;
+                claimed_task.pipeline = pipeline;
+                claimed_task.spv_size = spv_size;
+                claimed_task.spv_data = spv_data;
+                claimed_task.entrypoint = entrypoint;
+                claimed_task.parameter_count = parameter_count;
+                claimed_task.wg_denoms = wg_denoms;
+                claimed_task.specialization_constants = specialization_constants;
+                claimed_task.disable_robustness = disable_robustness;
+                claimed_task.require_full_subgroups = require_full_subgroups;
+                claimed_task.required_subgroup_size = required_subgroup_size;
+                has_claimed_task = true;
+            }
         }
     };
 
@@ -5047,6 +5088,14 @@ static void ggml_vk_load_shaders(vk_device& device) {
             }
             ++idx;
         }
+    } else if (device->driver_id != vk::DriverId::eIntelProprietaryWindows) {
+        // Disabled on Intel Windows due to a driver bug: https://github.com/ggml-org/llama.cpp/pull/23964#issuecomment-4598226147
+        int idx = 0;
+        for (uint32_t n : {64, 128, 256, 512}) {
+            const uint32_t block_size = std::min(device->subgroup_size, n);
+            ggml_vk_create_pipeline(device, device->pipeline_fwht_f32[idx], "fwht_shmem_f32", fwht_shmem_f32_len, fwht_shmem_f32_data, "main", 2, sizeof(vk_op_fwht_push_constants), {1, 1, 1}, { block_size, n }, 1);
+            ++idx;
+        }
     }
 
     const uint32_t cumsum_elem_per_thread = (device->vendor_id == VK_VENDOR_ID_AMD || device->vendor_id == VK_VENDOR_ID_INTEL) ? 2 : 4;
@@ -5330,8 +5379,25 @@ static void ggml_vk_load_shaders(vk_device& device) {
         }
     }
 
-    for (auto &c : compiles) {
-        c.wait();
+    // Drop compile_mutex so other threads can walk while we compile.
+    compile_lock.unlock();
+
+    // Compile what we claimed; create_pipeline_func reacquires compile_mutex
+    // at the end to flip compile_pending/compiled and notify waiters.
+    if (has_claimed_task) {
+        auto & task = claimed_task;
+        ggml_vk_create_pipeline_func(device, task.pipeline, task.spv_size, task.spv_data,
+                                     task.entrypoint, task.parameter_count, task.wg_denoms,
+                                     task.specialization_constants, task.disable_robustness,
+                                     task.require_full_subgroups, task.required_subgroup_size);
+    }
+
+    // Another thread may be compiling the pipeline we need; block on it here.
+    if (wait_pipeline) {
+        std::unique_lock<std::mutex> wait_lock(device->compile_mutex);
+        device->compile_cv.wait(wait_lock, [&] {
+            return wait_pipeline->compiled.load();
+        });
     }
 }
 
@@ -5576,6 +5642,11 @@ static vk_device ggml_vk_get_device(size_t idx) {
 #endif
         device->subgroup_shuffle = (vk11_props.subgroupSupportedStages & vk::ShaderStageFlagBits::eCompute) &&
                                    (vk11_props.subgroupSupportedOperations & vk::SubgroupFeatureFlagBits::eShuffle);
+#ifdef __APPLE__
+        if (device->vendor_id == VK_VENDOR_ID_AMD) {
+            device->subgroup_shuffle = false;
+        }
+#endif
         device->subgroup_clustered = (vk11_props.subgroupSupportedStages & vk::ShaderStageFlagBits::eCompute) &&
                                      (vk11_props.subgroupSupportedOperations & vk::SubgroupFeatureFlagBits::eClustered);
 
@@ -6282,6 +6353,15 @@ static void ggml_vk_print_gpu_info(size_t idx) {
     }
 #endif
 
+#if defined(VK_NV_cooperative_matrix2)
+    VkPhysicalDeviceCooperativeMatrix2FeaturesNV coopmat2_features {};
+    coopmat2_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_2_FEATURES_NV;
+    if (coopmat2_support) {
+        last_struct->pNext = (VkBaseOutStructure *)&coopmat2_features;
+        last_struct = (VkBaseOutStructure *)&coopmat2_features;
+    }
+#endif
+
     VkPhysicalDeviceCooperativeMatrixDecodeVectorFeaturesNV coopmat2_decode_vector_features {};
     coopmat2_decode_vector_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_COOPERATIVE_MATRIX_DECODE_VECTOR_FEATURES_NV;
     if (coopmat2_decode_vector_support) {
@@ -6312,6 +6392,19 @@ static void ggml_vk_print_gpu_info(size_t idx) {
                    && coopmat_features.cooperativeMatrix
 #endif
                    && ggml_vk_khr_cooperative_matrix_support(props2.properties, driver_props, device_architecture);
+
+#if defined(VK_NV_cooperative_matrix2) && defined(GGML_VULKAN_COOPMAT2_GLSLC_SUPPORT)
+    coopmat2_support = coopmat2_support &&
+                       coopmat2_features.cooperativeMatrixWorkgroupScope &&
+                       coopmat2_features.cooperativeMatrixFlexibleDimensions &&
+                       coopmat2_features.cooperativeMatrixReductions &&
+                       coopmat2_features.cooperativeMatrixConversions &&
+                       coopmat2_features.cooperativeMatrixPerElementOperations &&
+                       coopmat2_features.cooperativeMatrixTensorAddressing &&
+                       coopmat2_features.cooperativeMatrixBlockLoads;
+#else
+    coopmat2_support = false;
+#endif
 
     coopmat2_decode_vector_support = coopmat2_decode_vector_support && coopmat2_decode_vector_features.cooperativeMatrixDecodeVector;
 #if !defined(GGML_VULKAN_COOPMAT2_DECODE_VECTOR_GLSLC_SUPPORT)
@@ -7010,7 +7103,7 @@ static void * ggml_vk_host_malloc(vk_device& device, size_t size) {
         return nullptr;
     }
 
-    std::lock_guard<std::recursive_mutex> guard(device->mutex);
+    std::lock_guard<std::shared_mutex> guard(device->pinned_memory_mutex);
     device->pinned_memory.push_back(std::make_tuple(buf->ptr, size, buf));
 
     return buf->ptr;
@@ -7021,7 +7114,7 @@ static void ggml_vk_host_free(vk_device& device, void* ptr) {
         return;
     }
     VK_LOG_MEMORY("ggml_vk_host_free(" << ptr << ")");
-    std::lock_guard<std::recursive_mutex> guard(device->mutex);
+    std::lock_guard<std::shared_mutex> guard(device->pinned_memory_mutex);
 
     vk_buffer buf;
     size_t index;
@@ -7045,7 +7138,7 @@ static void ggml_vk_host_free(vk_device& device, void* ptr) {
 }
 
 static void ggml_vk_host_get(const vk_device& device, const void * ptr, vk_buffer& buf, size_t& buf_offset) {
-    std::lock_guard<std::recursive_mutex> guard(device->mutex);
+    std::shared_lock<std::shared_mutex> guard(device->pinned_memory_mutex);
     buf = nullptr;
     buf_offset = 0;
     for (size_t i = 0; i < device->pinned_memory.size(); i++) {
@@ -7164,13 +7257,6 @@ static void ggml_vk_dispatch_pipeline(ggml_backend_vk_context* ctx, vk_context& 
                                 { descriptor_set },
                                 {});
     subctx->s->buffer->buf.dispatch(wg0, wg1, wg2);
-}
-
-static void ggml_vk_end_submission(vk_submission& s, std::vector<vk_semaphore> wait_semaphores, std::vector<vk_semaphore> signal_semaphores) {
-    s.buffer->buf.end();
-
-    s.wait_semaphores = std::move(wait_semaphores);
-    s.signal_semaphores = std::move(signal_semaphores);
 }
 
 static void ggml_vk_ctx_end(vk_context& ctx) {
@@ -8028,6 +8114,40 @@ static void ggml_vk_cpy_to_contiguous(ggml_backend_vk_context * ctx, vk_context&
     ggml_vk_sync_buffers(ctx, subctx);
 }
 
+// Copy/convert tensor into a caller-defined dense layout. Destination strides
+// are in output elements, not bytes.
+static void ggml_vk_cpy_to_strided(
+        ggml_backend_vk_context * ctx, vk_context& subctx, vk_pipeline pipeline, const ggml_tensor * tensor,
+        const vk_subbuffer & in, const vk_subbuffer & out,
+        uint32_t nb10, uint32_t nb11, uint32_t nb12, uint32_t nb13) {
+    VK_LOG_DEBUG("ggml_vk_cpy_to_strided((" << tensor << ", type=" << tensor->type << ", ne0=" << tensor->ne[0] << ", ne1=" << tensor->ne[1] << ", ne2=" << tensor->ne[2] << ", ne3=" << tensor->ne[3] << ", nb0=" << tensor->nb[0] << ", nb1=" << tensor->nb[1] << ", nb2=" << tensor->nb[2] << ", nb3=" << tensor->nb[3] << "), ";
+    std::cerr << "dst_nb=(" << nb10 << ", " << nb11 << ", " << nb12 << ", " << nb13 << "), buffer in size=" << in.buffer->size << ", buffer out size=" << out.buffer->size << ")");
+    const int tensor_type_size = ggml_type_size(tensor->type);
+
+    const uint32_t ne = ggml_nelements(tensor);
+    std::array<uint32_t, 3> elements;
+
+    if (ne > 262144) {
+        elements = { 512, 512, CEIL_DIV(ne, 262144) };
+    } else if (ne > 512) {
+        elements = { 512, CEIL_DIV(ne, 512), 1 };
+    } else {
+        elements = { ne, 1, 1 };
+    }
+
+    vk_op_unary_push_constants pc = {
+        (uint32_t)ne,
+        (uint32_t)tensor->ne[0], (uint32_t)tensor->ne[1], (uint32_t)tensor->ne[2], (uint32_t)tensor->ne[3], (uint32_t)tensor->nb[0] / tensor_type_size, (uint32_t)tensor->nb[1] / tensor_type_size, (uint32_t)tensor->nb[2] / tensor_type_size, (uint32_t)tensor->nb[3] / tensor_type_size,
+        (uint32_t)tensor->ne[0], (uint32_t)tensor->ne[1], (uint32_t)tensor->ne[2], (uint32_t)tensor->ne[3], nb10, nb11, nb12, nb13,
+        0,
+        0.0f, 0.0f,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    };
+    init_pushconst_fastdiv(pc);
+    ggml_vk_dispatch_pipeline(ctx, subctx, pipeline, { in, out }, pc, elements);
+    ggml_vk_sync_buffers(ctx, subctx);
+}
+
 static vk_pipeline ggml_vk_get_quantize_pipeline(ggml_backend_vk_context * ctx, ggml_type type) {
     switch(type) {
         case GGML_TYPE_Q8_1:
@@ -8285,24 +8405,28 @@ static void ggml_vk_mul_mat_q_f16(ggml_backend_vk_context * ctx, vk_context& sub
     }
     if (y_non_contig) {
         if (ctx->prealloc_y_last_pipeline_used != to_fp16_vk_1.get() ||
-            ctx->prealloc_y_last_tensor_used != src1) {
+            ctx->prealloc_y_last_tensor_used != src1 ||
+            ctx->prealloc_y_last_decode_vector_staging) {
             if (ctx->prealloc_y_need_sync) {
                 ggml_vk_sync_buffers(ctx, subctx);
             }
             ggml_vk_cpy_to_contiguous(ctx, subctx, to_fp16_vk_1, src1, ggml_vk_subbuffer(ctx, d_Qy, qy_buf_offset), ggml_vk_subbuffer(ctx, d_Y, 0));
             ctx->prealloc_y_last_pipeline_used = to_fp16_vk_1.get();
             ctx->prealloc_y_last_tensor_used = src1;
+            ctx->prealloc_y_last_decode_vector_staging = false;
         }
     }
     if (quantize_y) {
         if (ctx->prealloc_y_last_pipeline_used != to_q8_1.get() ||
-            ctx->prealloc_y_last_tensor_used != src1) {
+            ctx->prealloc_y_last_tensor_used != src1 ||
+            ctx->prealloc_y_last_decode_vector_staging) {
             if (ctx->prealloc_y_need_sync) {
                 ggml_vk_sync_buffers(ctx, subctx);
             }
             ggml_vk_quantize_q8_1(ctx, subctx, ggml_vk_subbuffer(ctx, d_Qy, qy_buf_offset), ggml_vk_subbuffer(ctx, d_Y, 0), y_ne);
             ctx->prealloc_y_last_pipeline_used = to_q8_1.get();
             ctx->prealloc_y_last_tensor_used = src1;
+            ctx->prealloc_y_last_decode_vector_staging = false;
         }
     }
 
@@ -8343,8 +8467,10 @@ static bool ggml_vk_should_use_mmvq(const vk_device& device, uint32_t m, uint32_
         return false;
     }
 
-    // General performance issue with q3_k and q6_k due to 2-byte alignment
-    if (src0_type == GGML_TYPE_Q3_K || src0_type == GGML_TYPE_Q6_K) {
+    // q6_k only has 2-byte alignment which makes it somewhat problematic,
+    // using MMVQ is only a win on Intel.
+    bool mmvq_q6 = device->vendor_id == VK_VENDOR_ID_INTEL;
+    if (src0_type == GGML_TYPE_Q6_K && !mmvq_q6) {
         return false;
     }
 
@@ -8356,7 +8482,7 @@ static bool ggml_vk_should_use_mmvq(const vk_device& device, uint32_t m, uint32_
     // Quantization overhead is not worth it for small k
     switch (device->vendor_id) {
     case VK_VENDOR_ID_NVIDIA:
-        if (src0_type == GGML_TYPE_Q2_K || src0_type == GGML_TYPE_IQ1_S || src0_type == GGML_TYPE_IQ1_M) {
+        if (src0_type == GGML_TYPE_Q2_K || src0_type == GGML_TYPE_Q3_K || src0_type == GGML_TYPE_IQ1_S || src0_type == GGML_TYPE_IQ1_M) {
             return true;
         }
 
@@ -8383,9 +8509,16 @@ static bool ggml_vk_should_use_mmvq(const vk_device& device, uint32_t m, uint32_
             return true;
         }
     case VK_VENDOR_ID_INTEL:
+        if (device->architecture == vk_device_architecture::INTEL_XE2) {
+            if (src0_type == GGML_TYPE_Q2_K || src0_type == GGML_TYPE_Q3_K || src0_type == GGML_TYPE_Q6_K) {
+                return true;
+            }
+        }
+
         if (device->driver_id == vk::DriverId::eIntelProprietaryWindows) {
-            // Intel Windows proprietary driver MMVQ performance is worse than fp16, see
-            // https://github.com/ggml-org/llama.cpp/issues/17628
+            // Intel Windows proprietary driver MMVQ performance for !Q2/Q3/Q6 is worse than fp16,
+            // see https://github.com/ggml-org/llama.cpp/issues/17628 and
+            // https://github.com/ggml-org/llama.cpp/pull/23056
             return false;
         }
 
@@ -8551,24 +8684,28 @@ static void ggml_vk_mul_mat_vec_q_f16(ggml_backend_vk_context * ctx, vk_context&
     if (y_non_contig) {
         GGML_ASSERT(y_sz == ggml_type_size(src1->type) * y_ne);
         if (ctx->prealloc_y_last_pipeline_used != to_fp16_vk_1.get() ||
-            ctx->prealloc_y_last_tensor_used != src1) {
+            ctx->prealloc_y_last_tensor_used != src1 ||
+            ctx->prealloc_y_last_decode_vector_staging) {
             if (ctx->prealloc_y_need_sync) {
                 ggml_vk_sync_buffers(ctx, subctx);
             }
             ggml_vk_cpy_to_contiguous(ctx, subctx, to_fp16_vk_1, src1, d_Qy, d_Y);
             ctx->prealloc_y_last_pipeline_used = to_fp16_vk_1.get();
             ctx->prealloc_y_last_tensor_used = src1;
+            ctx->prealloc_y_last_decode_vector_staging = false;
         }
     }
     if (quantize_y) {
         if (ctx->prealloc_y_last_pipeline_used != to_q8_1.get() ||
-            ctx->prealloc_y_last_tensor_used != src1) {
+            ctx->prealloc_y_last_tensor_used != src1 ||
+            ctx->prealloc_y_last_decode_vector_staging) {
             if (ctx->prealloc_y_need_sync) {
                 ggml_vk_sync_buffers(ctx, subctx);
             }
             ggml_vk_quantize_q8_1(ctx, subctx, d_Qy, d_Y, y_ne);
             ctx->prealloc_y_last_pipeline_used = to_q8_1.get();
             ctx->prealloc_y_last_tensor_used = src1;
+            ctx->prealloc_y_last_decode_vector_staging = false;
         }
     }
 
@@ -9019,12 +9156,30 @@ static void ggml_vk_mul_mat_id_q_f16(ggml_backend_vk_context * ctx, vk_context& 
     // Reformat and convert to fp16 if non-contiguous, or for coopmat2 for better perf
     const bool x_non_contig = (ctx->device->coopmat2 && src0->type == GGML_TYPE_F32) ||
                               !ggml_vk_dim01_contiguous(src0);
-    const bool y_non_contig = (ctx->device->coopmat2 && src1->type == GGML_TYPE_F32) ||
+    // If src0 is BF16, try to use a BF16 x BF16 multiply
+    ggml_type f16_type = src0->type == GGML_TYPE_BF16 ? GGML_TYPE_BF16 : GGML_TYPE_F16;
+#if defined(GGML_VULKAN_COOPMAT2_DECODE_VECTOR_GLSLC_SUPPORT)
+    // B must already be, or be convertible to, the matmul B type used by this path.
+    const bool y_decode_vector_supported = ctx->device->coopmat2_decode_vector &&
+                                           (f16_type != GGML_TYPE_BF16 || ctx->device->coopmat2_bf16_support) &&
+                                           (src1->type == GGML_TYPE_F32 || src1->type == f16_type);
+    // If B is copied to prealloc_y, we can choose a 4-element-aligned row stride.
+    const bool y_decode_vector_uses_prealloc = !ggml_vk_dim01_contiguous(src1) || src1->type != f16_type;
+    // Direct B reads are safe only if row starts and the original buffer offset are 4-element aligned.
+    const bool y_decode_vector_aligned =
+        (ne10 % 4 == 0) &&
+        (y_decode_vector_uses_prealloc || get_misalign_bytes(ctx, src1) % (4 * ggml_type_size(src1->type)) == 0);
+    // Stage B only when decode-vector is available and direct B reads would be misaligned.
+    const bool y_decode_vector_staging = y_decode_vector_supported && !y_decode_vector_aligned;
+#else
+    const bool y_decode_vector_staging = false;
+#endif
+    const bool y_non_contig = y_decode_vector_staging ||
+                              (ctx->device->coopmat2 && src1->type == GGML_TYPE_F32) ||
                               (src0->type == GGML_TYPE_BF16 && src1->type != GGML_TYPE_BF16) ||
                               !ggml_vk_dim01_contiguous(src1);
 
-    // If src0 is BF16, try to use a BF16 x BF16 multiply
-    ggml_type f16_type = src0->type == GGML_TYPE_BF16 ? GGML_TYPE_BF16 : GGML_TYPE_F16;
+    const uint32_t y_staged_row_stride = y_decode_vector_staging ? (uint32_t)ggml_vk_align_size(ne10, 4) : (uint32_t)ne10;
 
     const bool y_f32_kernel = src1->type == GGML_TYPE_F32 && !y_non_contig;
 
@@ -9063,11 +9218,11 @@ static void ggml_vk_mul_mat_id_q_f16(ggml_backend_vk_context * ctx, vk_context& 
     // Reserve extra storage in the N dimension for the Y matrix, so we can avoid bounds-checking
     uint32_t padded_n = qy_needs_dequant ? ROUNDUP_POW2(ne11, pipeline->wg_denoms[1]) :ne11;
     const uint64_t x_ne = ggml_nelements(src0);
-    const uint64_t y_ne = padded_n * ne10 * ne12 * ne13;
+    const uint64_t y_ne = (uint64_t)y_staged_row_stride * padded_n * ne12 * ne13;
     const uint64_t d_ne = ggml_nelements(dst);
 
     const uint64_t qx_sz = ggml_type_size(src0->type) * x_ne / ggml_blck_size(src0->type);
-    const uint64_t qy_sz = ggml_type_size(src1->type) * y_ne / ggml_blck_size(src1->type);
+    const uint64_t qy_sz = ggml_type_size(src1->type) * ggml_nelements(src1) / ggml_blck_size(src1->type);
     const uint64_t x_sz = !qx_needs_dequant ? qx_sz : sizeof(ggml_fp16_t) * x_ne;
     const uint64_t y_sz = quantize_y ? (ggml_vk_align_size(y_ne, 128) * ggml_type_size(GGML_TYPE_Q8_1) / ggml_blck_size(GGML_TYPE_Q8_1)) : (y_f32_kernel ? sizeof(float) * y_ne : sizeof(ggml_fp16_t) * y_ne);
     const uint64_t ids_sz = nbi2;
@@ -9077,13 +9232,30 @@ static void ggml_vk_mul_mat_id_q_f16(ggml_backend_vk_context * ctx, vk_context& 
     vk_pipeline to_fp16_vk_1 = nullptr;
     vk_pipeline to_q8_1 = nullptr;
 
+    auto make_y_staged_dst = [&]() {
+        ggml_tensor y_staged_dst = *src1;
+        y_staged_dst.type = f16_type;
+        y_staged_dst.nb[0] = ggml_type_size(f16_type);
+        y_staged_dst.nb[1] = y_staged_dst.nb[0] * y_staged_row_stride;
+        y_staged_dst.nb[2] = y_staged_dst.nb[1] * padded_n;
+        y_staged_dst.nb[3] = y_staged_dst.nb[2] * y_staged_dst.ne[2];
+        return y_staged_dst;
+    };
+
     if (x_non_contig) {
         to_fp16_vk_0 = ggml_vk_get_cpy_pipeline(ctx, src0, nullptr, f16_type);
     } else {
         to_fp16_vk_0 = ggml_vk_get_to_fp16(ctx, src0->type);
     }
     if (y_non_contig) {
-        to_fp16_vk_1 = ggml_vk_get_cpy_pipeline(ctx, src1, nullptr, f16_type);
+        ggml_tensor y_staged_dst;
+        const ggml_tensor * y_staged_dst_ptr = nullptr;
+        if (y_decode_vector_staging) {
+            y_staged_dst = make_y_staged_dst();
+            y_staged_dst_ptr = &y_staged_dst;
+        }
+
+        to_fp16_vk_1 = ggml_vk_get_cpy_pipeline(ctx, src1, y_staged_dst_ptr, f16_type);
     } else {
         to_fp16_vk_1 = ggml_vk_get_to_fp16(ctx, src1->type);
     }
@@ -9201,30 +9373,47 @@ static void ggml_vk_mul_mat_id_q_f16(ggml_backend_vk_context * ctx, vk_context& 
     }
     if (y_non_contig) {
         if (ctx->prealloc_y_last_pipeline_used != to_fp16_vk_1.get() ||
-            ctx->prealloc_y_last_tensor_used != src1) {
+            ctx->prealloc_y_last_tensor_used != src1 ||
+            ctx->prealloc_y_last_decode_vector_staging != y_decode_vector_staging) {
             if (ctx->prealloc_y_need_sync) {
                 ggml_vk_sync_buffers(ctx, subctx);
             }
-            ggml_vk_cpy_to_contiguous(ctx, subctx, to_fp16_vk_1, src1, ggml_vk_subbuffer(ctx, d_Qy, qy_buf_offset), ggml_vk_subbuffer(ctx, d_Y, 0));
+            if (y_decode_vector_staging) {
+                const ggml_tensor y_staged_dst = make_y_staged_dst();
+                const uint32_t y_staged_dst_type_size = ggml_type_size(y_staged_dst.type);
+                ggml_vk_cpy_to_strided(
+                    ctx, subctx, to_fp16_vk_1, src1,
+                    ggml_vk_subbuffer(ctx, d_Qy, qy_buf_offset), ggml_vk_subbuffer(ctx, d_Y, 0),
+                    (uint32_t)(y_staged_dst.nb[0] / y_staged_dst_type_size),
+                    (uint32_t)(y_staged_dst.nb[1] / y_staged_dst_type_size),
+                    (uint32_t)(y_staged_dst.nb[2] / y_staged_dst_type_size),
+                    (uint32_t)(y_staged_dst.nb[3] / y_staged_dst_type_size));
+            } else {
+                ggml_vk_cpy_to_contiguous(ctx, subctx, to_fp16_vk_1, src1, ggml_vk_subbuffer(ctx, d_Qy, qy_buf_offset), ggml_vk_subbuffer(ctx, d_Y, 0));
+            }
             ctx->prealloc_y_last_pipeline_used = to_fp16_vk_1.get();
             ctx->prealloc_y_last_tensor_used = src1;
+            ctx->prealloc_y_last_decode_vector_staging = y_decode_vector_staging;
         }
     }
     if (quantize_y) {
         if (ctx->prealloc_y_last_pipeline_used != to_q8_1.get() ||
-            ctx->prealloc_y_last_tensor_used != src1) {
+            ctx->prealloc_y_last_tensor_used != src1 ||
+            ctx->prealloc_y_last_decode_vector_staging) {
             if (ctx->prealloc_y_need_sync) {
                 ggml_vk_sync_buffers(ctx, subctx);
             }
             ggml_vk_quantize_q8_1(ctx, subctx, ggml_vk_subbuffer(ctx, d_Qy, qy_buf_offset), ggml_vk_subbuffer(ctx, d_Y, 0), y_ne);
             ctx->prealloc_y_last_pipeline_used = to_q8_1.get();
             ctx->prealloc_y_last_tensor_used = src1;
+            ctx->prealloc_y_last_decode_vector_staging = false;
         }
     }
     ggml_vk_sync_buffers(ctx, subctx);
 
     uint32_t stride_batch_x = ne00*ne01;
-    uint32_t stride_batch_y = ne10*ne11;
+    uint32_t stride_b_y = y_decode_vector_staging ? y_staged_row_stride : ne10;
+    uint32_t stride_batch_y = y_decode_vector_staging ? y_staged_row_stride * padded_n : ne10*ne11;
 
     if (!ggml_vk_dim01_contiguous(src0) && !qx_needs_dequant) {
         stride_batch_x = src0->nb[0] / ggml_type_size(src0->type);
@@ -9239,7 +9428,7 @@ static void ggml_vk_mul_mat_id_q_f16(ggml_backend_vk_context * ctx, vk_context& 
         ctx, subctx, pipeline,
         { d_X, x_buf_offset, x_sz }, { d_Y, y_buf_offset, y_sz },
         { d_D, d_buf_offset, d_sz }, { d_ids, ids_buf_offset, ids_sz }, expert_count_buf,
-        ne01, ne21, ne10, ne10, ne10, ne01,
+        ne01, ne21, ne10, ne10, stride_b_y, ne01,
         stride_batch_x, stride_batch_y, ne20*ne21,
         n_as, nei0, nei1, nbi1 / ggml_type_size(ids->type), ne11, padded_n
     );  // NOLINT
@@ -9397,24 +9586,28 @@ static void ggml_vk_mul_mat_vec_id_q_f16(ggml_backend_vk_context * ctx, vk_conte
     if (y_non_contig) {
         GGML_ASSERT(y_sz == ggml_type_size(src1->type) * y_ne);
         if (ctx->prealloc_y_last_pipeline_used != to_fp16_vk_1.get() ||
-            ctx->prealloc_y_last_tensor_used != src1) {
+            ctx->prealloc_y_last_tensor_used != src1 ||
+            ctx->prealloc_y_last_decode_vector_staging) {
             if (ctx->prealloc_y_need_sync) {
                 ggml_vk_sync_buffers(ctx, subctx);
             }
             ggml_vk_cpy_to_contiguous(ctx, subctx, to_fp16_vk_1, src1, d_Qy, d_Y);
             ctx->prealloc_y_last_pipeline_used = to_fp16_vk_1.get();
             ctx->prealloc_y_last_tensor_used = src1;
+            ctx->prealloc_y_last_decode_vector_staging = false;
         }
     }
     if (quantize_y) {
         if (ctx->prealloc_y_last_pipeline_used != to_q8_1.get() ||
-            ctx->prealloc_y_last_tensor_used != src1) {
+            ctx->prealloc_y_last_tensor_used != src1 ||
+            ctx->prealloc_y_last_decode_vector_staging) {
             if (ctx->prealloc_y_need_sync) {
                 ggml_vk_sync_buffers(ctx, subctx);
             }
             ggml_vk_quantize_q8_1(ctx, subctx, d_Qy, d_Y, y_ne);
             ctx->prealloc_y_last_pipeline_used = to_q8_1.get();
             ctx->prealloc_y_last_tensor_used = src1;
+            ctx->prealloc_y_last_decode_vector_staging = false;
         }
     }
 
@@ -9718,7 +9911,7 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
     vk_pipeline pipeline = nullptr;
 
     {
-        std::lock_guard<std::recursive_mutex> guard(ctx->device->mutex);
+        std::lock_guard<std::mutex> guard(ctx->device->compile_mutex);
         auto &pipelines = ctx->device->pipeline_flash_attn_f32_f16;
         auto it = pipelines.find(fa_pipeline_state);
         if (it != pipelines.end()) {
@@ -9782,13 +9975,15 @@ static void ggml_vk_flash_attn(ggml_backend_vk_context * ctx, vk_context& subctx
 
     vk_pipeline pipeline_fa_mask_opt = nullptr;
     if (use_mask_opt) {
-        std::lock_guard<std::recursive_mutex> guard(ctx->device->mutex);
-        auto &pipelines = ctx->device->pipeline_fa_mask_opt;
-        auto it = pipelines.find({Br, Bc});
-        if (it != pipelines.end()) {
-            pipeline_fa_mask_opt = it->second;
-        } else {
-            pipelines[{Br, Bc}] = pipeline_fa_mask_opt = std::make_shared<vk_pipeline_struct>();
+        {
+            std::lock_guard<std::mutex> guard(ctx->device->compile_mutex);
+            auto &pipelines = ctx->device->pipeline_fa_mask_opt;
+            auto it = pipelines.find({Br, Bc});
+            if (it != pipelines.end()) {
+                pipeline_fa_mask_opt = it->second;
+            } else {
+                pipelines[{Br, Bc}] = pipeline_fa_mask_opt = std::make_shared<vk_pipeline_struct>();
+            }
         }
         assert(pipeline_fa_mask_opt);
         ggml_pipeline_request_descriptor_sets(ctx, pipeline_fa_mask_opt, 1);
@@ -10322,7 +10517,7 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
             vk_pipeline pipeline = nullptr;
 
             {
-                std::lock_guard<std::recursive_mutex> guard(ctx->device->mutex);
+                std::lock_guard<std::mutex> guard(ctx->device->compile_mutex);
                 auto it = ctx->device->pipeline_solve_tri_f32.find(solve_tri_pipeline_state);
                 if (it != ctx->device->pipeline_solve_tri_f32.end()) {
                     pipeline = it->second;
@@ -10481,7 +10676,7 @@ static vk_pipeline ggml_vk_op_get_pipeline(ggml_backend_vk_context * ctx, const 
             vk_pipeline pipeline = nullptr;
 
             {
-                std::lock_guard<std::recursive_mutex> guard(ctx->device->mutex);
+                std::lock_guard<std::mutex> guard(ctx->device->compile_mutex);
                 auto it = pipelines->find(conv2d_pipeline_state);
                 if (it != pipelines->end()) {
                     pipeline = it->second;
@@ -13637,7 +13832,9 @@ static void ggml_vk_preallocate_buffers(ggml_backend_vk_context * ctx, vk_contex
             ggml_vk_destroy_buffer(ctx->prealloc_y);
         }
         ctx->prealloc_y = ggml_vk_create_buffer_device(ctx->device, ctx->prealloc_size_y);
+        ctx->prealloc_y_last_pipeline_used = nullptr;
         ctx->prealloc_y_last_tensor_used = nullptr;
+        ctx->prealloc_y_last_decode_vector_staging = false;
     }
     if (ctx->prealloc_split_k == nullptr || (ctx->prealloc_size_split_k > 0 && ctx->prealloc_split_k->size < ctx->prealloc_size_split_k)) {
         VK_LOG_MEMORY("ggml_vk_preallocate_buffers(split_k_size: " << ctx->prealloc_size_split_k << ")");
@@ -14217,6 +14414,8 @@ static void ggml_vk_compute_forward(ggml_backend_vk_context * ctx, ggml_cgraph *
 static void ggml_vk_graph_cleanup(ggml_backend_vk_context * ctx) {
     VK_LOG_DEBUG("ggml_vk_graph_cleanup()");
     ctx->prealloc_y_last_pipeline_used = {};
+    ctx->prealloc_y_last_tensor_used = nullptr;
+    ctx->prealloc_y_last_decode_vector_staging = false;
 
     ctx->unsynced_nodes_written.clear();
     ctx->unsynced_nodes_read.clear();
@@ -14267,6 +14466,8 @@ static void ggml_vk_cleanup(ggml_backend_vk_context * ctx) {
     ggml_vk_destroy_buffer(ctx->sync_staging);
 
     ctx->prealloc_y_last_pipeline_used = nullptr;
+    ctx->prealloc_y_last_tensor_used = nullptr;
+    ctx->prealloc_y_last_decode_vector_staging = false;
 
     ctx->prealloc_size_x = 0;
     ctx->prealloc_size_y = 0;
@@ -14508,12 +14709,6 @@ static const char * ggml_backend_vk_host_buffer_type_name(ggml_backend_buffer_ty
     return GGML_VK_NAME "_Host";
 
     UNUSED(buft);
-}
-
-static const char * ggml_backend_vk_host_buffer_name(ggml_backend_buffer_t buffer) {
-    return GGML_VK_NAME "_Host";
-
-    UNUSED(buffer);
 }
 
 static void ggml_backend_vk_host_buffer_free_buffer(ggml_backend_buffer_t buffer) {
@@ -15452,6 +15647,7 @@ static ggml_status ggml_backend_vk_graph_compute(ggml_backend_t backend, ggml_cg
 
     ctx->prealloc_y_last_pipeline_used = nullptr;
     ctx->prealloc_y_last_tensor_used = nullptr;
+    ctx->prealloc_y_last_decode_vector_staging = false;
 
     if (ctx->prealloc_size_add_rms_partials) {
         ggml_vk_preallocate_buffers(ctx, nullptr);

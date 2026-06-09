@@ -104,14 +104,14 @@ static inline llama_kv_compact_hybrid_info llama_kv_compact_detect_hybrid(
     const auto & layouts = cp->get_layouts();
 
     uint32_t n_recurrent_layers = 0;
-    for (uint32_t il = 0; il < hparams.n_layer; ++il) {
-        if (hparams.is_recurrent(il)) {
+    for (uint32_t il = 0; il < hparams.n_layer_all; ++il) {
+        if (hparams.is_recr(il)) {
             n_recurrent_layers++;
         }
     }
 
     auto info = llama_kv_compact_make_hybrid_info(
-        hparams.n_layer,
+        hparams.n_layer_all,
         n_recurrent_layers,
         (uint32_t) layouts.size());
 
