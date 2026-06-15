@@ -1149,6 +1149,10 @@ void llm_graph_result::reset() {
     t_logits      = nullptr;
     t_embd        = nullptr;
     t_embd_pooled = nullptr;
+
+    t_layer_inp.resize(LLAMA_MAX_LAYERS);
+    std::fill(t_layer_inp.begin(), t_layer_inp.end(), nullptr);
+
     t_sampled.clear();
     t_sampled_probs.clear();
     t_sampled_logits.clear();
@@ -1177,7 +1181,7 @@ void llm_graph_result::set_inputs(const llama_ubatch * ubatch) {
     }
 }
 
-void llm_graph_result::set_outputs() {
+void llm_graph_result::set_outputs(const llm_graph_params & params) {
     if (t_logits != nullptr) {
         ggml_set_output(t_logits);
     }
@@ -1189,6 +1193,15 @@ void llm_graph_result::set_outputs() {
     }
     if (t_h_nextn != nullptr) {
         ggml_set_output(t_h_nextn);
+    }
+    {
+        const auto & embeddings_layer_inp = params.cparams.embeddings_layer_inp;
+        for (size_t il = 0; il < embeddings_layer_inp.size(); ++il) {
+            if (embeddings_layer_inp[il]) {
+                GGML_ASSERT(t_layer_inp[il] != nullptr && "layer input tensor is null");
+                ggml_set_output(t_layer_inp[il]);
+            }
+        }
     }
     for (auto & [seq_id, t] : t_sampled) {
         if (t != nullptr) {
@@ -2118,9 +2131,9 @@ ggml_tensor * llm_graph_context::build_inp_embd(ggml_tensor * tok_embd) const {
     res->t_inp_embd = cur;
 
     // For Granite architecture
-    // NOTE: Only apply scale to token inputs. Raw embeddings are assumed to be
-    //  multimodal inputs that should not be scaled.
-    if (ubatch.token && hparams.f_embedding_scale != 0.0f) {
+    // NOTE: For deepstack models, only apply scale to token inputs (ie text-only input).
+    //  Raw embeddings are assumed to be multimodal inputs that should not be scaled.
+    if (hparams.f_embedding_scale != 0.0f && (ubatch.token || hparams.n_deepstack_layers == 0)) {
         if (!ggml_is_contiguous(cur)) {
             cur = ggml_cont(ctx0, cur);
         }
