@@ -1229,6 +1229,21 @@ private:
     // in decode(), and cleared in update_slots() after the loop.
     llama_q_capture_state * active_q_capture = nullptr;
 
+    // V4-G: the state is owned by the capturing slot's unique_ptr and is freed
+    // if that slot is released (release() -> reset() -> q_capture_state.reset()),
+    // e.g. on a decode error. Never dereference active_q_capture without this check.
+    bool q_capture_owner_alive() const {
+        if (!active_q_capture) {
+            return false;
+        }
+        for (const auto & slot : slots) {
+            if (slot.q_capture_state.get() == active_q_capture) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     std::unique_ptr<server_prompt_cache> prompt_cache;
 
     server_metrics metrics;
@@ -3530,11 +3545,24 @@ private:
                 abort_all_slots("post_decode() failed: " + std::string(e.what()));
                 break; // stop any further processing
             }
+
+            // V4-G: post_decode() may have released the capturing slot, freeing the
+            // state. Uninstall the callback eagerly so the next view's llama_decode
+            // cannot write into freed memory.
+            if (active_q_capture && !q_capture_owner_alive()) {
+                llama_set_eval_callback(ctx_tgt, nullptr, nullptr);
+                active_q_capture = nullptr;
+            }
         }
 
         // V4-G: Restore callback and deactivate Q-capture after all batch views processed.
         if (active_q_capture) {
-            active_q_capture->active = false;
+            // A decode error may have released the owning slot, freeing the state
+            // (slot release() -> reset() -> q_capture_state.reset()). Only touch the
+            // state if a slot still owns it; always restore the eval callback.
+            if (q_capture_owner_alive()) {
+                active_q_capture->active = false;
+            }
             llama_set_eval_callback(ctx_tgt, nullptr, nullptr);
 
             // Log captured Q stats for slots that finished prefill.
